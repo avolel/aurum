@@ -16,18 +16,20 @@ public class SchemaTests(PostgresFixture fixture)
     {
         await using var db = fixture.CreateDbContext();
 
-        var interval = await db.Database
+        // The view exposes the chunk interval as an `interval`; pull it out as whole seconds so
+        // the assertion doesn't depend on Npgsql's interval mapping.
+        var chunkSeconds = await db.Database
             .SqlQuery<long?>($"""
-                SELECT d.interval_length AS "Value"
+                SELECT extract(epoch FROM d.time_interval)::bigint AS "Value"
                   FROM timescaledb_information.dimensions d
                  WHERE d.hypertable_name = 'price_ticks'
                    AND d.column_name = 'ObservedAt'
+                   AND d.dimension_type = 'Time'
                 """)
             .SingleOrDefaultAsync();
 
-        Assert.NotNull(interval);
-        // interval_length is microseconds for a time dimension.
-        Assert.Equal((long)TimeSpan.FromDays(1).TotalMicroseconds, interval);
+        Assert.NotNull(chunkSeconds);
+        Assert.Equal((long)TimeSpan.FromDays(1).TotalSeconds, chunkSeconds);
     }
 
     [Fact]

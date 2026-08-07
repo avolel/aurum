@@ -1,0 +1,18 @@
+# Build state is machine-local: obj/project.assets.json records absolute NuGet paths
+# from the host, so copying it into the image breaks `dotnet publish --no-restore`.
+**/bin/
+**/obj/
+
+.git/
+.gitignore
+.dockerignore
+.env
+.vs/
+.vscode/
+.idea/
+
+ops/
+plans/
+README.md
+docker-compose.yml
+**/*.md

@@ -4,7 +4,7 @@ Gold price intelligence platform. See `plans/aurum_brd.md` for requirements and
 `plans/aurum-phased-plan.md` for the engineering roadmap.
 
 **Current state: Phase 0, incomplete.** `ops/decisions/phase-0.md` records what is decided, what
-is still open, and what is unverified.
+is still open, and what is unverified. `ops/phase-0-todo.md` is the remaining work.
 
 ## Layout
 
