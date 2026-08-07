@@ -1,0 +1,30 @@
+## .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/
+.idea/
+artifacts/
+[Tt]est[Rr]esults/
+*.coverage
+*.trx
+
+## Secrets / local config
+.env
+.env.local
+appsettings.Development.local.json
+*.pfx
+
+## Node / Expo (Phase 0 charting spike, Phase 1 app)
+node_modules/
+.expo/
+dist/
+web-build/
+npm-debug.log*
+yarn-error.log*
+
+## OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Aurum.Api.Tests/Aurum.Api.Tests.csproj" />
+    <Project Path="src/Aurum.Api/Aurum.Api.csproj" />
+  </Folder>
+</Solution>
