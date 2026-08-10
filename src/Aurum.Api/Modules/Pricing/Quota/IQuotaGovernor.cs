@@ -45,4 +45,11 @@ public readonly record struct QuotaLease(bool Granted, int Remaining, DateTimeOf
 /// <param name="Limit">Requests allowed in the current period.</param>
 /// <param name="ResetsAt">When the current period ends.</param>
 /// <param name="ProviderRejected">Whether the provider has rejected us for quota this period.</param>
+/// <remarks>
+/// <b>Remaining budget is not <c>Limit - Used</c>.</b> When <paramref name="ProviderRejected"/> is
+/// true the remaining budget is zero regardless of the counter: a rejection records that the
+/// provider's count disagrees with ours, and deliberately leaves <paramref name="Used"/> at what we
+/// actually observed. That gap is the only evidence we get that our accounting is drifting, so it is
+/// preserved rather than overwritten.
+/// </remarks>
 public readonly record struct QuotaStatus(int Used, int Limit, DateTimeOffset ResetsAt, bool ProviderRejected);

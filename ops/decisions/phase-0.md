@@ -28,7 +28,7 @@ created in `ops/db/init/01-extensions.sql`, which runs once as superuser on an e
 so first boot fails loudly if the image ever stops shipping TimescaleDB or pgvector.
 
 `SchemaTests.Pgvector_is_available_for_phase_two` asserts pgvector is actually present.
-**Not yet executed — see the Docker blocker below.**
+**Executed and passing** against the real image (2026-08-10).
 
 Note for Phase 5: `AurumDbContext.OnModelCreating` also declares both extensions, so the migration
 emits `CREATE EXTENSION IF NOT EXISTS`. That is harmless today only because the compose app role
@@ -99,32 +99,103 @@ a wrong choice is a silent one-in-twelve failure. **Verify against the account p
 
 ---
 
-## Blocker: Docker is not usable from this account
+## Exit criteria status
 
-`docker ps` → `permission denied` on `/var/run/docker.sock`. The `avolel` account is not in the
-`docker` group, so neither `docker compose up` nor the Testcontainers integration tests can run.
+The earlier Docker blocker (`permission denied` on `/var/run/docker.sock`) is **resolved** — the
+account is in the `docker` group and Testcontainers runs. `dotnet test` is green: 11 tests against
+a real `timescale/timescaledb-ha:pg17` container.
 
-```
-sudo usermod -aG docker $USER   # then log out and back in
-```
+Verified by that run:
 
-Until then these Phase 0 exit criteria are **unverified**:
+- The first migration applies against the real image (the fixture migrates before every collection).
+- `price_ticks` is a hypertable with daily chunks and a 30-day retention policy.
+- pgvector is present — D-3's whole justification.
+- The quota governor survives a restart: `Budget_survives_a_restart` spends three of five requests,
+  drops the `DbContext`, and a second governor over a fresh context reads `Used = 3`, not zero.
 
-- `docker compose up` produces a running API.
-- The first migration applies against the real image.
-- `price_ticks` is a hypertable with daily chunks and 30-day retention.
-- pgvector is present (D-3's whole justification).
-- The quota governor survives a container restart.
-
-What *is* verified: the solution builds clean, and `dotnet ef migrations script --idempotent`
-contains the extension creation, `create_hypertable`, `add_retention_policy` and the source seed.
+Still **unverified**: `docker compose up` producing a running API. The tests exercise the database
+image and the schema, not the compose topology or the API container.
 
 ---
 
-## Left to implement
+## D-7 — Quota governor
 
-`Modules/Pricing/Quota/PostgresQuotaGovernor` is a deliberate stub throwing
-`NotImplementedException`. Its contract, intended design, and the decisions left open (refund
-policy on transport failure, denial log volume, authoritative clock) are documented in the class
-remarks. `QuotaGovernorTests` encodes the contract as seven currently-failing tests, the first of
-which is the Phase 0 exit criterion about surviving a restart.
+**DONE.** `Modules/Pricing/Quota/PostgresQuotaGovernor` implements `IQuotaGovernor`;
+`QuotaGovernorTests` (7 tests, 8 cases) passes.
+
+Design is option A from the Phase 0 review — Postgres *is* the bucket. Acquire is a single
+`INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`, so the budget check and the increment happen
+inside one row lock and there is no window for a second caller to act on a stale count. The three
+outcomes the original sketch had to disambiguate collapse into that one statement: a missing row is
+the `INSERT`, and both "budget spent" and "provider rejected" are the `WHERE` failing. See the class
+remarks for why this is raw SQL in an EF codebase.
+
+### Anchor for `RollingThirtyDays`
+
+**Supplied by the caller from configuration; `ResolvePeriod` throws if it is missing.** The anchor is
+the provider's signup date — a fact only the provider holds — so there is no safe default.
+
+Rejected `PriceSource.CreatedAt`: that records when *we* registered the source in our own database, a
+different event, and using it would offset every period boundary by the gap between signup and first
+deploy — silently, permanently, and in a way nothing would ever flag. Rejected deriving it from the
+earliest `api_quota_windows` row: circular, and it would make boundaries depend on when the process
+first happened to start.
+
+Not implemented in Phase 0. `GoldApiIoOptions.QuotaPeriod` defaults to `CalendarMonthUtc`, so the
+rolling branch is unreachable until the account page is checked (see the unverified-reset-semantics
+finding above).
+
+### Refunds on transport failure
+
+**No refund path exists.** A lease taken before a request that then fails in transit stays spent.
+
+The two failure modes are not symmetric. Not refunding leaks one request per network blip: bounded,
+self-limiting, and visible as `RequestsUsed` drifting above real usage. Refunding risks unbounded
+overspend against a hard monthly cap whose exhaustion is invisible until the provider starts
+returning 429 — and on GoldAPI free that means no prices for the rest of the month. An over-count
+costs one poll; an under-count can cost the month. The 8-hour cadence already leaves ~7 requests of
+headroom against the 100-request budget, which absorbs the expected leak.
+
+Consequence: `IQuotaGovernor` deliberately has no refund method. Adding one later is an interface
+change, which is the right amount of friction for a decision this asymmetric.
+
+### Denial logging
+
+**Debug level in the governor; no rate-limiting machinery.**
+
+Per-instance memoisation was considered and discarded: the governor is registered scoped, so a
+"have I already logged this period?" field would be reconstructed on every call and never suppress
+anything. The operator-facing event already exists one layer up — `PricePollingService` catches
+`QuotaExhaustedException`, logs once at Error, and sleeps until `ResetsAt`, so a spent budget
+produces one line per exhaustion episode rather than one per poll.
+
+Known wart: the governor's debug line says "no budget left" even when the real cause was a provider
+rejection, because the acquire statement cannot distinguish the two. Worth fixing if that log is ever
+promoted above Debug.
+
+### Authoritative clock
+
+**The application clock (`TimeProvider`), exclusively.** `now()` never appears in the governor's SQL;
+every timestamp written to `api_quota_windows` — `PeriodStartsAt`, `PeriodEndsAt`, `CreatedAt`,
+`UpdatedAt` — is a parameter bound from the injected clock.
+
+The period key is computed in C#, so the database clock could only be authoritative if the key were
+computed in SQL too — which would make `FakeTimeProvider` unable to roll a period, and `ResolvePeriod`
+untestable as a pure function. The failure this avoids is the mixed one: a key derived from the app
+clock enforced against a boundary written under the database clock, which disagree by exactly the
+skew and only near a rollover.
+
+Residual risk: two instances with skewed clocks could briefly create separate rows either side of a
+boundary, over-allocating budget for the width of the skew. Acceptable while `PricePollingService` is
+single-instance by construction. If the API is ever scaled out, revisit this together with that
+service's hosting note.
+
+### Reading remaining budget
+
+`ReportProviderRejectionAsync` stamps `ProviderRejectedAt` and deliberately leaves `RequestsUsed`
+alone, so **`Limit - Used` is not the remaining budget** once the provider has rejected us — the
+`ProviderRejectedAt IS NULL` predicate in the acquire statement is what clamps it to zero.
+
+Setting `RequestsUsed = RequestLimit` would have made remaining arithmetically correct for any
+reader, but it destroys the gap between what we counted and what the provider counted — the only
+evidence we get that our accounting is drifting, and exactly what `QuotaHandler` logs on a 429.

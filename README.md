@@ -3,8 +3,10 @@
 Gold price intelligence platform. See `plans/aurum_brd.md` for requirements and
 `plans/aurum-phased-plan.md` for the engineering roadmap.
 
-**Current state: Phase 0, incomplete.** `ops/decisions/phase-0.md` records what is decided, what
-is still open, and what is unverified. `ops/phase-0-todo.md` is the remaining work.
+**Current state: Phase 0, in progress.** The schema, the quota governor and the polling scaffold
+are done and green against a real Postgres; `docker compose` topology is not yet verified end to
+end. `ops/decisions/phase-0.md` records what is decided and what is still open;
+`ops/phase-0-todo.md` is the remaining work.
 
 ## Layout
 
@@ -32,8 +34,8 @@ docker compose up --build
 
 The API applies migrations at startup. `/health` is liveness, `/health/ready` gates on Postgres.
 
-Requires Docker access — if `docker ps` says permission denied, see the blocker note in
-`ops/decisions/phase-0.md`.
+Requires Docker access. If `docker ps` says permission denied, add yourself to the `docker` group
+(`sudo usermod -aG docker $USER`) and log back in — nothing here runs without it.
 
 ## Tests
 
@@ -45,8 +47,9 @@ Integration tests spin up `timescale/timescaledb-ha:pg17` via Testcontainers rat
 Hypertables and vector columns behave differently enough from vanilla Postgres that a mock would
 validate nothing.
 
-The `QuotaGovernorTests` suite fails by design: `PostgresQuotaGovernor` is a stub, and those tests
-are its specification.
+`QuotaGovernorTests` is the quota governor's specification, and it passes — including
+`Concurrent_acquires_never_oversubscribe`, which races 40 callers on separate `DbContext`s against
+a budget of 10.
 
 ## Why the quota governor matters
 
@@ -55,3 +58,12 @@ container restarts can spend a month of requests in an afternoon, and every indi
 looks fine while it happens. Accounting is therefore durable (Postgres) and enforced at the HTTP
 boundary as a `DelegatingHandler` — above it, Phase 1's retries and failover chain would spend
 budget without being counted.
+
+The counter lives in `api_quota_windows`, one row per (source, accounting period). Acquiring a
+request is a single `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`, so the budget check and
+the increment happen inside one row lock — a `SELECT` followed by an `UPDATE` leaves a gap where two
+callers both see the last request available. Budget returns at a period boundary because the period
+key changes and the next acquire creates a fresh row; nothing is scheduled and nothing is reset.
+
+If you are about to replace that SQL with EF: read the class remarks on `PostgresQuotaGovernor`
+first, and `ops/decisions/phase-0.md` (D-7) for the decisions behind it.
