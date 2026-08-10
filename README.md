@@ -47,9 +47,13 @@ Integration tests spin up `timescale/timescaledb-ha:pg17` via Testcontainers rat
 Hypertables and vector columns behave differently enough from vanilla Postgres that a mock would
 validate nothing.
 
-`QuotaGovernorTests` is the quota governor's specification, and it passes — including
-`Concurrent_acquires_never_oversubscribe`, which races 40 callers on separate `DbContext`s against
-a budget of 10.
+`QuotaGovernorTests` and `QuotaHandlerTests` are the quota subsystem's specification, and they pass
+— including `Concurrent_acquires_never_oversubscribe`, which races 40 callers on separate
+`DbContext`s against a budget of 10.
+
+Some of those tests exist to hold a decision in place rather than to catch a bug. `No refunds on a
+failed request` is enforced by nothing in the code except a `catch` block that isn't there, so
+`Transport_failure_still_spends_the_lease` is what makes reintroducing one fail out loud.
 
 ## Why the quota governor matters
 
@@ -64,6 +68,15 @@ request is a single `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`, 
 the increment happen inside one row lock — a `SELECT` followed by an `UPDATE` leaves a gap where two
 callers both see the last request available. Budget returns at a period boundary because the period
 key changes and the next acquire creates a fresh row; nothing is scheduled and nothing is reset.
+
+When the provider rejects us for quota, the clamp is written as `ProviderRejectedAt` and never by
+moving the counter — so a row can read "0 used of 100, rejected," and that contradiction is the
+point. It is the only evidence that our count and the provider's have diverged, which is worth more
+than making `Limit - Used` arithmetically tidy.
+
+Every timestamp in that table comes from the injected `TimeProvider`, including the audit fields
+that `AurumDbContext` stamps. The context takes the clock as a required constructor parameter for
+that reason: an optional one with a wall-clock default compiles everywhere and reverts silently.
 
 If you are about to replace that SQL with EF: read the class remarks on `PostgresQuotaGovernor`
 first, and `ops/decisions/phase-0.md` (D-7) for the decisions behind it.

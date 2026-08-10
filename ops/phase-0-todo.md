@@ -33,40 +33,42 @@ Do this *before* writing the governor, so a failure here is unambiguously mine a
 - [ ] `docker compose down -v && docker compose up --build` from clean — this is the §8
       portability NFR, and it rots silently if you don't check it now.
 
-Expected failure at this stage: the poller logs a quota `NotImplementedException` on first tick.
-That's item 2.
-
 ---
 
-## 2. Implement `PostgresQuotaGovernor`  ·  the CORE piece  ·  ~half a day
+## 2. Implement `PostgresQuotaGovernor`  ·  the CORE piece  ·  DONE
 
-`src/Aurum.Api/Modules/Pricing/Quota/PostgresQuotaGovernor.cs`. The class remarks carry the
-intended design and full contract. `QuotaGovernorTests` has seven failing tests that are the spec —
-work them green in this order:
+`src/Aurum.Api/Modules/Pricing/Quota/PostgresQuotaGovernor.cs`. The class remarks carry the design
+and full contract; `QuotaGovernorTests` and `QuotaHandlerTests` are the spec, 17 tests green.
 
-- [ ] **`ResolvePeriod`** — start here, it's pure and the two `[Theory]` cases pin the calendar
-      boundary. `RollingThirtyDays` needs an anchor date; decide where the anchor comes from
-      (config? first-ever row? source registration date?) and write down why.
-- [ ] **`AcquireAsync`** — the conditional `UPDATE … WHERE requests_used < request_limit RETURNING`.
-      Zero rows affected means one of three different things (row absent / budget spent / already
-      rejected by provider) and you must tell them apart. Green: `First_acquire_in_a_period_creates_the_window`,
-      `Acquire_is_denied_once_the_budget_is_spent`, `Budget_returns_when_the_period_rolls`.
-- [ ] **Race safety** — `Concurrent_acquires_never_oversubscribe` runs 40 callers against a budget
-      of 10 on separate DbContexts. If this passes on the first try, check it's actually racing
-      before you believe it.
-- [ ] **`ReportProviderRejectionAsync`** — clamp remaining budget to zero for the rest of the
-      period, don't just increment. Green: `Provider_rejection_clamps_the_remaining_budget`.
-- [ ] **`GetStatusAsync`** — including the "no row yet" case. Green: `Budget_survives_a_restart`.
+- [x] **`ResolvePeriod`** — pure, with the two `[Theory]` cases pinning the calendar boundary.
+      `RollingThirtyDays` takes its anchor from configuration and throws without one (D-7); the
+      branch is unreachable while `QuotaPeriod` defaults to `CalendarMonthUtc`.
+- [x] **`AcquireAsync`** — a single `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`. The three
+      outcomes collapse into that one statement rather than being told apart in C#: a missing row is
+      the `INSERT`, and both "budget spent" and "provider rejected" are the `WHERE` failing.
+- [x] **Race safety** — `Concurrent_acquires_never_oversubscribe`, 40 callers against a budget of 10
+      on separate DbContexts.
+- [x] **`ReportProviderRejectionAsync`** — clamps via `ProviderRejectedAt`, never by moving the
+      counter, and upserts so it can clamp a period that has no row yet.
+- [x] **`GetStatusAsync`** — including the "no row yet" case.
 
-Three decisions to make and record in `ops/decisions/phase-0.md`, not just in code:
+Three decisions, recorded in `ops/decisions/phase-0.md` (D-7) with the reasoning and the rejected
+alternatives, and each now pinned by a test rather than by the shape of the code:
 
-- [ ] **Refund policy.** A lease is taken before the request is sent. If the send fails with a
-      transport error, we can't know whether the provider counted it. Refunding risks overspending
-      a monthly budget; not refunding leaks budget on every network blip. Pick one, write the why.
-- [ ] **Denial logging.** At a spent monthly budget the poller will produce thousands of identical
-      denials. Rate-limit, log once per period, or something else.
-- [ ] **Authoritative clock.** `TimeProvider` is injected for testability, but period boundaries
-      computed from the app clock and rows written under `now()` can disagree. Pick one.
+- [x] **Refund policy.** No refunds. An over-count costs one poll; an under-count can cost the
+      month. `QuotaHandlerTests.Transport_failure_still_spends_the_lease`.
+- [x] **Denial logging.** Debug in the governor, naming the cause it read back; the once-per-episode
+      operator line already lives in `PricePollingService`. No rate-limiting machinery — the governor
+      is scoped, so per-instance memoisation would suppress nothing.
+      `Denial_after_provider_rejection_names_the_provider` and its negative twin.
+- [x] **Authoritative clock.** `TimeProvider` exclusively, including
+      `AurumDbContext.ApplyAuditFields`, which was still on `DateTimeOffset.UtcNow` and is the
+      reason this box could not honestly be ticked earlier.
+      `Audit_timestamps_come_from_the_injected_clock`.
+
+Found and fixed while pinning the above: `ReportProviderRejectionAsync` used an `UPDATE`, which
+changes zero rows and reports success when the period has no row yet — losing the clamp whenever a
+request straddles a period boundary. Now an upsert; see D-7, "Clamping a period with no row."
 
 ---
 

@@ -121,7 +121,7 @@ image and the schema, not the compose topology or the API container.
 ## D-7 — Quota governor
 
 **DONE.** `Modules/Pricing/Quota/PostgresQuotaGovernor` implements `IQuotaGovernor`;
-`QuotaGovernorTests` (7 tests, 8 cases) passes.
+`QuotaGovernorTests` and `QuotaHandlerTests` (17 tests, 18 cases) pass.
 
 Design is option A from the Phase 0 review — Postgres *is* the bucket. Acquire is a single
 `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`, so the budget check and the increment happen
@@ -159,9 +159,14 @@ headroom against the 100-request budget, which absorbs the expected leak.
 Consequence: `IQuotaGovernor` deliberately has no refund method. Adding one later is an interface
 change, which is the right amount of friction for a decision this asymmetric.
 
+Enforced by `QuotaHandlerTests.Transport_failure_still_spends_the_lease`. Until that test existed
+the decision was enforced only by the *absence* of a `catch` in `QuotaHandler`, which is not
+something a reviewer notices. Phase 1 wraps this layer in Polly retries; the test is what makes a
+refund introduced there fail loudly instead of quietly halving the effective budget guarantee.
+
 ### Denial logging
 
-**Debug level in the governor; no rate-limiting machinery.**
+**Debug level in the governor, naming the cause it found; no rate-limiting machinery.**
 
 Per-instance memoisation was considered and discarded: the governor is registered scoped, so a
 "have I already logged this period?" field would be reconstructed on every call and never suppress
@@ -169,9 +174,42 @@ anything. The operator-facing event already exists one layer up — `PricePollin
 `QuotaExhaustedException`, logs once at Error, and sleeps until `ResetsAt`, so a spent budget
 produces one line per exhaustion episode rather than one per poll.
 
-Known wart: the governor's debug line says "no budget left" even when the real cause was a provider
-rejection, because the acquire statement cannot distinguish the two. Worth fixing if that log is ever
-promoted above Debug.
+The wart this entry used to carry — the line said "no budget left" whatever the real cause — is
+fixed. `AcquireAsync` reads the row back on the denial path and logs a spent budget and a provider
+rejection differently. The two need different responses: one waits out the period, the other says
+our count and the provider's have diverged, which is an accounting bug worth chasing.
+
+Rejected teaching the acquire statement to report the cause itself (a CTE returning row state
+alongside the upsert): one round trip instead of two and no staleness, but it complicates the one
+statement whose single-statement atomicity *is* the concurrency guarantee, in exchange for a log
+line. The extra read costs one query per exhaustion episode, not per poll, because the poller
+sleeps after the first denial.
+
+Consequence: that read sits outside the atomic statement, so a rejection landing — or the period
+rolling — between the two queries makes the message stale. Acceptable for a log line, wrong for
+anything that decides; the code says so where the read happens. Enforced by
+`Denial_after_provider_rejection_names_the_provider` and its negative twin
+`Denial_on_a_spent_budget_does_not_blame_the_provider`, which together stop the branch collapsing
+back to a single message.
+
+### Clamping a period with no row
+
+**`ReportProviderRejectionAsync` is an upsert, not an update.**
+
+It was an `ExecuteUpdateAsync` filtered by (source, period), which changes zero rows and reports
+success when no row exists for that period. The clamp vanished silently. Reachable when a request
+straddles a period boundary: the acquire is charged to the old period, the response arrives in the
+new one, and the rejection is written against a period key nothing has touched.
+
+Whether to clamp at all in that case is a real question — the 429 was about the previous period's
+budget, and the new period's may genuinely be fresh. We clamp, on the same asymmetry as the refund
+decision: an over-clamp costs one poll cycle and self-corrects at the next boundary; an under-clamp
+means hammering a provider that is already rejecting us, and on GoldAPI free that costs the month.
+
+The inserted row carries `RequestsUsed = 0`, which is the honest count — nothing was ever charged
+to this period. A row reading "0 used of 100, rejected" is the loudest possible drift signal, and
+consistent with the rule below that the clamp never lives in the counter. Enforced by
+`Rejection_before_any_acquire_creates_a_clamped_window`.
 
 ### Authoritative clock
 
@@ -184,6 +222,22 @@ computed in SQL too — which would make `FakeTimeProvider` unable to roll a per
 untestable as a pure function. The failure this avoids is the mixed one: a key derived from the app
 clock enforced against a boundary written under the database clock, which disagree by exactly the
 skew and only near a rollover.
+
+This claim was false below the governor until now. `AurumDbContext.ApplyAuditFields` stamped
+`CreatedAt`/`UpdatedAt` from `DateTimeOffset.UtcNow`, so rows written through EF carried wall-clock
+audit timestamps while rows written by the governor's raw SQL carried clock-true ones — two rows in
+one table from two clocks. Invisible in production, where they agree to within microseconds, and a
+month apart under `FakeTimeProvider`. `AurumDbContext` now takes `TimeProvider` as a required
+constructor parameter and `ApplyAuditFields` reads it.
+
+Rejected making that parameter optional with a `TimeProvider.System` fallback: it compiles
+everywhere and silently reverts to wall clock the moment a registration is dropped or a context is
+constructed by hand — reintroducing exactly this bug in exactly the way that hid it the first time.
+Required means the compiler names every construction site. There are two: `Program.cs`, where
+`AddDbContext` resolves it from DI, and `PostgresFixture.CreateDbContext`, where it is optional
+*there* only because a wrong default fails a test rather than shipping.
+
+Enforced by `Audit_timestamps_come_from_the_injected_clock`.
 
 Residual risk: two instances with skewed clocks could briefly create separate rows either side of a
 boundary, over-allocating budget for the width of the skew. Acceptable while `PricePollingService` is

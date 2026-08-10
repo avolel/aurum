@@ -19,9 +19,16 @@ or method.
 Migrations (run from `src/Aurum.Api`):
 
 ```bash
+export ConnectionStrings__Aurum="Host=localhost;Database=aurum;Username=aurum;Password=..."
 dotnet ef migrations add <Name>
 dotnet ef migrations script --idempotent    # inspect before applying
 ```
+
+`dotnet ef` builds the real host to get its `DbContext`, and `Program.cs` throws without a
+connection string. Without one you get a misleading `Unable to resolve service for type
+'DbContextOptions<AurumDbContext>'` — EF has already fallen back to activating the context without
+the application service provider by then, and the connection-string error is one line above it. The
+value need not point at a live database for `migrations add` or `script`.
 
 Tests require Docker. If `docker ps` is permission-denied, `sudo usermod -aG docker $USER` and log
 back in — nothing runs without it.
@@ -58,19 +65,31 @@ Three placement decisions here that look arbitrary in isolation:
   close; `ON CONFLICT` re-reads the row under a lock, which is the entire concurrency guarantee.
   `Concurrent_acquires_never_oversubscribe` is the test that catches a regression here. The class
   remarks and `ops/decisions/phase-0.md` (D-7) carry the full reasoning.
+- **`ReportProviderRejectionAsync` is an upsert for the same reason**, not the `UPDATE … WHERE` it
+  looks like it should be. An update changes zero rows and reports success when the period has no
+  row yet, which happens whenever a request straddles a period boundary — the acquire is charged to
+  the old period, the rejection arrives in the new one, and the clamp disappears silently.
 
 Related invariants:
 
 - Period rollover needs no scheduled job. A new period means a new `PeriodKey`, so no row exists and
   the next acquire creates one. Spent rows are never reset — they are history.
 - `QuotaStatus.Limit - Used` is **not** remaining budget. When `ProviderRejected` is set, remaining
-  is zero regardless of the counter.
+  is zero regardless of the counter. The clamp never lives in the counter: a row reading "0 used of
+  100, rejected" is deliberate, and it is the only signal that our accounting has drifted from the
+  provider's.
+- `AcquireAsync` reads the row back on the **denial path only**, to log whether the cause was a
+  spent budget or a provider rejection. That read is outside the atomic statement and is therefore
+  diagnostic only — it can be stale by a rejection or a period rollover. Nothing may branch on it.
 - `PollInterval` and `MonthlyRequestLimit` are coupled: `PricePollingService.GuardPollBudget`
   refuses to start on a cadence that would overspend the period. Changing one usually means changing
   the other.
-- The injected `TimeProvider` is the sole authority for period boundaries; `now()` never appears in
-  governor SQL. Note that raw SQL also bypasses `AurumDbContext.ApplyAuditFields`, so `CreatedAt` /
-  `UpdatedAt` must be passed explicitly there.
+- The injected `TimeProvider` is the sole authority for every timestamp the app writes, not just
+  period boundaries; `now()` never appears in governor SQL. `AurumDbContext` takes it as a
+  **required** constructor parameter so no construction site can silently fall back to wall clock —
+  that fallback is precisely what made `ApplyAuditFields` disagree with the governor for the whole
+  of early Phase 0. Note that raw SQL bypasses `ApplyAuditFields` entirely, so `CreatedAt` /
+  `UpdatedAt` must still be passed explicitly there.
 
 ### Database
 
@@ -105,6 +124,16 @@ the database and clean up their own rows in `InitializeAsync`.
 
 `InternalsVisibleTo` is set so tests can reach internal seams such as
 `PostgresQuotaGovernor.ResolvePeriod` without widening the module's public surface.
+
+`QuotaHandlerTests` drives the handler through a real `HttpClient` over a stub inner handler rather
+than calling `SendAsync` directly, because `HttpClient` does its own exception handling on the way
+out — a test that bypasses it would not prove `QuotaExhaustedException` actually reaches
+`PricePollingService`'s catch clause. `Infrastructure/ListLogger.cs` captures log entries for the
+cases where the log line *is* the deliverable; the governor's denial message is the only one so far.
+
+Several tests exist to pin a decision rather than to find a bug — `Transport_failure_still_spends_the_lease`
+is the executable form of "no refunds," which was otherwise enforced only by the absence of a
+`catch`. Deleting one of those because it "tests nothing" removes the guard, not the redundancy.
 
 Concurrency tests give each caller its own `DbContext` — a `DbContext` is not thread-safe, and the
 concurrency being tested is between database transactions. A concurrency test that passes on the
