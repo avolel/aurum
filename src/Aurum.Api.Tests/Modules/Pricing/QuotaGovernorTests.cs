@@ -9,8 +9,7 @@ using Microsoft.Extensions.Time.Testing;
 namespace Aurum.Api.Tests.Modules.Pricing;
 
 /// <summary>
-/// The contract <see cref="PostgresQuotaGovernor"/> has to satisfy. These fail today — the
-/// governor is a deliberate stub.
+/// The contract <see cref="PostgresQuotaGovernor"/> has to satisfy.
 /// </summary>
 /// <remarks>
 /// The first test is the one that matters. GoldAPI's free tier resets monthly, so a counter
@@ -155,6 +154,96 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.True((await governor.GetStatusAsync(SourceCode, Ct)).ProviderRejected);
     }
 
+    /// <summary>
+    /// A rejection must clamp the period even when no row exists for it yet — an UPDATE cannot
+    /// change a row that is not there, so the clamp used to vanish silently.
+    /// </summary>
+    /// <remarks>
+    /// Reachable when a request straddles a period boundary: the acquire counts against the old
+    /// period, the response lands in the new one, and the rejection is written against a period
+    /// key nothing has touched. The seeded-window case is already covered by
+    /// <see cref="Provider_rejection_clamps_the_remaining_budget"/>; this one deliberately seeds
+    /// nothing. <c>Used == 0</c> is the honest count — no request was ever charged to this
+    /// period — and a row reading "0 used, rejected" is the loudest drift signal the ledger has.
+    /// </remarks>
+    [Fact]
+    public async Task Rejection_before_any_acquire_creates_a_clamped_window()
+    {
+        await using var db = fixture.CreateDbContext(_clock);
+        var governor = NewGovernor(db);
+
+        await governor.ReportProviderRejectionAsync(SourceCode, Ct);
+
+        var status = await governor.GetStatusAsync(SourceCode, Ct);
+        Assert.True(status.ProviderRejected);
+        Assert.Equal(0, status.Used);
+        Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
+    }
+
+    /// <summary>
+    /// D-7's "known wart", now fixed: the acquire statement cannot tell a spent budget from a
+    /// provider rejection, so the denial log asserted the first regardless. The two need
+    /// different operator responses — one waits out the period, the other means our count is
+    /// drifting from the provider's — so the line has to name the cause it actually found.
+    /// </summary>
+    [Fact]
+    public async Task Denial_after_provider_rejection_names_the_provider()
+    {
+        await SeedWindowAsync(requestLimit: 100);
+        await using var db = fixture.CreateDbContext(_clock);
+        var logger = new ListLogger<PostgresQuotaGovernor>();
+        var governor = new PostgresQuotaGovernor(db, _clock, logger);
+
+        await governor.ReportProviderRejectionAsync(SourceCode, Ct);
+        Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
+
+        var denial = Assert.Single(logger.Entries, e => e.Message.Contains("denied"));
+        Assert.Contains("rejected", denial.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no budget left", denial.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The other half of the pair: a spent budget must not be reported as a provider rejection.
+    /// Without this, a denial branch that always said "rejected" would pass the test above.
+    /// </summary>
+    [Fact]
+    public async Task Denial_on_a_spent_budget_does_not_blame_the_provider()
+    {
+        await SeedWindowAsync(requestLimit: 1);
+        await using var db = fixture.CreateDbContext(_clock);
+        var logger = new ListLogger<PostgresQuotaGovernor>();
+        var governor = new PostgresQuotaGovernor(db, _clock, logger);
+
+        Assert.True((await governor.AcquireAsync(SourceCode, Ct)).Granted);
+        Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
+
+        var denial = Assert.Single(logger.Entries, e => e.Message.Contains("denied"));
+        Assert.Contains("no budget left", denial.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rejected", denial.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// D-7, "Authoritative clock": the injected <see cref="TimeProvider"/> is the sole authority
+    /// for anything this table records.
+    /// </summary>
+    /// <remarks>
+    /// The governor's raw SQL already binds every timestamp from the clock, but rows written
+    /// through EF get their audit stamps from <c>AurumDbContext.ApplyAuditFields</c>. While that
+    /// reads <c>DateTimeOffset.UtcNow</c>, two rows in the same table carry timestamps from two
+    /// different clocks — invisible in production, a month apart under a fake one.
+    /// </remarks>
+    [Fact]
+    public async Task Audit_timestamps_come_from_the_injected_clock()
+    {
+        await SeedWindowAsync(requestLimit: 100);
+
+        await using var db = fixture.CreateDbContext(_clock);
+        var row = await db.ApiQuotaWindows.AsNoTracking().SingleAsync(w => w.SourceCode == SourceCode);
+
+        Assert.Equal(_clock.GetUtcNow(), row.CreatedAt);
+        Assert.Equal(_clock.GetUtcNow(), row.UpdatedAt);
+    }
+
     [Theory]
     [InlineData(QuotaPeriodKind.CalendarMonthUtc, "2026-07-15T12:00:00Z", "2026-08-01T00:00:00Z")]
     [InlineData(QuotaPeriodKind.CalendarMonthUtc, "2026-12-31T23:59:59Z", "2027-01-01T00:00:00Z")]
@@ -170,7 +259,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         var (periodKey, startsAt, endsAt) =
             PostgresQuotaGovernor.ResolvePeriod(QuotaPeriodKind.CalendarMonthUtc, _clock.GetUtcNow(), anchor: null);
 
-        await using var db = fixture.CreateDbContext();
+        await using var db = fixture.CreateDbContext(_clock);
         db.ApiQuotaWindows.Add(new ApiQuotaWindow
         {
             SourceCode = SourceCode,

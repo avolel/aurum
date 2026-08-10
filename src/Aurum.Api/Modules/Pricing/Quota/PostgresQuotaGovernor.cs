@@ -41,13 +41,16 @@ namespace Aurum.Api.Modules.Pricing.Quota;
 /// which means the next acquire creates one. Spent rows are never reset — they stay as history.</item>
 /// <item><see cref="ReportProviderRejectionAsync"/> clamps remaining budget to zero for the rest of
 /// the period. It does so via <c>ProviderRejectedAt</c>, not by moving the counter — see the note on
-/// <see cref="QuotaStatus"/> before computing remaining budget as Limit minus Used.</item>
+/// <see cref="QuotaStatus"/> before computing remaining budget as Limit minus Used. It is an upsert
+/// for the same reason acquire is: a request that straddles a period boundary is rejected against a
+/// period whose row does not exist yet, and an UPDATE would drop that clamp silently.</item>
 /// </list>
 ///
 /// <para><b>Decisions, with reasoning, in <c>ops/decisions/phase-0.md</c> (D-7):</b> no refunds on
 /// transport failure; denials logged at Debug because the poller already logs each exhaustion
-/// episode once; the injected <see cref="TimeProvider"/> is the sole authority for period
-/// boundaries, so <c>now()</c> never appears in this class's SQL.</para>
+/// episode once, with the cause read back separately so the line can name it; the injected
+/// <see cref="TimeProvider"/> is the sole authority for every timestamp this class writes, so
+/// <c>now()</c> never appears in its SQL.</para>
 /// </remarks>
 public class PostgresQuotaGovernor(
     AurumDbContext db,
@@ -68,16 +71,53 @@ public class PostgresQuotaGovernor(
        AND api_quota_windows."ProviderRejectedAt" IS NULL
     RETURNING "RequestLimit" - "RequestsUsed";
     """;
+    // An UPDATE cannot clamp a period that has no row yet, so this is an upsert too. RequestsUsed
+    // is 0 on insert because that is the honest count: nothing was ever charged to this period.
+    // The clamp lives in ProviderRejectedAt, never in the counter — see the QuotaStatus remarks.
+    // COALESCE keeps the first rejection's timestamp; when the provider first turned us away is
+    // evidence, and a later rejection in the same period must not overwrite it.
+    private const string ClampSql = """
+    INSERT INTO api_quota_windows
+        ("SourceCode", "PeriodKey", "PeriodStartsAt", "PeriodEndsAt",
+         "RequestLimit", "RequestsUsed", "ProviderRejectedAt", "CreatedAt", "UpdatedAt")
+    VALUES (@code, @period, @startsAt, @endsAt, @limit, 0, @now, @now, @now)
+    ON CONFLICT ("SourceCode", "PeriodKey") DO UPDATE
+       SET "ProviderRejectedAt" = COALESCE(api_quota_windows."ProviderRejectedAt", @now),
+           "UpdatedAt"          = @now;
+    """;
 
     public async Task<QuotaLease> AcquireAsync(string sourceCode, CancellationToken ct)
     {
         DateTimeOffset now = clock.GetUtcNow();
         var (periodKey, periodStartsAt, periodEndsAt, requestLimit) = GetCurrentPeriod(sourceCode, now);
-        var remaining = await TryConsumeAsync(sourceCode, periodKey, periodStartsAt, periodEndsAt, now, requestLimit, ct);
+
+        var remaining = await TryConsumeAsync(sourceCode,
+            periodKey,
+            periodStartsAt,
+            periodEndsAt,
+            now,
+            requestLimit, ct);
+
         if (remaining is not null)
             return new QuotaLease(Granted: true, Remaining: remaining.Value, ResetsAt: periodEndsAt);
 
-        logger.LogDebug("{Source} denied: no budget left in period {Period}.", sourceCode, periodKey);
+        // The acquire statement collapses "budget spent" and "provider rejected" into the same
+        // null, so the cause has to be read back to log it. Deliberately outside that statement,
+        // and deliberately diagnostic only: a rejection could land, or the period roll, between
+        // the two queries. That makes the message occasionally stale, which is fine for a log
+        // line and wrong for anything that decides. Nothing below may branch on this.
+        var status = await GetStatusAsync(sourceCode, ct);
+        if (status.ProviderRejected)
+        {
+            logger.LogDebug(
+                "{Source} denied: provider rejected us earlier in period {Period}; budget clamped until {ResetsAt:O}.",
+                sourceCode, periodKey, periodEndsAt);
+        }
+        else
+        {
+            logger.LogDebug("{Source} denied: no budget left in period {Period} ({Used}/{Limit}).",
+                sourceCode, periodKey, status.Used, status.Limit);
+        }
         return new QuotaLease(Granted: false, Remaining: 0, ResetsAt: periodEndsAt);
     }
 
@@ -86,11 +126,17 @@ public class PostgresQuotaGovernor(
         DateTimeOffset now = clock.GetUtcNow();
         var (periodKey, periodStartsAt, periodEndsAt, requestLimit) = GetCurrentPeriod(sourceCode, now);
 
-        await db.ApiQuotaWindows
-            .Where(w => w.SourceCode == sourceCode && w.PeriodKey == periodKey)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(w => w.ProviderRejectedAt, w => w.ProviderRejectedAt ?? now)
-                .SetProperty(w => w.UpdatedAt, now), ct);
+        // ExecuteSqlRawAsync rather than TryConsumeAsync's hand-rolled command: that one only
+        // opens its own connection because it needs a scalar back, and this statement has no
+        // result worth reading — it has no WHERE, so it always affects exactly one row.
+        await db.Database.ExecuteSqlRawAsync(ClampSql, [
+            new NpgsqlParameter("code",     sourceCode),
+            new NpgsqlParameter("period",   periodKey),
+            new NpgsqlParameter("startsAt", periodStartsAt),
+            new NpgsqlParameter("endsAt",   periodEndsAt),
+            new NpgsqlParameter("limit",    requestLimit),
+            new NpgsqlParameter("now",      now),
+        ], ct);
     }
 
     public async Task<QuotaStatus> GetStatusAsync(string sourceCode, CancellationToken ct)
@@ -102,7 +148,7 @@ public class PostgresQuotaGovernor(
             .AsNoTracking()
             .SingleOrDefaultAsync(w => w.SourceCode == sourceCode && w.PeriodKey == periodKey, ct);
 
-        if(row is null)
+        if (row is null)
         {
             return new QuotaStatus(
                 Used: 0,
@@ -110,7 +156,7 @@ public class PostgresQuotaGovernor(
                 ResetsAt: periodEndsAt,
                 ProviderRejected: false);
         }
-        
+
         return new QuotaStatus(
             Used: row.RequestsUsed,
             Limit: row.RequestLimit,
@@ -119,7 +165,7 @@ public class PostgresQuotaGovernor(
     }
 
     private (string PeriodKey, DateTimeOffset StartsAt, DateTimeOffset EndsAt, int RequestLimit) GetCurrentPeriod(
-        string sourceCode, 
+        string sourceCode,
         DateTimeOffset now)
     {
         var options = sourceCode switch
@@ -128,7 +174,7 @@ public class PostgresQuotaGovernor(
             _ => null,
         };
 
-        var kind  = options?.QuotaPeriod ?? QuotaPeriodKind.CalendarMonthUtc;
+        var kind = options?.QuotaPeriod ?? QuotaPeriodKind.CalendarMonthUtc;
         var limit = options?.MonthlyRequestLimit ?? DefaultRequestLimit;
 
         var (periodKey, startsAt, endsAt) = ResolvePeriod(kind, now, anchor: null);
@@ -139,37 +185,38 @@ public class PostgresQuotaGovernor(
     string sourceCode, string periodKey,
     DateTimeOffset startsAt, DateTimeOffset endsAt, DateTimeOffset now, int requestLimit,
     CancellationToken ct)
-{
-    var connection = db.Database.GetDbConnection();
-
-    await using var command = connection.CreateCommand();
-    command.CommandText = AcquireSql;
-
-    // If EF has a transaction open, a raw command must join it - otherwise it runs on the
-    // same connection but outside the transaction, silently breaking atomicity.
-    command.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
-
-    command.Parameters.Add(new NpgsqlParameter("code",     sourceCode));
-    command.Parameters.Add(new NpgsqlParameter("period",   periodKey));
-    command.Parameters.Add(new NpgsqlParameter("startsAt", startsAt));
-    command.Parameters.Add(new NpgsqlParameter("endsAt",   endsAt));
-    command.Parameters.Add(new NpgsqlParameter("limit",    requestLimit));
-    command.Parameters.Add(new NpgsqlParameter("now",      now));
-
-    // EF ref-counts explicit opens, so this pairs safely with CloseConnectionAsync and is a
-    // no-op when EF already had the connection open.
-    await db.Database.OpenConnectionAsync(ct);
-    try
     {
-        // ExecuteScalar returns the first column of the first row - or null when the
-        // statement produced no rows at all. That null *is* the denial signal.
-        return await command.ExecuteScalarAsync(ct) as int?;
+        var connection = db.Database.GetDbConnection();
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = AcquireSql;
+
+        // If EF has a transaction open, a raw command must join it - otherwise it runs on the
+        // same connection but outside the transaction, silently breaking atomicity.
+        command.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
+
+        command.Parameters.Add(new NpgsqlParameter("code", sourceCode));
+        command.Parameters.Add(new NpgsqlParameter("period", periodKey));
+        command.Parameters.Add(new NpgsqlParameter("startsAt", startsAt));
+        command.Parameters.Add(new NpgsqlParameter("endsAt", endsAt));
+        command.Parameters.Add(new NpgsqlParameter("limit", requestLimit));
+        command.Parameters.Add(new NpgsqlParameter("now", now));
+
+        // EF ref-counts explicit opens, so this pairs safely with CloseConnectionAsync and is a
+        // no-op when EF already had the connection open.
+        await db.Database.OpenConnectionAsync(ct);
+        try
+        {
+            // ExecuteScalar returns the first column of the first row - or null when the
+            // statement produced no rows at all. That null *is* the denial signal.
+            return await command.ExecuteScalarAsync(ct) as int?;
+        }
+        finally
+        {
+            await db.Database.CloseConnectionAsync();
+        }
     }
-    finally
-    {
-        await db.Database.CloseConnectionAsync();
-    }}
-    
+
     /// <summary>
     /// Maps a moment to the provider's accounting period. Opaque to callers; only equality and
     /// the period's end instant matter.
@@ -183,20 +230,20 @@ public class PostgresQuotaGovernor(
         switch (kind)
         {
             case QuotaPeriodKind.CalendarMonthUtc:
-            {
-                var startsAt = new DateTimeOffset(utc.Year, utc.Month, 1, 0, 0, 0, TimeSpan.Zero);
-                var endsAt = startsAt.AddMonths(1);
-                return (startsAt.ToString("yyyy-MM", CultureInfo.InvariantCulture), startsAt, endsAt);
-            }
+                {
+                    var startsAt = new DateTimeOffset(utc.Year, utc.Month, 1, 0, 0, 0, TimeSpan.Zero);
+                    var endsAt = startsAt.AddMonths(1);
+                    return (startsAt.ToString("yyyy-MM", CultureInfo.InvariantCulture), startsAt, endsAt);
+                }
             case QuotaPeriodKind.RollingThirtyDays:
-            {
-                 var start = (anchor ?? throw new ArgumentNullException(
-                    nameof(anchor), $"{kind} requires a per-source anchor date.")).ToUniversalTime();
-                var periodDays = 30;
-                var index = (long)Math.Floor((utc - start).TotalDays / periodDays);
-                var startsAt = start.AddDays(index * periodDays);
-                return ($"r30-{startsAt:yyyy-MM-dd}", startsAt, startsAt.AddDays(periodDays));
-            }
+                {
+                    var start = (anchor ?? throw new ArgumentNullException(
+                       nameof(anchor), $"{kind} requires a per-source anchor date.")).ToUniversalTime();
+                    var periodDays = 30;
+                    var index = (long)Math.Floor((utc - start).TotalDays / periodDays);
+                    var startsAt = start.AddDays(index * periodDays);
+                    return ($"r30-{startsAt:yyyy-MM-dd}", startsAt, startsAt.AddDays(periodDays));
+                }
             default:
                 throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown period kind");
         }

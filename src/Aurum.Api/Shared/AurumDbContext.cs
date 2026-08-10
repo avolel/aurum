@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Aurum.Api.Shared;
 
-public class AurumDbContext(DbContextOptions<AurumDbContext> options) : DbContext(options)
+public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvider clock) : DbContext(options)
 {
     public DbSet<PriceTick> PriceTicks => Set<PriceTick>();
     public DbSet<PriceSource> PriceSources => Set<PriceSource>();
@@ -103,7 +103,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options) : DbContex
 
     private void ApplyAuditFields()
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = clock.GetUtcNow();
         foreach (var entry in ChangeTracker.Entries<AuditableEntity>())
         {
             switch (entry.State)

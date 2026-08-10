@@ -38,12 +38,17 @@ public class PostgresFixture : IAsyncLifetime
         await db.Database.MigrateAsync();
     }
 
-    public AurumDbContext CreateDbContext()
+    /// <summary>
+    /// A context over the fixture's database. Pass <paramref name="clock"/> when the test needs
+    /// EF-written audit stamps to agree with the clock the governor writes its own rows under.
+    /// </summary>
+    public AurumDbContext CreateDbContext(TimeProvider? clock = null)
     {
         var options = new DbContextOptionsBuilder<AurumDbContext>()
             .UseNpgsql(ConnectionString)
             .Options;
-        return new AurumDbContext(options);
+
+        return new AurumDbContext(options, clock ?? TimeProvider.System);
     }
 
     private async Task ExecuteAsync(string sql)
