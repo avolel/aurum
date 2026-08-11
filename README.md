@@ -4,8 +4,9 @@ Gold price intelligence platform.
 
 **Current state: Phase 0, in progress.** The schema, the quota governor and the polling scaffold are
 written and green against a real Postgres, and the compose stack boots to a healthy API from a clean
-volume. What remains is mostly measurement rather than code: the GoldAPI account facts, a run
-against the live API, and the two spikes (charting, Ollama) that Phase 1 and Phase 2 depend on.
+volume. The GoldAPI account facts are now verified and the tier question is decided (D-8). What
+remains is measurement rather than code: a run against the live API, and the two spikes (charting,
+Ollama) that Phase 1 and Phase 2 depend on.
 
 `ops/decisions/phase-0.md` records what is decided and why, including the rejected alternatives.
 `ops/phase-0-todo.md` is the remaining work, ordered so each item is verifiable when it is finished.
@@ -18,15 +19,22 @@ against the live API, and the two spikes (charting, Ollama) that Phase 1 and Pha
 - Budget survives a real `docker compose restart api`, not just a fresh `DbContext` in a test.
 - `docker compose down -v && docker compose up --build` from an empty volume reaches a healthy `api`
   with `/health` and `/health/ready` both 200.
+- GoldAPI's free-tier facts are checked against the account page, not the docs: **100 requests per
+  calendar month, UTC**. `MonthlyRequestLimit`, `QuotaPeriod = CalendarMonthUtc` and an 8-hour
+  `PollInterval` now reflect measured values rather than guesses, and `GuardPollBudget` accepts the
+  cadence.
+- **D-8 — tier decision recorded.** Free tier through Phase 0; the paid tier is a gate on Phase 1
+  go-live, before anything user-facing ships. The tier is a configuration number and nothing branches
+  on 100, so moving up is two environment variables and a restart. The accepted cost is that Phase
+  1's "price visible within 2× polling interval" stays unmet by choice until then — an 8-hour-old
+  price on the free tier is correct behaviour, not a defect. Development also yields ~3 ticks a day,
+  so anything needing volume should generate it rather than wait for the poller.
 
 ### Open, and each one blocks something
 
-- **GoldAPI's real free-tier limit and reset semantics are unverified.** `MonthlyRequestLimit` and
-  `QuotaPeriod` (`CalendarMonthUtc` by default) are guesses until they are checked against the
-  account page rather than the docs. A wrong reset rule is a silent one-in-twelve failure.
-- **The free tier cannot support Phase 1.** ~100 requests/month is ~3 polls/day, which cannot meet
-  "price visible within 2× polling interval." Paid tier, a different primary source, or a re-scoped
-  Phase 1 — the call has to be recorded before Phase 1 starts.
+- **No run against the live API yet.** The end-to-end exit criterion — real ticks in `price_ticks`
+  with sane `ObservedAt`/`ReceivedAt`, `LastSuccessAt` advancing in `price_sources`, and the mid
+  sanity-checked against a public spot quote — needs a real key in `.env` and has not been done.
 - **D-1 / D-2 (Expo vs bare RN, charting library)** await the 30k-tick spike, which needs a physical
   device; simulator frame times will lie.
 - **D-6 (Ollama sizing)** awaits measured tokens/sec. 12 GB VRAM already rules out the phase plan's
