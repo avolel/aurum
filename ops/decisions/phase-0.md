@@ -88,8 +88,10 @@ interval of ~8 hours — the configured default in `appsettings.json`, and the r
 Three polls a day is not "live price" and cannot meet Phase 1's "price visible within 2× polling
 interval" (§8) or FR-1.x in any meaningful sense. The quota governor keeps this honest instead of
 failing quietly, but it does not make the tier usable. **Phase 1 needs either a paid tier or a
-different primary source, and §12's cost model needs revisiting.** Confirm the actual free-tier
-number against your own account before acting on this.
+different primary source, and §12's cost model needs revisiting.**
+
+Free-tier limit confirmed against the account page: 100 requests/month.
+**Resolved by D-8 — stay on free through Phase 0, buy the paid tier as a Phase 1 go-live gate.**
 
 ### GoldAPI's quota reset semantics are unverified
 
@@ -253,3 +255,43 @@ alone, so **`Limit - Used` is not the remaining budget** once the provider has r
 Setting `RequestsUsed = RequestLimit` would have made remaining arithmetically correct for any
 reader, but it destroys the gap between what we counted and what the provider counted — the only
 evidence we get that our accounting is drifting, and exactly what `QuotaHandler` logs on a 429.
+
+---
+
+## D-8 — GoldAPI tier
+
+**DECIDED: stay on the free tier through Phase 0 and local development. Buy the paid tier as a
+gate on Phase 1 go-live, before anything user-facing ships.**
+
+100 requests/month at an 8-hour cadence is sufficient for what Phase 0 actually has to prove — that
+ticks land, that the governor's accounting survives a restart, that the compose topology comes up.
+None of those need a fast cadence; they need a real provider on the other end of the wire, which the
+free tier is.
+
+What makes deferring safe is that the tier is a configuration number, not an assumption anywhere in
+the code. `MonthlyRequestLimit`, `QuotaPeriod` and `PollInterval` bind from `PriceSources:GoldApiIo`
+and are overridable per environment; nothing branches on 100, and `GuardPollBudget` recomputes the
+floor from whatever limit it is given. Moving to paid is two environment variables and a restart.
+Had the free-tier limit been baked into the polling logic, this decision would have to be made now.
+
+The risk being accepted, stated plainly so it is not later mistaken for a defect: **Phase 1's "price
+visible within 2× polling interval" (§8) is unmeetable until the tier changes.** A dashboard running
+against the free tier will show an 8-hour-old price and that is correct behaviour. The criterion
+stays unmet by choice, and the paid-tier purchase is what closes it — not a code change.
+
+Second consequence: development produces ~3 ticks a day, which is not enough data to lay out a chart
+against. The D-2 spike already plans on 30k synthetic ticks; anything else needing volume should
+generate it rather than wait for the poller.
+
+Rejected — **switch primary source now.** It buys cadence at the cost of a provider integration
+chosen before we know what cadence Phase 1 actually needs, and Phase 1's failover chain wants a
+second source regardless. Picking it then, with real requirements, is a better-informed choice than
+picking it now to dodge a bill.
+
+Rejected — **re-scope Phase 1 to a delayed price.** That reshapes the product around a development
+constraint that money removes. If delayed pricing turns out to be the right product, it should be
+decided on its merits and not because of a free tier.
+
+Trigger for revisiting, so this does not quietly expire: the first Phase 1 work that puts a price in
+front of a user. At that point set the real limit and interval from the purchased plan's numbers —
+read them off the account page, not the pricing page — and note the §12 cost-model update.

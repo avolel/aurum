@@ -90,14 +90,15 @@ Phase 0 exit criterion, which is about a container.
 
 I could not verify either of these, and both are silent-failure shaped.
 
-- [ ] **Actual free-tier request limit** from your account page. Set `MonthlyRequestLimit` to it.
-- [ ] **Reset semantics** — calendar month UTC or rolling 30 days from signup? Set `QuotaPeriod`
+- [x] **Actual free-tier request limit** from your account page. Set `MonthlyRequestLimit` to it.
+- [x] **Reset semantics** — calendar month UTC or rolling 30 days from signup? Set `QuotaPeriod`
       accordingly. Getting this wrong is a one-in-twelve failure you won't notice for a year.
-- [ ] Set `PollInterval` to fit. `GuardPollBudget` will refuse to start if it doesn't, and will
+- [x] Set `PollInterval` to fit. `GuardPollBudget` will refuse to start if it doesn't, and will
       tell you the minimum.
-- [ ] **Decide what to do about the finding**: ~100 requests/month is ~3 polls/day, which cannot
+- [x] **Decide what to do about the finding**: ~100 requests/month is ~3 polls/day, which cannot
       support Phase 1's live dashboard. Paid tier, different primary source, or re-scope Phase 1 —
-      record the call in the decision log.
+      record the call in the decision log. **D-8: free tier through Phase 0, paid tier as a Phase 1
+      go-live gate.** Phase 1's "price within 2× poll interval" stays unmet by choice until then.
 
 ---
 
