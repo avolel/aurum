@@ -23,14 +23,14 @@ Nothing in Phase 0 can be verified until this works. No code depends on it.
 
 Do this *before* writing the governor, so a failure here is unambiguously mine and not yours.
 
-- [ ] `cp .env.example .env`, set `POSTGRES_PASSWORD`, leave the GoldAPI key blank for now.
-- [ ] `docker compose up --build` reaches a healthy `api`.
-- [ ] `curl localhost:8080/health` and `/health/ready` both 200.
-- [ ] `dotnet test --filter SchemaTests` — three tests, all green. These assert the hypertable
+- [x] `cp .env.example .env`, set `POSTGRES_PASSWORD`, leave the GoldAPI key blank for now.
+- [x] `docker compose up --build` reaches a healthy `api`.
+- [x] `curl localhost:8080/health` and `/health/ready` both 200.
+- [x] `dotnet test --filter SchemaTests` — three tests, all green. These assert the hypertable
       exists with daily chunks, the 30-day retention policy is registered, and pgvector is
       installed. **If the pgvector one fails, D-3 was wrong and the image choice needs revisiting
       before anything else.**
-- [ ] `docker compose down -v && docker compose up --build` from clean — this is the §8
+- [x] `docker compose down -v && docker compose up --build` from clean — this is the §8
       portability NFR, and it rots silently if you don't check it now.
 
 ---
@@ -77,12 +77,12 @@ request straddles a period boundary. Now an upsert; see D-7, "Clamping a period 
 The unit test simulates a restart with a fresh `DbContext`. That is not the same claim as the
 Phase 0 exit criterion, which is about a container.
 
-- [ ] Set `MonthlyRequestLimit` to something small (say 5) and a short `PollInterval` in
+- [x] Set `MonthlyRequestLimit` to something small (say 5) and a short `PollInterval` in
       `appsettings.Development.json` so you can burn the budget in minutes.
-- [ ] Let it spend 3 of 5. `docker compose restart api`. Confirm from the logs and from
+- [x] Let it spend 3 of 5. `docker compose restart api`. Confirm from the logs and from
       `SELECT * FROM api_quota_windows` that it resumes at 3, not 0.
-- [ ] Let it hit 5. Confirm the poller sleeps until the period end rather than spinning.
-- [ ] Revert the test config.
+- [x] Let it hit 5. Confirm the poller sleeps until the period end rather than spinning.
+- [x] Revert the test config.
 
 ---
 
