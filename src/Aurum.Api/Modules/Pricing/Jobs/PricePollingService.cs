@@ -107,7 +107,10 @@ public class PricePollingService(
                 [
                     $"PollInterval {_goldApi.PollInterval} implies ~{pollsPerPeriod:F0} requests per period " +
                     $"but MonthlyRequestLimit is {_goldApi.MonthlyRequestLimit}. " +
-                    $"Use an interval of at least {minimum:hh\\:mm\\:ss}."
+                    // The days component is load-bearing: `hh` is the hour *within* a day, so a
+                    // minimum spanning days renders as its remainder and hands the operator a
+                    // value that fails this same guard. Any limit below ~31 crosses that boundary.
+                    $"Use an interval of at least {minimum:dd\\.hh\\:mm\\:ss}."
                 ]);
         }
     }
