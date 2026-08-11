@@ -142,7 +142,10 @@ first try should be checked for whether it is actually racing before it is belie
 ## Conventions
 
 - Decisions go in `ops/decisions/phase-<n>.md` with the reasoning and the rejected alternatives, not
-  only in code. `plans/aurum-phased-plan.md` is the roadmap; `plans/aurum_brd.md` the requirements.
+  only in code, and are tracked. The roadmap (`plans/aurum-phased-plan.md`) and requirements
+  (`plans/aurum_brd.md`) are deliberately untracked — `plans/` is gitignored and exists only in the
+  working copy, so a fresh clone will not have them. Ask for the contents rather than assuming the
+  paths resolve.
 - Comments explain *why* and non-obvious behaviour, aimed at a mid-to-senior engineer. Skip language
   basics and anything the code already states plainly.
 - Prose in this repo consistently names the failure mode a decision avoids. Match that when editing
