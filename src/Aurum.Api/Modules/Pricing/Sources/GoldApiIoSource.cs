@@ -18,9 +18,16 @@ public class GoldApiIoSource(
     TimeProvider clock,
     ILogger<GoldApiIoSource> logger) : IPriceSource
 {
-    private readonly GoldApiIoOptions _options = options.Value.GoldApiIo;
+    /// <summary>
+    /// The provider's natural key, matched against <c>PriceSourceOptions.SourceCode</c>. It lives
+    /// on the source rather than on an options class because it identifies this implementation,
+    /// not a configuration shape — options are now looked up by it, not selected by it.
+    /// </summary>
+    public const string SourceCode = "goldapi.io";
 
-    public string Code => GoldApiIoOptions.SourceCode;
+    private readonly PriceSourceOptions _options = options.Value.RequireByCode(SourceCode);
+
+    public string Code => SourceCode;
 
     public int Priority => _options.Priority;
 

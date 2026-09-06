@@ -46,7 +46,7 @@ namespace Aurum.Api.Modules.Pricing.Quota;
 /// period whose row does not exist yet, and an UPDATE would drop that clamp silently.</item>
 /// </list>
 ///
-/// <para><b>Decisions, with reasoning, in <c>ops/decisions/phase-0.md</c> (D-7):</b> no refunds on
+/// <para><b>Decisions, with reasoning, in <c>ops/decisions/decisions.md</c> (D-7):</b> no refunds on
 /// transport failure; denials logged at Debug because the poller already logs each exhaustion
 /// episode once, with the cause read back separately so the line can name it; the injected
 /// <see cref="TimeProvider"/> is the sole authority for every timestamp this class writes, so
@@ -56,9 +56,8 @@ public class PostgresQuotaGovernor(
     AurumDbContext db,
     TimeProvider clock,
     ILogger<PostgresQuotaGovernor> logger,
-    IOptions<PriceSourcesOptions>? sources = null) : IQuotaGovernor
+    IOptions<PriceSourcesOptions> sources) : IQuotaGovernor
 {
-    private const int DefaultRequestLimit = 100;
     private const string AcquireSql = """
     INSERT INTO api_quota_windows
         ("SourceCode", "PeriodKey", "PeriodStartsAt", "PeriodEndsAt",
@@ -164,21 +163,22 @@ public class PostgresQuotaGovernor(
             ProviderRejected: row.ProviderRejectedAt is not null);
     }
 
+    /// <summary>
+    /// Resolves the accounting period and budget for a source from that source's own
+    /// configuration.
+    /// </summary>
+    /// <remarks>
+    /// An unconfigured source throws rather than falling back to a default limit and period —
+    /// see <see cref="PriceSourcesOptions.RequireByCode"/> for why there is no defensible default.
+    /// </remarks>
     private (string PeriodKey, DateTimeOffset StartsAt, DateTimeOffset EndsAt, int RequestLimit) GetCurrentPeriod(
         string sourceCode,
         DateTimeOffset now)
     {
-        var options = sourceCode switch
-        {
-            GoldApiIoOptions.SourceCode => sources?.Value.GoldApiIo,
-            _ => null,
-        };
+        var options = sources.Value.RequireByCode(sourceCode);
 
-        var kind = options?.QuotaPeriod ?? QuotaPeriodKind.CalendarMonthUtc;
-        var limit = options?.MonthlyRequestLimit ?? DefaultRequestLimit;
-
-        var (periodKey, startsAt, endsAt) = ResolvePeriod(kind, now, anchor: null);
-        return (periodKey, startsAt, endsAt, limit);
+        var (periodKey, startsAt, endsAt) = ResolvePeriod(options.QuotaPeriod, now, options.PeriodAnchor);
+        return (periodKey, startsAt, endsAt, options.MonthlyRequestLimit);
     }
 
     private async Task<int?> TryConsumeAsync(

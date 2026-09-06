@@ -64,7 +64,7 @@ Three placement decisions here that look arbitrary in isolation:
   row, deciding in C#, and saving leaves a gap between the check and the increment that no C# can
   close; `ON CONFLICT` re-reads the row under a lock, which is the entire concurrency guarantee.
   `Concurrent_acquires_never_oversubscribe` is the test that catches a regression here. The class
-  remarks and `ops/decisions/phase-0.md` (D-7) carry the full reasoning.
+  remarks and `ops/decisions/decisions.md` (D-7) carry the full reasoning.
 - **`ReportProviderRejectionAsync` is an upsert for the same reason**, not the `UPDATE … WHERE` it
   looks like it should be. An update changes zero rows and reports success when the period has no
   row yet, which happens whenever a request straddles a period boundary — the acquire is charged to
@@ -81,15 +81,17 @@ Related invariants:
 - `AcquireAsync` reads the row back on the **denial path only**, to log whether the cause was a
   spent budget or a provider rejection. That read is outside the atomic statement and is therefore
   diagnostic only — it can be stale by a rejection or a period rollover. Nothing may branch on it.
-- `PollInterval` and `MonthlyRequestLimit` are coupled: `PricePollingService.GuardPollBudget`
-  refuses to start on a cadence that would overspend the period. Changing one usually means changing
+- `PollInterval` and `MonthlyRequestLimit` are coupled: `PriceSourcesOptionsValidator` fails the
+  process at boot on a cadence that would overspend the period. Changing one usually means changing
   the other.
 - The injected `TimeProvider` is the sole authority for every timestamp the app writes, not just
   period boundaries; `now()` never appears in governor SQL. `AurumDbContext` takes it as a
   **required** constructor parameter so no construction site can silently fall back to wall clock —
-  that fallback is precisely what made `ApplyAuditFields` disagree with the governor for the whole
-  of early Phase 0. Note that raw SQL bypasses `ApplyAuditFields` entirely, so `CreatedAt` /
-  `UpdatedAt` must still be passed explicitly there.
+  that fallback is precisely what let `ApplyAuditFields` stamp wall-clock times while the governor
+  wrote clock-injected ones, so two rows in the same table carried timestamps from two different
+  clocks — invisible in production, a month apart under a fake clock in tests. Note that raw SQL
+  bypasses `ApplyAuditFields` entirely, so `CreatedAt` / `UpdatedAt` must still be passed explicitly
+  there.
 
 ### Database
 
@@ -109,11 +111,39 @@ Postgres with TimescaleDB and pgvector (`timescale/timescaledb-ha:pg17`, decisio
 
 ### Configuration
 
-Options bind from the `PriceSources` section with `ValidateDataAnnotations().ValidateOnStart()`, so
-a bad value fails the process at boot rather than at the first poll. Values come from
-`appsettings.json` and are overridden by environment variables using `__` as the section separator
-(`PriceSources__GoldApiIo__MonthlyRequestLimit`), which is how `docker-compose.yml` and `.env` set
-them.
+The `PriceSources` section binds to a **map of sources**, not a property per provider
+(`PriceSourcesOptions.Sources`, keyed by config key, with the provider's natural key carried inside
+as `SourceCode`). Values come from `appsettings.json` and are overridden by environment variables
+using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLimit`), which is how
+`docker-compose.yml` and `.env` set them.
+
+- **Look sources up with `TryGetByCode` / `RequireByCode`, never with a `switch` on the code.** A
+  switch needs a fall-through arm, and a fall-through arm is a fabricated configuration —
+  indistinguishable downstream from a real one, so a source with a 20-request tier gets accounted
+  against whatever the arm guessed. `RequireByCode` throws instead; there is no defensible default
+  for another provider's budget or reset semantics.
+- The map key is the friendly config key (`GoldApiIo`) rather than the source code, because keying
+  by the code puts a dot in every environment variable name
+  (`PriceSources__goldapi.io__ApiKey`) and the compose toolchain's dotenv parsers are inconsistent
+  about those. The cost is that nothing structural stops two entries declaring the same
+  `SourceCode` — they would collide on one ledger row — so the validator rejects duplicates.
+- **`ValidateDataAnnotations()` does not descend into nested objects.** It evaluates the attributes
+  on the options object's own properties and stops. `PriceSourcesOptionsValidator` does the descent
+  explicitly and is what actually enforces `[Required]` on `ApiKey` and `[Range]` on
+  `MonthlyRequestLimit`; while the sources hung off a nested property those attributes were dead,
+  and a missing API key bound to the empty string, booted clean, and then spent the month one 401
+  at a time (401 is not a quota rejection, so nothing clamps, and a lease is never refunded). Any
+  new annotation on `PriceSourceOptions` is enforced by that validator, not by the `.Bind` chain.
+- The validator also holds the cross-field checks the attributes cannot express: the
+  cadence-vs-budget guard (formerly `PricePollingService.GuardPollBudget`, which ran after the host
+  reported healthy and only covered the one hardcoded source) and the rule that
+  `RollingThirtyDays` requires a `PeriodAnchor` — without one `ResolvePeriod` throws on *every*
+  acquire, inside an HTTP handler, which the poller swallows and retries forever.
+- A source with `Enabled: false` is exempt from the credential and cadence checks so a
+  half-configured provider can sit in the file switched off. `SourceCode` is still required — it is
+  the entry's identity.
+- `appsettings.json` ships `ApiKey` as the empty string deliberately. A placeholder there would
+  satisfy `[Required]` and put the hole straight back.
 
 ### Tests
 
@@ -141,7 +171,7 @@ first try should be checked for whether it is actually racing before it is belie
 
 ## Conventions
 
-- Decisions go in `ops/decisions/phase-<n>.md` with the reasoning and the rejected alternatives, not
+- Decisions go in `ops/decisions/decisions.md` with the reasoning and the rejected alternatives, not
   only in code, and are tracked. The roadmap (`plans/aurum-phased-plan.md`) and requirements
   (`plans/aurum_brd.md`) are deliberately untracked — `plans/` is gitignored and exists only in the
   working copy, so a fresh clone will not have them. Ask for the contents rather than assuming the

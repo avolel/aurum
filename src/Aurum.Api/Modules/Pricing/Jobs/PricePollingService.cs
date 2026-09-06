@@ -19,7 +19,8 @@ public class PricePollingService(
     TimeProvider clock,
     ILogger<PricePollingService> logger) : BackgroundService
 {
-    private readonly GoldApiIoOptions _goldApi = options.Value.GoldApiIo;
+    private readonly PriceSourceOptions _goldApi =
+        options.Value.RequireByCode(GoldApiIoSource.SourceCode);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -29,8 +30,10 @@ public class PricePollingService(
             return;
         }
 
-        GuardPollBudget();
-
+        // The cadence-vs-budget guard that used to run here now runs in
+        // PriceSourcesOptionsValidator, so an overspending configuration fails the process at boot
+        // instead of after the host has reported healthy — and covers every configured source
+        // rather than this one.
         using var timer = new PeriodicTimer(_goldApi.PollInterval, clock);
 
         // Poll once immediately so a fresh container has a price before the first interval
@@ -87,31 +90,5 @@ public class PricePollingService(
             "Tick {Symbol} mid={Mid} from {Source}, {StalenessMs}ms stale.",
             quote.Symbol, quote.Mid, quote.SourceCode,
             (quote.ReceivedAt - quote.ObservedAt).TotalMilliseconds);
-    }
-
-    /// <summary>
-    /// Fails fast when the configured cadence cannot fit the configured budget. Starting anyway
-    /// means quietly exhausting a monthly quota partway through the month, which is the exact
-    /// failure this whole subsystem exists to prevent.
-    /// </summary>
-    private void GuardPollBudget()
-    {
-        // Worst case: the longest month. Under-estimating the days would under-estimate the spend.
-        var pollsPerPeriod = TimeSpan.FromDays(31).TotalSeconds / _goldApi.PollInterval.TotalSeconds;
-        if (pollsPerPeriod > _goldApi.MonthlyRequestLimit)
-        {
-            var minimum = TimeSpan.FromSeconds(TimeSpan.FromDays(31).TotalSeconds / _goldApi.MonthlyRequestLimit);
-            throw new OptionsValidationException(
-                nameof(GoldApiIoOptions),
-                typeof(GoldApiIoOptions),
-                [
-                    $"PollInterval {_goldApi.PollInterval} implies ~{pollsPerPeriod:F0} requests per period " +
-                    $"but MonthlyRequestLimit is {_goldApi.MonthlyRequestLimit}. " +
-                    // The days component is load-bearing: `hh` is the hour *within* a day, so a
-                    // minimum spanning days renders as its remainder and hands the operator a
-                    // value that fails this same guard. Any limit below ~31 crosses that boundary.
-                    $"Use an interval of at least {minimum:dd\\.hh\\:mm\\:ss}."
-                ]);
-        }
     }
 }

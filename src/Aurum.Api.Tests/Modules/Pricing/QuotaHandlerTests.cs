@@ -82,7 +82,8 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
         services.AddDbContext<AurumDbContext>(o => o.UseNpgsql(fixture.ConnectionString));
         services.AddSingleton<TimeProvider>(_clock);
         services.AddScoped<IQuotaGovernor>(sp => new PostgresQuotaGovernor(
-            sp.GetRequiredService<AurumDbContext>(), _clock, NullLogger<PostgresQuotaGovernor>.Instance));
+            sp.GetRequiredService<AurumDbContext>(), _clock, NullLogger<PostgresQuotaGovernor>.Instance,
+            TestPriceSources.For(SourceCode)));
 
         var provider = services.BuildServiceProvider();
 

@@ -4,6 +4,7 @@ using Aurum.Api.Shared;
 using Aurum.Api.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Aurum.Api.Tests.Modules.Pricing;
@@ -20,10 +21,11 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
 {
     private const string SourceCode = "test-source";
-    // xunit v2 has no per-test cancellation token. Not worth a framework migration in Phase 0;
+    // xunit v2 has no per-test cancellation token. Not worth a framework migration for this;
     // revisit if a governor test ever hangs long enough to matter.
     private static CancellationToken Ct => CancellationToken.None;
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 7, 15, 12, 0, 0, TimeSpan.Zero));
+    private readonly IOptions<PriceSourcesOptions> _sources = TestPriceSources.For(SourceCode);
 
     public async Task InitializeAsync()
     {
@@ -35,11 +37,12 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     public Task DisposeAsync() => Task.CompletedTask;
 
     private IQuotaGovernor NewGovernor(AurumDbContext db)
-        => new PostgresQuotaGovernor(db, _clock, NullLogger<PostgresQuotaGovernor>.Instance);
+        => new PostgresQuotaGovernor(db, _clock, NullLogger<PostgresQuotaGovernor>.Instance, _sources);
 
     /// <summary>
-    /// The Phase 0 exit criterion: "quota governor demonstrably surviving a container restart."
-    /// A second governor instance over a fresh DbContext stands in for the restarted process.
+    /// The governor's first contract clause: budget survives a process restart, so a fresh
+    /// instance sees the used count rather than zero. A second governor over a fresh DbContext
+    /// stands in for the restarted process.
     /// </summary>
     [Fact]
     public async Task Budget_survives_a_restart()
@@ -192,7 +195,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         await SeedWindowAsync(requestLimit: 100);
         await using var db = fixture.CreateDbContext(_clock);
         var logger = new ListLogger<PostgresQuotaGovernor>();
-        var governor = new PostgresQuotaGovernor(db, _clock, logger);
+        var governor = new PostgresQuotaGovernor(db, _clock, logger, _sources);
 
         await governor.ReportProviderRejectionAsync(SourceCode, Ct);
         Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
@@ -212,7 +215,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         await SeedWindowAsync(requestLimit: 1);
         await using var db = fixture.CreateDbContext(_clock);
         var logger = new ListLogger<PostgresQuotaGovernor>();
-        var governor = new PostgresQuotaGovernor(db, _clock, logger);
+        var governor = new PostgresQuotaGovernor(db, _clock, logger, _sources);
 
         Assert.True((await governor.AcquireAsync(SourceCode, Ct)).Granted);
         Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
