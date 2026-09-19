@@ -29,4 +29,16 @@
     <ProjectReference Include="..\Aurum.Api\Aurum.Api.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The API's real appsettings.json, copied under a distinct name so it never shadows the test
+      host's own configuration. ShippedConfigurationTests binds it to prove the file in the repo
+      actually boots: every other test in this project builds its configuration in memory, which is
+      how a five-minute cadence shipped against a 100-request primary and failed only at runtime.
+    -->
+    <Content Include="..\Aurum.Api\appsettings.json" Link="appsettings.shipped.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
 </Project>
