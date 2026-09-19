@@ -28,12 +28,19 @@ Still unticked from the previous todo, and still the only thing standing between
 and "the code works against the actual provider". Independent of everything below — do it as soon as
 there is a real key.
 
-- [ ] Real API key in `.env`, `docker compose up`.
-- [ ] `SELECT * FROM price_ticks ORDER BY "ObservedAt" DESC LIMIT 10;` — real prices, sane
+- [x] Real API key in `.env`, `docker compose up`.
+- [x] `SELECT * FROM price_ticks ORDER BY "ObservedAt" DESC LIMIT 10;` — real prices, sane
       `ObservedAt`/`ReceivedAt` gap, `Symbol = 'XAUUSD'`, `SourceCode = 'goldapi.io'`.
-- [ ] `SELECT * FROM price_sources;` — `LastSuccessAt` advancing.
-- [ ] Sanity-check the mid against a public spot quote. `PriceQuote.Normalize` prefers GoldAPI's
+- [x] `SELECT * FROM price_sources;` — `LastSuccessAt` advancing.
+- [x] Sanity-check the mid against a public spot quote. `PriceQuote.Normalize` prefers GoldAPI's
       `price` field over `(bid+ask)/2`; confirm that's the number you actually want on the chart.
+      Verified 2026-09-07: `Mid` differs from `(bid+ask)/2` by at most $0.16 on a ~$4,400 price
+      (0.004%), so GoldAPI's `price` *is* a midpoint and the preference is a no-op for this source.
+      The comparison did surface the hazard it was written for, on a different axis: the public
+      reference quotes its **ask** as the headline price and carries a ~$14.50 spread against
+      GoldAPI's ~$0.83. `Mid` is comparable across the two; `Bid`/`Ask` are not. Item 2 puts three
+      sources into the same columns — decide there whether bid/ask are cross-source comparable at
+      all, or only ever read per-source.
 
 Note that `appsettings.json` now ships `ApiKey` as the empty string on purpose, so a missing key
 fails the process at boot rather than spending the month one 401 at a time. That is the D-9
@@ -68,7 +75,7 @@ every code registered in code has a configuration entry, and the throw becomes a
 Three free sources so the aggregate cadence is usable at $0 and the failover chain has something real
 to fail over to. Each keeps its own quota accounting row.
 
-- [ ] `ApiNinjasSource` — `/v1/goldprice` returns `{name, price, updated}`. Mid only;
+- [x] `ApiNinjasSource` — `/v1/goldprice` returns `{name, price, updated}`. Mid only;
       `PriceQuote.Normalize` already handles that. **Gold-only: reject a non-`XAUUSD` symbol
       explicitly** rather than returning gold for whatever was asked.
 - [ ] `MetalpriceApiSource` — two traps, both silent:
@@ -80,8 +87,14 @@ to fail over to. Each keeps its own quota accounting row.
 - [ ] `AddPriceSource<T>` private helper in `PricingModule`, so the handler ordering from item 3
       cannot be got wrong per source.
 - [ ] Sources resolve as `IEnumerable<IPriceSource>` ordered by `Priority`.
-- [ ] Per-source cadence guard: worst case is "this source serves every poll", because in a failover
-      chain any source can, if the ones above it are down all month.
+- [x] Cadence guard: **the primary carries the worst case, backups are exempt.** One feed-wide
+      `PricePolling:PollInterval`; the enabled entry with the lowest `Priority` must fund it for a
+      full period. Holding every source to "this source serves every poll" reads as the safe rule
+      but pegs the cadence to the smallest budget in the file — GoldAPI's 100 a month would cap the
+      whole feed at one poll every 7h26m however much headroom the others have. A backup exhausting
+      mid-outage is counted and clamped by the governor; `PricePollingService` logs each backup's
+      coverage in days at startup so the exemption is visible. Ties for the lowest `Priority`, and a
+      configuration with no enabled source, are refused. **D-10 recorded.**
 - [ ] Validator asserts every registered source code has a configuration entry (carried from item 1).
 - [ ] `appsettings.json`, `.env.example` and `docker-compose.yml` carry the two new sources.
 - [ ] **D-10 recorded** — three free sources rather than the paid tier, and what it still does not

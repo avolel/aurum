@@ -81,9 +81,15 @@ Related invariants:
 - `AcquireAsync` reads the row back on the **denial path only**, to log whether the cause was a
   spent budget or a provider rejection. That read is outside the atomic statement and is therefore
   diagnostic only — it can be stale by a rejection or a period rollover. Nothing may branch on it.
-- `PollInterval` and `MonthlyRequestLimit` are coupled: `PriceSourcesOptionsValidator` fails the
-  process at boot on a cadence that would overspend the period. Changing one usually means changing
-  the other.
+- The cadence is one feed-wide value, `PricePolling:PollInterval`, and it is coupled to the
+  **primary** source's `MonthlyRequestLimit` only — the enabled entry with the lowest `Priority`.
+  `PriceSourcesOptionsValidator` fails the process at boot when that budget cannot fund the cadence
+  for a period. Backups are deliberately exempt (D-10): holding every source to the full period
+  pegs the cadence to the smallest budget in the file, so each added provider could only slow the
+  feed. A backup that empties its budget during a long primary outage is counted and clamped by the
+  governor, which is the accounting working rather than the failure it guards against; the cost is
+  only visible in `PricePollingService`'s startup coverage log. The validator also refuses a tie for
+  the lowest `Priority` and a configuration with nothing enabled.
 - The injected `TimeProvider` is the sole authority for every timestamp the app writes, not just
   period boundaries; `now()` never appears in governor SQL. `AurumDbContext` takes it as a
   **required** constructor parameter so no construction site can silently fall back to wall clock —

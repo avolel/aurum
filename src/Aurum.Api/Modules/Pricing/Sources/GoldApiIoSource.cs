@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json.Serialization;
+using Aurum.Api.Modules.Constants;
 using Microsoft.Extensions.Options;
 
 namespace Aurum.Api.Modules.Pricing.Sources;

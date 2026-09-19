@@ -490,3 +490,63 @@ codebase that uses none, to replace about forty lines.
   half-configured provider can sit in the file switched off. `SourceCode` is still required.
 - `GoldApiIoOptions` is gone; the source code constant lives on `GoldApiIoSource`, where it
   identifies the implementation rather than selecting a switch arm.
+
+---
+
+## D-10 — Poll cadence placement and whose budget has to cover it
+
+**DECIDED: the poll cadence is one feed-wide `PricePolling:PollInterval`, and only the primary
+source — the enabled entry with the lowest `Priority` — has to fund it for a whole period. Backups
+are exempt and may exhaust mid-period.**
+
+Two things were wrong at once. `PollInterval` sat on each source, but `PricePollingService` builds
+one `PeriodicTimer` and asks for one price per tick, so every value but the primary's was read by
+nothing — MetalpriceAPI's ten-minute entry failed the boot check while having no effect on how often
+anything was polled. And the cadence guard held every enabled source to "this source serves every
+poll", which pegs the achievable cadence to the smallest budget in the file: with GoldAPI's 100
+requests a month enabled anywhere in the chain, the fastest legal cadence is one poll every 7h26m,
+and the other two providers' 11,000 requests buy nothing. The plan asked for three free sources so
+the aggregate cadence would be usable at $0; the guard made that unreachable.
+
+The exemption is safe because of what the governor already guarantees. The failure this module
+exists to prevent is *uncounted* spend — an in-memory counter that resets with the container, or a
+retry that slips past the ledger. A backup that empties its budget during a sustained primary
+outage is counted, clamped and visible: `AcquireAsync` denies, the chain moves on, and the poller
+sleeps until the earliest reset. That is the governor working, not the failure it guards against.
+
+A tie for the lowest `Priority` among enabled sources is refused. The chain resolves
+`IEnumerable<IPriceSource>` ordered by `Priority`, so tied entries are separated by DI registration
+order — the boot check would then guarantee the budget of a source nobody chose, and the feed could
+poll the other one. Ties further down are allowed: they only decide which backup spends first.
+A configuration with no enabled source is refused for the same class of reason — the poller logged
+one warning and exited while the API reported healthy and served nothing.
+
+Rejected — **hold every enabled source to the full period.** The literal reading of the Phase 1
+plan, and the rule that was in the code. It makes the failover chain buy reliability and no speed:
+every added provider can only lower the ceiling, never raise it, because the constraint is a
+minimum over budgets.
+
+Rejected — **per-source minimum spacing**: keep a `PollInterval` on each source as "may be called
+at most this often", and have the feed skip sources called too recently. It keeps every budget
+honest and lets the tick run fast, but the feed then rotates between providers as each becomes due.
+Providers differ on the level of gold by a few dollars, so a routine mixed-source feed turns the
+cross-source offset into a constant input to the delta engine, which fabricates events of exactly
+that magnitude. Trading a budget problem for a data-quality problem in Phase 1's core piece.
+
+Rejected — **pick the primary by `Priority == 1`** rather than by position among enabled entries.
+Simpler to read, and wrong the moment the top provider is parked with `Enabled: false`: the check
+would keep validating the disabled entry's generous budget while the source actually serving every
+poll overspends. `Disabling_the_top_source_promotes_the_next_one` pins this.
+
+### Consequences
+
+- `PollInterval` is gone from `PriceSourceOptions`. A stale `PriceSources__GoldApiIo__PollInterval`
+  in an operator's `.env` binds to nothing and raises no error, so the rename has to reach
+  `.env.example` and `docker-compose.yml` in the same pass.
+- `PriceSourcesOptionsValidator` depends on `IOptions<PricePollingOptions>`. The dependency is
+  one-way by design: the polling options' own validation must never read the source map, or the two
+  validators recurse through each other at boot.
+- What a backup's exemption actually costs is invisible in the config, so `PricePollingService`
+  logs each backup's coverage in days once at startup.
+- `PricePollingService` no longer keys "is anything enabled?" off GoldAPI specifically. That check
+  exited the poller whenever GoldAPI was parked, even with two other providers enabled.

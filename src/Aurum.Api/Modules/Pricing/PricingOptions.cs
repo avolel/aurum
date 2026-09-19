@@ -131,13 +131,22 @@ public class PriceSourceOptions
     /// </summary>
     public DateTimeOffset? PeriodAnchor { get; set; }
 
-    /// <summary>
-    /// Poll cadence. Must be consistent with <see cref="MonthlyRequestLimit"/>; the validator
-    /// refuses to start the process if the two imply overspending the period.
-    /// </summary>
-    public TimeSpan PollInterval { get; set; } = TimeSpan.FromMinutes(5);
 
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
+}
+
+/// <summary>Bound from the <c>PricePolling</c> configuration section.</summary>
+/// <remarks>
+/// The poller runs one timer and asks the failover chain for one price per tick, so the cadence
+/// belongs to the feed rather than to any source. It cannot live under <c>PriceSources</c>: that
+/// section binds its children into the source map, so a scalar there becomes a source named
+/// "PollInterval" with no SourceCode.
+/// </remarks>
+public class PricePollingOptions
+{
+    public const string SectionName = "PricePolling";
+
+    public TimeSpan PollInterval { get; set; }
 }
 
 public enum QuotaPeriodKind

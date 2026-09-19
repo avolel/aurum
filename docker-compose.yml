@@ -60,8 +60,10 @@ services:
       ConnectionStrings__Aurum: ${ConnectionStrings__Aurum:?set in .env}
       Ollama__BaseUrl: ${Ollama__BaseUrl:-http://ollama:11434}
       PriceSources__GoldApiIo__ApiKey: ${PriceSources__GoldApiIo__ApiKey:-}
+      PriceSources__ApiNinjas__ApiKey: ${PriceSources__ApiNinjas__ApiKey:-}
+      PriceSources__MetalpriceApi__ApiKey: ${PriceSources__MetalpriceApi__ApiKey:-}
       PriceSources__GoldApiIo__MonthlyRequestLimit: ${PriceSources__GoldApiIo__MonthlyRequestLimit:-100}
-      PriceSources__GoldApiIo__PollInterval: ${PriceSources__GoldApiIo__PollInterval:-08:00:00}
+      PricePolling__PollInterval: ${PricePolling__PollInterval:-00:05:00}
     ports:
       - "8080:8080"
     depends_on:
