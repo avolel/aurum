@@ -642,3 +642,55 @@ Rejected — **ordering by registration order in `PricingModule`** and dropping 
 configuration. Simplest to read, and it makes demoting a provider a code change and a deploy. The
 ordering also stops being visible to `PriceSourcesOptionsValidator`, which needs `Priority` to
 identify the primary whose budget funds the cadence (D-10).
+
+## D-13 — The per-attempt timeout lives inside the resilience pipeline, not on `HttpClient.Timeout`
+
+**DECIDED: `http.Timeout` is set to `Timeout.InfiniteTimeSpan`. The per-attempt budget is a
+`AddTimeout(RequestTimeout)` strategy innermost in the pipeline, and a second
+`AddTimeout(TotalTimeout)` outermost bounds the whole retry sequence. `PriceSourcesOptionsValidator`
+refuses `TotalTimeout <= RequestTimeout` and `TotalTimeout >= PricePolling:PollInterval`.**
+
+`HttpClient.Timeout` is a total budget. `SendAsync` starts it before the handler chain runs, so it
+sits outside the resilience handler and outside `QuotaHandler` both. With retries in place it stops
+meaning "how long one attempt may take" and starts meaning "how long every attempt plus every
+backoff delay may take together" — at `00:00:10` with three attempts and 1s/2s backoff, attempt
+three is cancelled before it opens a socket, and which attempt gets killed depends on how slow the
+earlier ones were. The retry strategy is configured, reads as configured, and does nothing.
+
+The diagnostic half is worse than the arithmetic. When `Timeout` fires it throws
+`TaskCanceledException` *above* the pipeline, so Polly's predicate never observes it: the failure
+cannot be retried, cannot be classified, and reaches the failover chain with no status code and
+nothing naming the source. Meanwhile `QuotaHandler` has already charged a lease for each attempt
+that did leave the process, and there are no refunds (D-7) — so the budget is spent and the log
+line says a task was canceled.
+
+Moving the budget inside the pipeline fixes both. `AddTimeout` throws `TimeoutRejectedException`, a
+typed exception the retry predicate handles and the chain can attribute to a source, and because the
+strategy sits inside the retry loop each attempt gets a fresh `RequestTimeout`.
+
+The resilience handler is registered *before* `QuotaHandler` so the retry loop sits above the
+governor and every attempt is charged its own lease. Inverting the two would retry below the
+accounting and spend the budget uncounted — the same failure the `DelegatingHandler` placement in
+D-7 exists to prevent.
+
+`TotalTimeout` is a separate configured value rather than one derived from `RequestTimeout` and the
+retry count. Deriving it means changing `MaxRetryAttempts` silently changes the ceiling; an explicit
+value is one more key to get wrong, but it is a key the validator can check at boot. Both new rules
+guard failures that are otherwise invisible in production: a total at or below the per-attempt
+budget disables retries silently, and a total at or above the cadence lets one tick's retry sequence
+still be running when the next tick starts, spending quota at twice the rate the D-10 cadence guard
+was told to expect. The timeout rules are checked per source, not for the primary only, because a
+backup's retry sequence runs on the same poller tick.
+
+Rejected — **`AddStandardResilienceHandler()`**, the no-argument preset bundling rate limiter, total
+timeout, retry, circuit breaker and attempt timeout. Fewer lines, and its defaults are sensible for
+a service with an ordinary request budget. They are not sensible for ~100 requests a month: its
+retry defaults to 3 attempts with jitter and its circuit breaker opens on a failure ratio, so the
+preset picks the spend rate. Under this quota every attempt is a decision, which is what makes the
+explicit pipeline worth its verbosity.
+
+Rejected — **keeping `http.Timeout` as an outer backstop** alongside the pipeline timeouts, on the
+grounds that an infinite client timeout has no safety net if the total-timeout strategy is ever
+removed. It reintroduces exactly the cancellation this decision exists to move: a backstop that
+fires throws the same unobservable `TaskCanceledException` above the pipeline. The backstop is
+`AddTimeout(TotalTimeout)`, and the validator is what keeps it meaningful.

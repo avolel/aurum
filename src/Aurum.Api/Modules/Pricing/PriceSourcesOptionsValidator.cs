@@ -93,6 +93,8 @@ internal class PriceSourcesOptionsValidator(
                 failures.Add(
                     $"{path}: QuotaPeriod {nameof(QuotaPeriodKind.RollingThirtyDays)} requires PeriodAnchor.");
             }
+
+            ValidateTimeouts(path, source, polling.Value.PollInterval, failures);
         }
 
         // Only the primary serves every healthy poll, so only its budget has to cover the whole
@@ -126,6 +128,55 @@ internal class PriceSourcesOptionsValidator(
         // Prefixed with the config path so the message names the key an operator has to edit,
         // rather than a bare property name that could belong to any source in the file.
         failures.AddRange(results.Select(r => $"{path}: {r.ErrorMessage}"));
+    }
+
+    /// <summary>
+    /// Refuses timeout values that make the resilience pipeline behave differently from how it reads.
+    /// </summary>
+    /// <remarks>
+    /// <para>Both failures here are silent in production. <c>TotalTimeout</c> at or below
+    /// <c>RequestTimeout</c> means the outer strategy fires the moment the first attempt exhausts
+    /// its own budget, so every retry is cancelled before it opens a socket — the retry policy is
+    /// configured, logged as configured, and does nothing. That is the same failure
+    /// <c>HttpClient.Timeout</c> caused before the per-attempt budget moved inside the pipeline
+    /// (D-13), reintroduced through configuration.</para>
+    ///
+    /// <para><c>TotalTimeout</c> at or above the cadence lets one tick's retry sequence still be
+    /// running when the next tick starts. The poller assumes one in-flight request at a time, and
+    /// overlapping ticks spend quota at twice the rate the budget guard above was told to expect.</para>
+    ///
+    /// <para>Checked per source rather than for the primary only: a backup's retry sequence runs
+    /// on the same poller tick, so its ceiling has to fit the same cadence.</para>
+    /// </remarks>
+    private static void ValidateTimeouts(
+        string path, PriceSourceOptions source, TimeSpan pollInterval, List<string> failures)
+    {
+        if (source.RequestTimeout <= TimeSpan.Zero)
+        {
+            failures.Add($"{path}: RequestTimeout must be a positive interval.");
+            return;
+        }
+
+        if (source.TotalTimeout <= source.RequestTimeout)
+        {
+            failures.Add(
+                $"{path}: TotalTimeout {source.TotalTimeout} must exceed RequestTimeout "
+              + $"{source.RequestTimeout}. TotalTimeout bounds the whole retry sequence, so an "
+              + "equal or smaller value cancels every retry before it opens a socket and the retry "
+              + "strategy silently does nothing.");
+            return;
+        }
+
+        // PricingModule's .Validate lambda rejects a non-positive interval and names the key an
+        // operator actually edits, so a zero here is already reported elsewhere.
+        if (pollInterval > TimeSpan.Zero && source.TotalTimeout >= pollInterval)
+        {
+            failures.Add(
+                $"{path}: TotalTimeout {source.TotalTimeout} is not shorter than "
+              + $"{PricePollingOptions.SectionName}:PollInterval {pollInterval}, so a retrying poll "
+              + "can still be in flight when the next tick starts. Overlapping ticks spend quota "
+              + "faster than the cadence guard accounts for.");
+        }
     }
 
     /// <summary>

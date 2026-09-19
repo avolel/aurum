@@ -322,6 +322,53 @@ public class PriceSourcesOptionsTests
     }
 
     /// <summary>
+    /// TotalTimeout bounds the whole retry sequence and RequestTimeout one attempt, so a TotalTimeout
+    /// that does not exceed RequestTimeout cancels every retry before it opens a socket. The retry
+    /// strategy is then configured, reads as configured, and does nothing — the same failure
+    /// HttpClient.Timeout caused before the per-attempt budget moved inside the pipeline.
+    /// </summary>
+    [Theory]
+    [InlineData("00:00:10")]  // equal: the first attempt consumes the entire total budget
+    [InlineData("00:00:05")]  // smaller: the first attempt is cut short by the outer strategy
+    public void TotalTimeout_must_exceed_RequestTimeout(string totalTimeout)
+    {
+        var failure = ValidationFailure(new()
+        {
+            ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
+            ["PriceSources:GoldApiIo:BaseUrl"] = "https://example.invalid/",
+            ["PriceSources:GoldApiIo:ApiKey"] = "key",
+            ["PriceSources:GoldApiIo:RequestTimeout"] = "00:00:10",
+            ["PriceSources:GoldApiIo:TotalTimeout"] = totalTimeout,
+        });
+
+        Assert.Contains("TotalTimeout", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("RequestTimeout", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A retry sequence that can outlive the cadence puts two polls in flight at once. The poller
+    /// assumes one, and the budget guard above counts one request per tick — so overlapping ticks
+    /// spend quota at a rate nothing in the configuration accounts for.
+    /// </summary>
+    [Fact]
+    public void TotalTimeout_may_not_reach_the_poll_interval()
+    {
+        var failure = ValidationFailure(new()
+        {
+            ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
+            ["PriceSources:GoldApiIo:BaseUrl"] = "https://example.invalid/",
+            ["PriceSources:GoldApiIo:ApiKey"] = "key",
+            ["PriceSources:GoldApiIo:RequestTimeout"] = "00:01:00",
+            ["PriceSources:GoldApiIo:TotalTimeout"] = "00:06:00",
+            // Deliberately not the WithPolling default: the cadence is the rule under test.
+            ["PricePolling:PollInterval"] = "00:05:00",
+        });
+
+        Assert.Contains("TotalTimeout", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("PollInterval", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Mirrors PricingModule's binding so these tests exercise the real config paths — the ones
     /// docker-compose.yml and .env actually set — rather than an object graph built by hand.
     /// </summary>

@@ -1,7 +1,10 @@
 using Aurum.Api.Modules.Pricing.Jobs;
 using Aurum.Api.Modules.Pricing.Quota;
 using Aurum.Api.Modules.Pricing.Sources;
+using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Timeout;
 
 namespace Aurum.Api.Modules.Pricing;
 
@@ -72,12 +75,43 @@ public static class PricingModule
             {
                 var options = GetOptions(sp);
                 http.BaseAddress = options.BaseUrl;
-                http.Timeout = options.RequestTimeout;
-            })
-            .AddHttpMessageHandler(sp => new QuotaHandler(
-                sp.GetRequiredService<IServiceScopeFactory>(),
-                sourceCode,
-                sp.GetRequiredService<ILogger<QuotaHandler>>()));
+                // Infinite here so the ONLY cancellation comes from inside the pipeline, where the
+                // retry predicate can observe it. The real ceiling is the total-timeout strategy below.
+                http.Timeout = Timeout.InfiniteTimeSpan;
+            });
+
+        // Registered before QuotaHandler so the retry loop sits *above* the governor: each attempt
+        // passes through the handler and is charged its own lease. Inverting the two would retry
+        // below the accounting and spend the budget uncounted (D-7).
+        //
+        // Split out of the fluent chain because AddResilienceHandler returns
+        // IHttpResiliencePipelineBuilder, not IHttpClientBuilder — nothing can be chained after it.
+        builder.AddResilienceHandler("price-source", (pipeline, context) =>
+            {
+                var options = GetOptions(context.ServiceProvider);
+
+                // Outermost: the whole retry sequence can't run away forever.
+                pipeline.AddTimeout(options.TotalTimeout);
+
+                pipeline.AddRetry(new HttpRetryStrategyOptions
+                {
+                    // TimeoutRejectedException is what AddTimeout throws — a real, typed exception
+                    // the predicate can see, unlike the TaskCanceledException http.Timeout produced.
+                    ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                        .Handle<TimeoutRejectedException>()
+                        .Handle<HttpRequestException>(),
+                    MaxRetryAttempts = 2,
+                    BackoffType = DelayBackoffType.Exponential,
+                });
+
+                // Innermost: a fresh budget for EACH attempt, because it's inside the retry loop.
+                pipeline.AddTimeout(options.RequestTimeout);
+            });
+
+        builder.AddHttpMessageHandler(sp => new QuotaHandler(
+            sp.GetRequiredService<IServiceScopeFactory>(),
+            sourceCode,
+            sp.GetRequiredService<ILogger<QuotaHandler>>()));
 
         configureAuth(builder, GetOptions);
 

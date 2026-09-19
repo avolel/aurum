@@ -131,8 +131,16 @@ public class PriceSourceOptions
     /// </summary>
     public DateTimeOffset? PeriodAnchor { get; set; }
 
-
+    /// <summary>Budget for a single attempt, enforced inside the retry loop.</summary>
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Ceiling on the whole retry sequence — every attempt plus every backoff delay. Must exceed
+    /// <see cref="RequestTimeout"/>, or the first attempt consumes the total budget and the retries
+    /// are cancelled before they open a socket; <see cref="PriceSourcesOptionsValidator"/> enforces
+    /// that, since the symptom is a retry policy that silently does nothing.
+    /// </summary>
+    public TimeSpan TotalTimeout { get; set; } = TimeSpan.FromSeconds(35);
 }
 
 /// <summary>Bound from the <c>PricePolling</c> configuration section.</summary>
