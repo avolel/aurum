@@ -134,8 +134,14 @@ the same `IEnumerable<IPriceSource>` it consumes, and the result has to carry `A
       so retrying it spends budget that was already denied.
 - [ ] Exception semantics, each one distinct:
       - `QuotaExhaustedException` → never retried, **not** a circuit fault. Move on immediately.
-      - `PriceSourceException` / `HttpRequestException` / timeout → retried, and on final failure
-        counts as a circuit fault.
+      - `HttpRequestException` / timeout / failing status → retried by the pipeline, which is the
+        only layer that observes them, and on final failure counts as a circuit fault.
+      - `PriceSourceException` → **not** in `ShouldHandle`; the predicate cannot observe it. Every
+        source parses the body above the handler chain, so it is raised after `SendAsync` returned
+        an outcome the pipeline already judged successful and unwound — by then the retries for the
+        underlying status or transport failure are spent. Failover and circuit fault only, counted
+        by `FailoverPriceFeed`, which sits above the sources and does see it. Writing it into the
+        predicate buys nothing and reads as coverage the pipeline does not have.
       - Every source down → `AllSourcesFailedException` carrying per-source outcomes.
 - [ ] The poller sleeps **only when every source is quota-exhausted**, and then until the earliest
       `ResetsAt`. Today's single-source `Task.Delay` would idle the whole poller for a month.
