@@ -1,3 +1,4 @@
+using Aurum.Api.Modules.Constants;
 using Aurum.Api.Shared.Entities;
 
 namespace Aurum.Api.Modules.Pricing.Entities;
@@ -19,7 +20,7 @@ public class PriceTick : AuditableEntity
     /// Instrument, e.g. <c>XAUUSD</c>. Present from the first migration (D-4) so Phase 6's
     /// multi-metal work is a code change rather than a migration against a populated hypertable.
     /// </summary>
-    public string Symbol { get; set; } = PriceSymbols.Gold;
+    public string Symbol { get; set; } = SupportedSymbol.Gold;
 
     /// <summary>When the upstream provider says the quote was valid.</summary>
     public DateTimeOffset ObservedAt { get; set; }
@@ -41,9 +42,4 @@ public class PriceTick : AuditableEntity
     public string SourceCode { get; set; } = null!;
 
     public PriceSource? Source { get; set; }
-}
-
-public static class PriceSymbols
-{
-    public const string Gold = "XAUUSD";
 }

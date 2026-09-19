@@ -16,9 +16,12 @@ Decisions get recorded in `ops/decisions/decisions.md` **as each item lands**, n
 end. A decision written afterwards is a decision reconstructed, and the rejected alternatives — the
 part worth keeping — are exactly what gets lost.
 
-> **Decision numbering.** `D-9` is taken (per-source configuration lookup and nested options
-> validation, item 1). The Phase 1 plan's provisional list is therefore shifted by one; the numbers
-> used below are the real ones.
+> **Decision numbering.** `D-9` … `D-12` are taken and recorded: per-source configuration lookup
+> and nested options validation (item 1), poll cadence placement (item 2), three free sources
+> (item 2), and `IEnumerable<IPriceSource>` over keyed DI (item 2). The Phase 1 plan's provisional
+> list has now shifted by **three**; the numbers used below are the real ones. Item 2 briefly
+> carried two bullets both labelled `D-10` — the cadence decision took that number, and the other
+> two became `D-11` and `D-12`, pushing items 3–8 down by two.
 
 ---
 
@@ -63,14 +66,16 @@ performs the nested-annotation descent that `ValidateDataAnnotations()` does not
 - [x] **D-9 recorded**, with the rejected alternatives (keep the switch and add an arm; key the map
       by source code; the options source generator).
 
-Still open from this item, and it belongs to the next one: `RequireByCode` throws from
+~~Still open from this item~~ — **closed in item 2.** `RequireByCode` threw from
 `GoldApiIoSource`'s and `PricePollingService`'s field initialisers, i.e. during DI construction
-rather than at `ValidateOnStart`. Once B2 introduces a source registry, the validator can assert that
-every code registered in code has a configuration entry, and the throw becomes a genuine backstop.
+rather than at `ValidateOnStart`. `AddPriceSource<T>` now emits a `RegisteredPriceSource` tag per
+source and `PriceSourcesOptionsValidator` compares those to the configured codes, so a source
+registered in code without a configuration entry fails the host at boot with a named error. The
+`RequireByCode` throw is a genuine backstop now rather than the primary signal.
 
 ---
 
-## 2. Three sources + registration helper · 1 day · blocks 3
+## 2. Three sources + registration helper · DONE · blocks 3
 
 Three free sources so the aggregate cadence is usable at $0 and the failover chain has something real
 to fail over to. Each keeps its own quota accounting row.
@@ -78,15 +83,15 @@ to fail over to. Each keeps its own quota accounting row.
 - [x] `ApiNinjasSource` — `/v1/goldprice` returns `{name, price, updated}`. Mid only;
       `PriceQuote.Normalize` already handles that. **Gold-only: reject a non-`XAUUSD` symbol
       explicitly** rather than returning gold for whatever was asked.
-- [ ] `MetalpriceApiSource` — two traps, both silent:
+- [x] `MetalpriceApiSource` — two traps, both silent:
       - It authenticates by **query parameter**, so the request URI must never reach a
         `PriceSourceException` message or a retry log.
       - `/v1/latest?base=USD&currencies=XAU` returns *ounces per USD* (~0.00042), and `Mid` is
         `decimal(18,4)`, so that rounds to `0.0004` with no exception and the delta engine sees a
         $2,300 crash. Request `base=XAU&currencies=USD` **and** sanity-band the mid before returning.
-- [ ] `AddPriceSource<T>` private helper in `PricingModule`, so the handler ordering from item 3
+- [x] `AddPriceSource<T>` private helper in `PricingModule`, so the handler ordering from item 3
       cannot be got wrong per source.
-- [ ] Sources resolve as `IEnumerable<IPriceSource>` ordered by `Priority`.
+- [x] Sources resolve as `IEnumerable<IPriceSource>` ordered by `Priority`.
 - [x] Cadence guard: **the primary carries the worst case, backups are exempt.** One feed-wide
       `PricePolling:PollInterval`; the enabled entry with the lowest `Priority` must fund it for a
       full period. Holding every source to "this source serves every poll" reads as the safe rule
@@ -95,12 +100,23 @@ to fail over to. Each keeps its own quota accounting row.
       mid-outage is counted and clamped by the governor; `PricePollingService` logs each backup's
       coverage in days at startup so the exemption is visible. Ties for the lowest `Priority`, and a
       configuration with no enabled source, are refused. **D-10 recorded.**
-- [ ] Validator asserts every registered source code has a configuration entry (carried from item 1).
-- [ ] `appsettings.json`, `.env.example` and `docker-compose.yml` carry the two new sources.
-- [ ] **D-10 recorded** — three free sources rather than the paid tier, and what it still does not
+- [x] Validator asserts every registered source code has a configuration entry (carried from item 1).
+      `AddPriceSource<T>` emits a `RegisteredPriceSource` tag; the validator compares those against
+      the configured codes, so the throw is a `ValidateOnStart` failure rather than a DI-construction
+      one.
+- [x] `appsettings.json`, `.env.example` and `docker-compose.yml` carry the two new sources.
+      Note that compose exposes `MonthlyRequestLimit` as an override for GoldAPI only — the one
+      limit expected to change, on the paid tier (D-8). The other two take their limits from
+      `appsettings.json`.
+- [x] **Seed migration for the two new `price_sources` rows.** `price_ticks.SourceCode` is a foreign
+      key, so the first failover to an unregistered source would have thrown `23503` from
+      `SaveChangesAsync` *after* the request was sent and the lease spent.
+      `20260919102443_SeedAdditionalPriceSources`, using `InitialSchema`'s
+      `INSERT … ON CONFLICT DO NOTHING` idiom. This was previously written down only under item 6.
+- [x] **D-11 recorded** — three free sources rather than the paid tier, and what it still does not
       buy: API Ninjas is the only one with real headroom and it is gold-only, so it cannot serve
       Phase 6's multi-metal work.
-- [ ] **D-11 recorded** — sources as `IEnumerable<IPriceSource>` rather than keyed DI. Keyed DI would
+- [x] **D-12 recorded** — sources as `IEnumerable<IPriceSource>` rather than keyed DI. Keyed DI would
       force the chain to carry its own list of key strings, duplicating what `Priority` expresses.
 
 ---
@@ -133,7 +149,7 @@ the same `IEnumerable<IPriceSource>` it consumes, and the result has to carry `A
       retries", currently enforced only by the order of two lines in `PricingModule.cs`.
 - [ ] `Quota_exhaustion_is_not_retried` — stub asserts exactly one call.
 - [ ] `Open_circuit_source_is_not_called` — assert `CallCount == 0`, not merely the outcome.
-- [ ] **D-12 recorded** — why the breaker is hand-rolled: `GoldApiIoSource` throws
+- [ ] **D-13 recorded** — why the breaker is hand-rolled: `GoldApiIoSource` throws
       `PriceSourceException` *after* a 200 when the body is garbage, so a pipeline breaker would
       never trip on a degrading provider while the chain spent a lease per poll; and a Polly
       breaker's break duration runs on wall clock, which breaks the injected-`TimeProvider`
@@ -190,7 +206,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
       the level of gold by a few dollars, so a failover between polls produces an apparent move of
       exactly that offset, which at 0.25%-in-5m fabricates an event Phase 2 will then explain
       confidently. `Sample` carries its source ordinal; a window whose baseline and latest differ in
-      source is flagged `CrossSource`. **Record in D-13 that this is a mitigation, not a fix** — the
+      source is flagged `CrossSource`. **Record in D-14 that this is a mitigation, not a fix** — the
       fix is per-source calibration offsets, which needs data we do not have.
 - [ ] **Volatility on three samples is meaningless.** Require `MinSamplesForVolatility` (default 5)
       or report `Volatility = null`, so the classifier's volatility rule is *inapplicable* rather
@@ -205,7 +221,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] `DeltaEngine` is a singleton taking `IServiceScopeFactory` for the warmup query — same
       reasoning as `QuotaHandler`, a long-lived object must not capture a scoped `DbContext`.
 - [ ] `Window_with_no_bracketing_sample_is_null_not_zero`, `Out_of_order_sample_is_dropped`.
-- [ ] **D-13 recorded** — the null-window invariant, and the cross-source mitigation's limits.
+- [ ] **D-14 recorded** — the null-window invariant, and the cross-source mitigation's limits.
 
 ---
 
@@ -233,11 +249,10 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] Nested windows (a 1D move contains the 1h contains the 5m) emit separately this tranche.
       Collapsing them into one episode belongs in Phase 2, with the explanation pipeline that
       actually suffers from three explanations per move — note it in the decision, not just here.
-- [ ] Migration seeds the two new `price_sources` rows with the existing
-      `INSERT … ON CONFLICT ("Code") DO NOTHING` idiom from `InitialSchema.cs` — a seed, not
-      `HasData`, for the reason stated there.
+- [x] ~~Migration seeds the two new `price_sources` rows~~ — done early, under item 2. It could not
+      wait for this item: the foreign key fires on the first failover, which item 3 delivers.
 - [ ] `Restart_does_not_re_emit_the_same_event`, `Cross_source_delta_requires_higher_magnitude`.
-- [ ] **D-14 recorded** — why `price_events` is not a hypertable.
+- [ ] **D-15 recorded** — why `price_events` is not a hypertable.
 
 ---
 
@@ -274,7 +289,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] **`GET /v1/price/sources`** — per-source priority, enabled, last success/failure, circuit
       state, quota used/limit/resets. This is how the failover exit criterion gets demonstrated, and
       how an operator answers "why is the price eight hours old" without a psql session.
-- [ ] **D-15 recorded** — the second module seam, and why endpoints do not fit the `Add*Module` one.
+- [ ] **D-16 recorded** — the second module seam, and why endpoints do not fit the `Add*Module` one.
 
 ---
 
@@ -324,7 +339,7 @@ Existing patterns to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure
 - [ ] A client subscribing mid-interval immediately receives the cached quote and deltas (7)
 - [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` returns 400 naming retention (8)
 - [ ] `docker compose down -v && docker compose up --build` from clean still works (9)
-- [ ] D-10 … D-15 recorded with their rejected alternatives (each item)
+- [ ] D-13 … D-16 recorded with their rejected alternatives (each item). D-9 … D-12 are done.
 
 **Explicitly not in this tranche:** the Expo/RNW dashboard and its FCP < 1.5s criterion, auth, rate
 limiting, tier gating, macro and news ingestion, and the paid GoldAPI upgrade — still a go-live gate,

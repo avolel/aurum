@@ -550,3 +550,95 @@ poll overspends. `Disabling_the_top_source_promotes_the_next_one` pins this.
   logs each backup's coverage in days once at startup.
 - `PricePollingService` no longer keys "is anything enabled?" off GoldAPI specifically. That check
   exited the poller whenever GoldAPI was parked, even with two other providers enabled.
+
+---
+
+## D-11 — Three free sources rather than the paid tier
+
+**DECIDED: the failover chain is GoldAPI.io, API Ninjas and MetalpriceAPI, all on free tiers,
+totalling ~11,100 requests a month. The paid GoldAPI upgrade stays a go-live gate (D-8), not a
+build gate.**
+
+The chain exists for reliability, but the reason it is three *free* providers is arithmetic.
+GoldAPI's 100 requests a month funds one poll every 7h26m. Phase 1's delta engine computes 1m and
+5m windows; at that cadence every short window holds one sample and D-13's null-window invariant
+returns `null` for all of them, forever. The engine would be untestable against anything but a
+replayed fixture, and the significance classifier would never fire in development. API Ninjas'
+10,000 and MetalpriceAPI's 1,000 are what make a minute-scale cadence reachable at $0, which is
+what makes items 5 and 6 verifiable against a live feed rather than only against a fixture.
+
+What it does not buy, and the reason this is worth recording rather than assuming:
+
+- **Only one source has real headroom, and it is gold-only.** API Ninjas' `/v1/goldprice` returns
+  gold and nothing else — `ApiNinjasSource` rejects a non-`XAUUSD` symbol explicitly rather than
+  returning gold for whatever was asked. Phase 6's multi-metal work therefore cannot lean on the
+  provider carrying 90% of the budget. Silver arrives on a 1,100-request month across two
+  providers, which is one poll every ~40 minutes — usable for a chart, not for 5m deltas. Phase 6
+  needs its own source decision; it does not inherit this one.
+- **The aggregate is not a budget.** 11,100 is the sum of three ledgers that clamp independently.
+  The primary still funds the cadence alone (D-10), so the cadence is set by GoldAPI's 100 unless
+  GoldAPI is demoted. The other 11,000 buy outage coverage, not speed.
+- **Three providers means three level offsets.** Gold's quoted level differs by a few dollars
+  between providers, so every failover injects an apparent move of exactly that offset into the
+  delta engine. D-13's cross-source flag mitigates this; it does not fix it.
+
+Rejected — **buy the GoldAPI paid tier now.** One provider, one set of response semantics, one
+quota model, and a cadence that supports the delta engine immediately. It also removes the only
+forcing function for the failover chain: with a comfortable budget on a single source, the chain
+would be written against a provider that never fails, and its first real exercise would be in
+production. D-8 already fixed the tier as a go-live gate; paying earlier trades a build-time
+constraint for an untested code path.
+
+Rejected — **two sources.** GoldAPI plus API Ninjas covers the cadence and is less work. It leaves
+the chain with no third leg, so the "every source failed" path — `AllSourcesFailedException` and
+the poller's sleep-until-earliest-reset — is reachable only by disabling one of two providers, and
+a two-element chain does not distinguish "try the next one" from "try the last one". The third
+source is what makes the failover logic general rather than a fallback.
+
+Rejected — **scrape a public spot page as the third source.** Free and unlimited in practice. No
+quota to account, no contract, and no `ObservedAt` — the staleness figure the UI owes the user
+(§14) would be fabricated, which is the misleading-data failure this phase is built to avoid.
+
+---
+
+## D-12 — Sources resolve as `IEnumerable<IPriceSource>`, not keyed DI
+
+**DECIDED: every source registers as an additional `IPriceSource` transient; the failover chain
+resolves them all and orders by `Priority`. Registration goes through one private
+`AddPriceSource<T>` helper in `PricingModule`.**
+
+`Priority` already expresses the order of the chain, and it is bound from configuration, so an
+operator can demote a failing provider with one environment variable. Resolving the whole set and
+sorting on it means there is exactly one place that ordering is decided, and it is data.
+
+Keyed DI (`GetRequiredKeyedService<IPriceSource>("goldapi.io")`) would force the chain to carry its
+own list of key strings in code. That list is a second declaration of which sources exist, ordered
+implicitly by where it is written — so a source added to configuration and to `PricingModule` but
+not to the chain's list is silently absent from failover, with no error at boot and no symptom
+until the primary goes down. The validator's registered-vs-configured check would not catch it:
+the source *is* registered, it is just never asked for.
+
+The helper is the other half of the same reasoning. `AddPriceSource<T>` attaches the `QuotaHandler`
+as part of registering the client, because a source registered without it compiles, works, and
+spends its budget uncounted — the one wiring mistake in this module that produces no symptom at all
+until the provider starts rejecting requests. Auth is the only genuinely per-provider part
+(`x-access-token`, `X-Api-Key`, and a query parameter), so it is the only thing the helper takes as
+a callback. The helper also emits a `RegisteredPriceSource` tag per source, which is what lets
+`PriceSourcesOptionsValidator` assert at boot that every code registered in code has a
+configuration entry — closing the gap left open in item 1, where `RequireByCode` threw from a field
+initialiser during DI construction rather than at `ValidateOnStart`.
+
+Rejected — **keyed DI.** Above. The duplicated key list is the cost; it buys the ability to resolve
+one named source directly, which nothing in Phase 1 needs.
+
+Rejected — **an explicit `IReadOnlyList<IPriceSource>` registered as a singleton**, built once at
+startup in the intended order. Removes the per-resolution sort and makes the order inspectable in
+one place. But the sources are transient by construction — they wrap typed `HttpClient`s whose
+handlers `IHttpClientFactory` recycles — so a singleton list would pin one instance of each for the
+process lifetime, which is the same handler-lifetime mistake `QuotaHandler` takes
+`IServiceScopeFactory` to avoid.
+
+Rejected — **ordering by registration order in `PricingModule`** and dropping `Priority` from
+configuration. Simplest to read, and it makes demoting a provider a code change and a deploy. The
+ordering also stops being visible to `PriceSourcesOptionsValidator`, which needs `Priority` to
+identify the primary whose budget funds the cadence (D-10).

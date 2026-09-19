@@ -4,12 +4,12 @@ namespace Aurum.Api.Modules.Pricing.Sources;
 
 public sealed record ApiNinjasGoldResponse
 {
-    [JsonPropertyName("name")]  
+    [JsonPropertyName("name")]
     public string? Name { get; init; }
 
-    [JsonPropertyName("price")] 
+    [JsonPropertyName("price")]
     public decimal? Price { get; init; }
 
-    [JsonPropertyName("updated")] 
+    [JsonPropertyName("updated")]
     public long? Updated { get; init; }
 }

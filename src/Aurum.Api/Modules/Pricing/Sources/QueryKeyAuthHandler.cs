@@ -10,7 +10,7 @@ namespace Aurum.Api.Modules.Pricing.Sources;
 /// produces is capable of carrying it — a URI in a PriceSourceException message is the leak
 /// this placement makes structurally impossible rather than merely forbidden.
 /// </remarks>
-internal sealed class QueryKeyAuthHandler(string apiKey): DelegatingHandler
+internal sealed class QueryKeyAuthHandler(string apiKey) : DelegatingHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {

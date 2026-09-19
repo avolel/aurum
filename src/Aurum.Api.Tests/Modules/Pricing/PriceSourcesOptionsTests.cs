@@ -221,7 +221,7 @@ public class PriceSourcesOptionsTests
         Assert.False(options.RequireByCode(ApiNinjasSource.SourceCode).Enabled);
     }
 
-        /// <summary>
+    /// <summary>
     /// The rule that replaced "every source must cover every poll". A backup is called only while
     /// the sources above it are down, so holding it to the full period would peg the feed's cadence
     /// to the smallest budget in the file. It may run out mid-outage; the governor stops it cleanly.
@@ -341,7 +341,7 @@ public class PriceSourcesOptionsTests
 
         var options = Bind(values);
         var registered = registeredCodes.Select(code => new RegisteredPriceSource(code));
-        var result = new PriceSourcesOptionsValidator(registered, Options.Create(polling)) .Validate(Options.DefaultName, options);
+        var result = new PriceSourcesOptionsValidator(registered, Options.Create(polling)).Validate(Options.DefaultName, options);
 
         Assert.False(result.Failed, result.FailureMessage);
         return options;

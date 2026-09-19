@@ -1,3 +1,4 @@
+using Aurum.Api.Modules.Constants;
 using Aurum.Api.Modules.Pricing.Entities;
 using Aurum.Api.Modules.Pricing.Sources;
 using Aurum.Api.Shared;
@@ -121,15 +122,13 @@ public class PricePollingService(
             .OrderBy(s => s.Priority)
             .First();
 
-        // The source is guaranteed to be enabled and not exhausted by the validator, but it may throw if it is exhausted by another process in a scaled-out deployment.
         var db = scope.ServiceProvider.GetRequiredService<AurumDbContext>();
 
-        // Poll the source and persist the tick. The source may throw if it is exhausted, which is handled by the caller.
-        var quote = await source.GetLatestQuoteAsync(PriceSymbols.Gold, ct);
-        // Persist the tick and update the source registration with the last success time.
+        // QuotaExhaustedException surfaces from here and is caught by the caller. The lease is
+        // spent either way — there are no refunds (D-7).
+        var quote = await source.GetLatestQuoteAsync(SupportedSymbol.Gold, ct);
         db.PriceTicks.Add(quote.ToTick());
 
-        // Update the last success time for the source registration. This is used to determine if a source is stale.
         var registration = await db.PriceSources.FindAsync([source.Code], ct);
         if (registration is not null)
         {
