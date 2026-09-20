@@ -339,8 +339,12 @@ Existing patterns to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure
 - [ ] Real ticks landing from the live API on a schedule (0)
 - [ ] Three sources configured, each with its own quota row (2)
 - [ ] Kill the primary — `/v1/price/live` keeps serving with `isFallback: true` and no
-      client-visible gap (3, 4, 8). Verify with
-      `PriceSources__GoldApiIo__Enabled=false`, not by unplugging the network.
+      client-visible gap (3, 4, 8). Verify with `PriceSources__ApiNinjas__Enabled=false`,
+      not by unplugging the network. api-ninjas is `Priority: 1`; disabling a backup leaves
+      selection untouched and passes the criterion without exercising the chain. Disabling
+      the primary re-elects goldapi.io and its 100-request tier, so raise
+      `PricePolling__PollInterval` past the budget guard's minimum in the same command or
+      the host refuses to boot before the failover path is reached.
 - [ ] The replay fixture produces the exact expected `PriceEvent` set (5, 6, 10)
 - [ ] A client subscribing mid-interval immediately receives the cached quote and deltas (7)
 - [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` returns 400 naming retention (8)
