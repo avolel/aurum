@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <!-- Explicit, and deliberately not transitive. Npgsql 10.0.3 asks for EF Core 10.0.4, while
+         the Design package above pins 10.0.10 with PrivateAssets=all — so without this line this
+         project compiles against 10.0.10 and every project downstream of it resolves 10.0.4,
+         which is CS1705 at the first reference. Invisible while this was all one assembly. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.10" />
+    <!-- Relational needs the same treatment for the same reason: Npgsql pins it at 10.0.4 and the
+         Design package at 10.0.10, and the unified pick differs per consuming project (MSB3277). -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.10" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Tests reach internal seams here (repository internals, the migration namespace) without
+         widening the public surface. Mirrors the attribute the API project has carried since the
+         quota governor's ResolvePeriod needed it. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Aurum.Api.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

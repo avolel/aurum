@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- MediatR is pinned below 13 on purpose. It moved to Lucky Penny Software at that major and
+         now requires a paid licence key validated at runtime, so an unpinned upgrade does not fail
+         the build — it fails the first Send() in production. Raising it is a procurement decision,
+         not a dependency bump.
+
+         AutoMapper is deliberately ABSENT, although docs/best-practices-api.md and cqrs-guide.md
+         both assume it. Every published version, 15.0.1 included, carries the unpatched
+         high-severity advisory GHSA-rvv3-g6hj-g44x — there is no version to upgrade to. Handlers
+         map entity to DTO by hand until that advisory has a fix; CLAUDE.md's handler rule already
+         says "via AutoMapper or manual", so nothing downstream depends on which. Re-add it here,
+         with AddAutoMapper in Program.cs beside AddMediatR, once a fixed version ships. -->
+    <PackageReference Include="MediatR" Version="12.5.0" />
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
+    <!-- AppLogDrainService is a BackgroundService. Hosting.Abstractions only — this layer defines
+         the drain, it does not build a host. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
+    <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
+  </ItemGroup>
+
+</Project>

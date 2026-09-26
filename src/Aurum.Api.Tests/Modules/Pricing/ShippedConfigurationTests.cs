@@ -1,5 +1,5 @@
-using Aurum.Api.Modules.Pricing;
-using Aurum.Api.Modules.Pricing.Sources;
+using Aurum.App.Infrastructure.Pricing;
+using Aurum.App.Infrastructure.Pricing.Sources;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 

@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- QueryKeyAuthHandler needs QueryHelpers and PricePollingService needs BackgroundService.
+         A FrameworkReference rather than the standalone Microsoft.AspNetCore.WebUtilities package,
+         which is still on the 2.x cadence and would pull a second, older copy of primitives the
+         shared framework already carries. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The Web SDK supplied these implicitly while this code lived in Aurum.Api. Restated here
+         rather than added as usings in ~15 files, so the move stays a move: any diff in those
+         files is a real change, not SDK bookkeeping. -->
+    <Using Include="Microsoft.Extensions.Configuration" />
+    <Using Include="Microsoft.Extensions.DependencyInjection" />
+    <Using Include="Microsoft.Extensions.Hosting" />
+    <Using Include="Microsoft.Extensions.Logging" />
+    <Using Include="System.Net.Http.Json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
+    <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The quota governor's ResolvePeriod, SourceCircuit and SourceCircuitStore are all internal
+         and all carry invariants that only a test can hold. This is the attribute that moved with
+         them out of Aurum.Api. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Aurum.Api.Tests</_Parameter1>
+    </AssemblyAttribute>
+
+    <!-- The composition root, and the second cost of moving every registration into Program.cs.
+         SourceCircuitStore, QueryKeyAuthHandler, RegisteredPriceSource and both options validators
+         are internal because nothing outside this module should resolve them; Program.cs now has
+         to *name* them to register them. Making them public instead would put five types on the
+         module's public surface to satisfy a wiring concern, which is the larger leak. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Aurum.Api</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

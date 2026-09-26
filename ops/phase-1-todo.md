@@ -16,12 +16,15 @@ Decisions get recorded in `ops/decisions/decisions.md` **as each item lands**, n
 end. A decision written afterwards is a decision reconstructed, and the rejected alternatives — the
 part worth keeping — are exactly what gets lost.
 
-> **Decision numbering.** `D-9` … `D-12` are taken and recorded: per-source configuration lookup
+> **Decision numbering.** `D-9` … `D-14` are taken and recorded: per-source configuration lookup
 > and nested options validation (item 1), poll cadence placement (item 2), three free sources
-> (item 2), and `IEnumerable<IPriceSource>` over keyed DI (item 2). The Phase 1 plan's provisional
-> list has now shifted by **three**; the numbers used below are the real ones. Item 2 briefly
-> carried two bullets both labelled `D-10` — the cadence decision took that number, and the other
-> two became `D-11` and `D-12`, pushing items 3–8 down by two.
+> (item 2), `IEnumerable<IPriceSource>` over keyed DI (item 2), the per-attempt timeout's placement
+> in the resilience pipeline (item 3), and the hand-rolled circuit breaker (item 3). The Phase 1
+> plan's provisional list has now shifted by **four**; the numbers used below are the real ones.
+> Item 2 briefly carried two bullets both labelled `D-10` — the cadence decision took that number,
+> and the other two became `D-11` and `D-12`, pushing items 3–8 down by two. The timeout decision
+> then took `D-13`, which item 3's breaker bullet had been holding, pushing items 5–8 down by one
+> more: the delta engine's null-window invariant is `D-15`, not `D-13` as `D-11`'s prose said.
 
 ---
 
@@ -127,12 +130,12 @@ to fail over to. Each keeps its own quota accounting row.
 the same `IEnumerable<IPriceSource>` it consumes, and the result has to carry `AttemptedSources` /
 `UsedFallback`, which the single-provider contract should not grow.
 
-- [ ] Add `Microsoft.Extensions.Http.Resilience`. Register the Polly pipeline **before**
+- [x] Add `Microsoft.Extensions.Http.Resilience`. Register the Polly pipeline **before**
       `.AddHttpMessageHandler(quota)`, giving `resilience → QuotaHandler → primary`. This is what
       makes "the handler sees exactly what leaves the process" mechanical rather than conventional.
-- [ ] Retry `ShouldHandle` **excludes** `QuotaExhaustedException` — the source is healthy and broke,
+- [x] Retry `ShouldHandle` **excludes** `QuotaExhaustedException` — the source is healthy and broke,
       so retrying it spends budget that was already denied.
-- [ ] Exception semantics, each one distinct:
+- [x] Exception semantics, each one distinct:
       - `QuotaExhaustedException` → never retried, **not** a circuit fault. Move on immediately.
       - `HttpRequestException` / timeout / failing status → retried by the pipeline, which is the
         only layer that observes them, and on final failure counts as a circuit fault.
@@ -143,23 +146,48 @@ the same `IEnumerable<IPriceSource>` it consumes, and the result has to carry `A
         by `FailoverPriceFeed`, which sits above the sources and does see it. Writing it into the
         predicate buys nothing and reads as coverage the pipeline does not have.
       - Every source down → `AllSourcesFailedException` carrying per-source outcomes.
-- [ ] The poller sleeps **only when every source is quota-exhausted**, and then until the earliest
+- [x] The poller sleeps **only when every source is quota-exhausted**, and then until the earliest
       `ResetsAt`. Today's single-source `Task.Delay` would idle the whole poller for a month.
-- [ ] Circuit breaker hand-rolled in `FailoverPriceFeed`, not Polly's.
-- [ ] Circuit state is in-memory and authoritative; `PriceSource.LastFailureAt/Reason` is its
+- [x] Circuit breaker hand-rolled in `FailoverPriceFeed`, not Polly's.
+- [x] Circuit state is in-memory and authoritative; `PriceSource.LastFailureAt/Reason` is its
       projection, written once per poll. **Do not rehydrate it at startup** — a fresh process should
       re-probe every source. Say so in the class remarks, or it reads as an oversight against the
       quota governor's durability rule sitting right next to it.
-- [ ] `Each_retry_attempt_spends_its_own_lease` — stub returns 500 three times under a 3-attempt
+- [x] `Each_retry_attempt_spends_its_own_lease` — stub returns 500 three times under a 3-attempt
       retry; assert `RequestsUsed == 3`. This is the executable form of "QuotaHandler sits below
       retries", currently enforced only by the order of two lines in `PricingModule.cs`.
-- [ ] `Quota_exhaustion_is_not_retried` — stub asserts exactly one call.
-- [ ] `Open_circuit_source_is_not_called` — assert `CallCount == 0`, not merely the outcome.
-- [ ] **D-13 recorded** — why the breaker is hand-rolled: `GoldApiIoSource` throws
+- [x] `Quota_exhaustion_is_not_retried` — split into `A_provider_rejection_is_not_retried` (429:
+      exactly one call, `ProviderRejectedAt` set) and `A_denied_lease_never_reaches_the_network`
+      (window seeded at its limit: zero calls, counter unchanged — a denial must not burn budget
+      proving it is a denial).
+- [x] `Open_circuit_source_is_not_called` — asserts `CallCount == 0`, not merely the outcome.
+- [x] **D-14 recorded** — why the breaker is hand-rolled: `GoldApiIoSource` throws
       `PriceSourceException` *after* a 200 when the body is garbage, so a pipeline breaker would
       never trip on a degrading provider while the chain spent a lease per poll; and a Polly
       breaker's break duration runs on wall clock, which breaks the injected-`TimeProvider`
       invariant and makes the state untestable on `FakeTimeProvider`.
+
+**Landed 2026-09-26.** `FailoverPriceFeed`, `SourceCircuit`, `SourceCircuitStore`, the
+`PricePollingService` rewrite and 25 new tests. Two things found on the way that were not in the
+plan:
+
+- **The retry predicate never fired on a failing status code.** It was
+  `PredicateBuilder.Handle<TimeoutRejectedException>().Handle<HttpRequestException>()`, both of
+  which are *exception* clauses — but `HttpClient.GetAsync` returns a 500, it does not throw one.
+  A provider answering 503 all day was never retried at all, and the strategy read as configured
+  while doing nothing on the most common failure it exists for. Fixed with a `.HandleResult(...)`
+  clause for `RequestTimeout` and `>= InternalServerError`. Caught by
+  `Each_retry_attempt_spends_its_own_lease` on its first run, which is the whole argument for that
+  test.
+- **`AddResilienceHandler` resolves `TimeProvider` from the container** and hands it to Polly's
+  strategies. Registering a `FakeTimeProvider` makes the retry backoff wait on a clock nothing
+  advances, so the test hangs rather than failing. Noted in `ResilienceWiringTests`' remarks.
+
+Not done, and deliberately: the plan's `PriceFeed:Resilience:MaxAttempts` knob and the cadence
+guard's multiplier. `MaxRetryAttempts` is still the hardcoded 2 that D-13 shipped, so the budget
+guard under-counts worst-case spend by 3x. **Allocated to item 4** — it is a configuration and
+validator change with its own tests, and folding it in here would have put an unreviewed spend
+multiplier in the same commit as the chain.
 
 ---
 
@@ -212,7 +240,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
       the level of gold by a few dollars, so a failover between polls produces an apparent move of
       exactly that offset, which at 0.25%-in-5m fabricates an event Phase 2 will then explain
       confidently. `Sample` carries its source ordinal; a window whose baseline and latest differ in
-      source is flagged `CrossSource`. **Record in D-14 that this is a mitigation, not a fix** — the
+      source is flagged `CrossSource`. **Record in D-15 that this is a mitigation, not a fix** — the
       fix is per-source calibration offsets, which needs data we do not have.
 - [ ] **Volatility on three samples is meaningless.** Require `MinSamplesForVolatility` (default 5)
       or report `Volatility = null`, so the classifier's volatility rule is *inapplicable* rather
@@ -227,7 +255,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] `DeltaEngine` is a singleton taking `IServiceScopeFactory` for the warmup query — same
       reasoning as `QuotaHandler`, a long-lived object must not capture a scoped `DbContext`.
 - [ ] `Window_with_no_bracketing_sample_is_null_not_zero`, `Out_of_order_sample_is_dropped`.
-- [ ] **D-14 recorded** — the null-window invariant, and the cross-source mitigation's limits.
+- [ ] **D-15 recorded** — the null-window invariant, and the cross-source mitigation's limits.
 
 ---
 
@@ -258,7 +286,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [x] ~~Migration seeds the two new `price_sources` rows~~ — done early, under item 2. It could not
       wait for this item: the foreign key fires on the first failover, which item 3 delivers.
 - [ ] `Restart_does_not_re_emit_the_same_event`, `Cross_source_delta_requires_higher_magnitude`.
-- [ ] **D-15 recorded** — why `price_events` is not a hypertable.
+- [ ] **D-16 recorded** — why `price_events` is not a hypertable.
 
 ---
 
@@ -295,7 +323,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] **`GET /v1/price/sources`** — per-source priority, enabled, last success/failure, circuit
       state, quota used/limit/resets. This is how the failover exit criterion gets demonstrated, and
       how an operator answers "why is the price eight hours old" without a psql session.
-- [ ] **D-16 recorded** — the second module seam, and why endpoints do not fit the `Add*Module` one.
+- [ ] **D-17 recorded** — the second module seam, and why endpoints do not fit the `Add*Module` one.
 
 ---
 
@@ -349,7 +377,7 @@ Existing patterns to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure
 - [ ] A client subscribing mid-interval immediately receives the cached quote and deltas (7)
 - [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` returns 400 naming retention (8)
 - [ ] `docker compose down -v && docker compose up --build` from clean still works (9)
-- [ ] D-13 … D-16 recorded with their rejected alternatives (each item). D-9 … D-12 are done.
+- [ ] D-15 … D-17 recorded with their rejected alternatives (each item). D-9 … D-14 are done.
 
 **Explicitly not in this tranche:** the Expo/RNW dashboard and its FCP < 1.5s criterion, auth, rate
 limiting, tier gating, macro and news ingestion, and the paid GoldAPI upgrade — still a go-live gate,

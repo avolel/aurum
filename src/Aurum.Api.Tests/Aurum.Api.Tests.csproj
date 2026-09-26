@@ -27,6 +27,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Aurum.Api\Aurum.Api.csproj" />
+    <ProjectReference Include="..\Aurum.App.Application\Aurum.App.Application.csproj" />
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Pricing\Aurum.App.Infrastructure.Pricing.csproj" />
+    <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Moq" Version="4.20.72" />
   </ItemGroup>
 
   <ItemGroup>

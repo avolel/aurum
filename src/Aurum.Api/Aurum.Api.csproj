@@ -9,19 +9,35 @@
   <ItemGroup>
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
+    <!-- dotnet ef builds the STARTUP project to get its DbContext, so the tools package has to be
+         here as well as in Infrastructure.Data. Without it the tooling stops with "your startup
+         project doesn't reference Microsoft.EntityFrameworkCore.Design". -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
-    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
     <PackageReference Include="Microsoft.OpenApi" Version="2.11.0" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Tests exercise internal seams (e.g. quota period resolution) without widening the
-         public surface of the module. -->
+    <!-- All four, because Program.cs is the composition root and every registration lives there.
+         The layer table in docs/best-practices-api.md gives this project "Depends On: Application,
+         SharedKernel", which is the rule for *code* in Controllers/ — a controller that reaches
+         past IMediator into Infrastructure is the violation that rule is about. The extra two
+         references exist only so Program.cs can name the concrete types it registers, and D-5
+         records that trade. -->
+    <ProjectReference Include="..\Aurum.App.Application\Aurum.App.Application.csproj" />
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Pricing\Aurum.App.Infrastructure.Pricing.csproj" />
+    <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Program.AddPriceSource is internal and the wiring tests call it directly. They must drive
+         the PRODUCTION registration: the subject is the order of the resilience handler and the
+         QuotaHandler inside that method, and a test that hand-composes the chain re-declares that
+         order and then asserts the test agrees with itself. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>Aurum.Api.Tests</_Parameter1>
     </AssemblyAttribute>

@@ -2,7 +2,7 @@
 
 Gold price intelligence platform.
 
-**Current state: the foundation is complete, and Phase 1 items 0–2 are done.**
+**Current state: the foundation is complete, and Phase 1 items 0–3 are done.**
 
 Built and verified: the schema and first migration against `timescale/timescaledb-ha:pg17`, with
 `price_ticks` a hypertable on daily chunks under a 30-day retention policy and pgvector present
@@ -31,12 +31,14 @@ forever. The cost of the order is that the normal path carries **mid only** — 
 now appear only while it is serving as a fallback, and `Bid`/`Ask` are not comparable across
 sources anyway (D-1 note), so they are per-source readings rather than a feed-wide spread.
 
-Each keeps its own `api_quota_windows` ledger. They register through one private
-`AddPriceSource<T>` helper in `PricingModule`, which attaches the `QuotaHandler` as part of
-registering the client — a source registered without it compiles, works, and spends its budget
-uncounted, which is the one wiring mistake in this module that produces no symptom at all. Sources
-resolve as `IEnumerable<IPriceSource>` ordered by `Priority` rather than through keyed DI, so the
-chain never carries its own list of key strings (D-12).
+Each keeps its own `api_quota_windows` ledger. They register through one `Program.AddPriceSource<T>`
+helper — every registration in the application is in `Program.cs` (D-5) — which attaches the
+resilience pipeline and the `QuotaHandler` as part of registering the client. A source registered
+without the handler compiles, works, and spends its budget uncounted, which is the one wiring
+mistake in this module that produces no symptom at all; `ResilienceWiringTests` drives that helper
+directly for exactly that reason. Sources resolve as `IEnumerable<IPriceSource>` rather than through
+keyed DI, so the chain never carries its own list of key strings (D-12), and `FailoverPriceFeed`
+orders them from configuration.
 
 **The aggregate is not a budget.** Only the *primary* — the enabled entry with the lowest
 `Priority` — has to fund the cadence for a whole period; backups are exempt and may exhaust
@@ -61,10 +63,39 @@ variables and a restart.
 > reads as having budget. Confirming both against their account pages is worth doing before the
 > failover chain starts leaning on them.
 
-Not built yet: the failover chain and circuit breaker, the delta engine, the SignalR hub and the
-REST endpoints — items 3 onward in `ops/phase-1-todo.md`. Until the chain lands,
-`PricePollingService` selects the lowest `Priority` unconditionally: it does **not** filter on
-`Enabled` or on remaining quota, so a disabled source is still registered and can be selected.
+### The failover chain (item 3, landed)
+
+`PricePollingService` no longer picks a source. It asks `IPriceFeed` for a quote, and
+`FailoverPriceFeed` walks the chain: enabled sources in `Priority` order, ties broken on the source
+code, skipping any whose circuit is open, moving on immediately when one is out of quota, and
+returning the first quote anyone produces.
+
+- **`Enabled: false` now actually removes a source from the chain.** It previously changed nothing —
+  the poller selected straight off `IEnumerable<IPriceSource>`, which has no `Enabled` to filter on.
+- **One source running out of quota no longer idles the feed.** The poller sleeps only when *every*
+  source is spent, and then only until the *earliest* `ResetsAt`. A single fault or a single open
+  circuit keeps it on cadence, because both clear in minutes while a quota period can be a month.
+- **The circuit breaker is hand-rolled, not Polly's** (D-14). Every source parses its response body
+  *above* the handler chain, so a provider returning `200 OK` full of junk raises
+  `PriceSourceException` after the pipeline has already judged the request successful — a pipeline
+  breaker would sit at 0% failure while the chain spent a lease per poll on a dead provider. The
+  breaker lives in `FailoverPriceFeed`, where that exception is visible, and measures its break by
+  comparing two `TimeProvider` reads, so the whole machine is drivable on `FakeTimeProvider`.
+- **Circuit state is in-memory and never rehydrated**, which is the opposite of the governor's rule
+  one folder away and deliberately so. `price_sources.LastFailureAt` / `LastFailureReason` is its
+  operator-facing projection, written once per poll.
+
+Two behaviour changes worth knowing about: success no longer clears `LastFailureReason` (it used to,
+while leaving `LastFailureAt` set, producing rows asserting a failure with no reason — compare the
+two timestamps to tell current from historical), and a source skipped for an open circuit writes
+nothing, so the fault that opened the circuit is not overwritten.
+
+Not built yet: the latest-quote cache, the delta engine, the SignalR hub and the REST endpoints —
+items 4 onward in `ops/phase-1-todo.md`.
+
+**`PriceSource.IsEnabled`, the entity column, still has no reader and no writer.** Configuration is
+authoritative for whether a source is in the chain; the column is seeded and descriptive. Item 8
+serves `price_sources` over HTTP and is where it gets wired as a projection or deleted.
 
 The three spikes were closed without being run: D-1 and D-2 are declared rather than measured, and
 D-6 is deferred to Phase 2 planning. D-2 settles web on `lightweight-charts` and leaves the native
@@ -73,8 +104,8 @@ play — simulator frame times will lie. Each entry says so in its own words; re
 before treating any of them as a measured result.
 
 `ops/decisions/decisions.md` records what is decided and why, including the rejected alternatives —
-**D-1 through D-12** so far. `ops/phase-1-todo.md` is the remaining work, ordered so each item is
-verifiable when it is finished; D-13 onward are allocated there against the items that will take
+**D-1 through D-14** so far. `ops/phase-1-todo.md` is the remaining work, ordered so each item is
+verifiable when it is finished; D-15 onward are allocated there against the items that will take
 them.
 
 ## Layout
@@ -83,17 +114,30 @@ them.
 docker-compose.yml           postgres (timescale+pgvector), ollama, api
 ops/db/init/                 extension bootstrap, runs once on an empty volume
 ops/decisions/               decision log (D-1 onward, IDs cited from code)
-src/Aurum.Api/
-  Modules/Pricing/           price sources, quota governance, polling
-  Modules/Constants/         symbols shared across modules (SupportedSymbol)
-  Modules/Macro/             macro series schema (ingestion lands in Phase 2a)
-  Shared/                    DbContext, audit fields
-  Migrations/
-src/Aurum.Api.Tests/         integration tests against a real Postgres
+docs/                        architecture and convention guides
+src/Aurum.App.SharedKernel/        ApiResponse<T>, PageResult<T>, audit fields, SupportedSymbol
+src/Aurum.App.Infrastructure.Data/ AurumDbContext, entities, migrations, IUnitOfWork
+src/Aurum.App.Infrastructure.Pricing/
+  Sources/                   the three providers, the failover chain, the circuit breaker
+  Quota/                     the governor and its HTTP handler
+  Jobs/                      PricePollingService
+src/Aurum.App.Application/         CQRS contracts, pipeline behaviors, application logging
+src/Aurum.Api/                     Program.cs — every registration — and controllers
+src/Aurum.Api.Tests/               unit tests and integration tests against a real Postgres
+app/                         Expo scaffold; charting settled on lightweight-charts (D-2)
 ```
 
-Modules are folders inside one project, not separate assemblies (D-5). Each exposes a single
-`Add<Module>Module` registration method, and `Program.cs` knows nothing else about module internals.
+Five projects following the layer table in `docs/best-practices-api.md`, with two departures from it
+that D-5 records: a separate `Infrastructure.Pricing` for the external clients and the background
+job, and `Aurum.Api` referencing everything because it is the composition root.
+
+**Every service registration is in `src/Aurum.Api/Program.cs`.** There is no `Add<Module>Module`
+extension method and no per-layer `ServiceCollectionExtensions`. D-5 was originally the
+folder-module seam and now records the reversal and what it costs.
+
+`docs/best-practices.md` and `docs/best-practices-redux.md` describe a React Native admin
+application that does not exist in this repository — `app/` is an Expo scaffold. Treat them as the
+Phase 4 target, not as a description of anything importable today.
 
 ## Running
 
@@ -121,7 +165,9 @@ Requires Docker access. If `docker ps` says permission denied, add yourself to t
 dotnet test
 ```
 
-38 tests. `ShippedConfigurationTests` binds the API's real `appsettings.json` and runs the validator
+76 tests. `SourceCircuitTests` and `FailoverPriceFeedTests` need **no container** and run in
+milliseconds — the payoff of a breaker that measures time by comparing two `TimeProvider` reads
+instead of holding a timer. `ShippedConfigurationTests` binds the API's real `appsettings.json` and runs the validator
 over it, because every other test here builds configuration in memory — which is how a five-minute
 cadence shipped against a 100-request primary and failed only at `docker compose up`. Integration
 tests spin up `timescale/timescaledb-ha:pg17` via Testcontainers rather than
@@ -131,6 +177,14 @@ would validate nothing. One container per collection, migrated once; tests clean
 `QuotaGovernorTests` and `QuotaHandlerTests` are the quota subsystem's specification — including
 `Concurrent_acquires_never_oversubscribe`, which races 40 callers on separate `DbContext`s against a
 budget of 10.
+
+`ResilienceWiringTests` calls the production registration, `Program.AddPriceSource<T>`, and swaps
+only the primary handler for a counting stub. The subject is the order of two lines inside that
+method — the resilience pipeline above `QuotaHandler` — so hand-composing the chain in the test
+would re-declare that order and assert the test agrees with itself. On its first run it found that
+the retry predicate held only exception clauses and so never retried a failing status code at all: a
+provider answering 503 all day was never retried, and the strategy read as configured while doing
+nothing.
 
 Some of those tests exist to hold a decision in place rather than to catch a bug. "No refunds on a
 failed request" is enforced by nothing in the code except a `catch` block that isn't there, so

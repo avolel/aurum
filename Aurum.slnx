@@ -2,5 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/Aurum.Api.Tests/Aurum.Api.Tests.csproj" />
     <Project Path="src/Aurum.Api/Aurum.Api.csproj" />
+    <Project Path="src/Aurum.App.Application/Aurum.App.Application.csproj" />
+    <Project Path="src/Aurum.App.Infrastructure.Data/Aurum.App.Infrastructure.Data.csproj" />
+    <Project Path="src/Aurum.App.Infrastructure.Pricing/Aurum.App.Infrastructure.Pricing.csproj" />
+    <Project Path="src/Aurum.App.SharedKernel/Aurum.App.SharedKernel.csproj" />
   </Folder>
 </Solution>

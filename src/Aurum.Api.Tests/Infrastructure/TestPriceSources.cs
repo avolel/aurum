@@ -1,4 +1,4 @@
-using Aurum.Api.Modules.Pricing;
+using Aurum.App.Infrastructure.Pricing;
 using Microsoft.Extensions.Options;
 
 namespace Aurum.Api.Tests.Infrastructure;
@@ -30,6 +30,34 @@ internal static class TestPriceSources
             QuotaPeriod = quotaPeriod,
             PeriodAnchor = periodAnchor,
         };
+
+        return Options.Create(options);
+    }
+
+    /// <summary>
+    /// Builds a multi-source map for the chain tests: priorities, enabled flags and codes, with the
+    /// quota fields left at their defaults because the chain never consults them.
+    /// </summary>
+    public static IOptions<PriceSourcesOptions> ForChain(
+        params (string SourceCode, int Priority, bool Enabled)[] entries)
+    {
+        var options = new PriceSourcesOptions();
+
+        foreach (var (sourceCode, priority, enabled) in entries)
+        {
+            // Keyed by the source code rather than a friendly key. Production keys these by
+            // GoldApiIo-style config keys, but nothing in the chain reads the map key — the
+            // ordering and the lookups both go through SourceCode, which is the property under
+            // test here.
+            options.Sources[sourceCode] = new PriceSourceOptions
+            {
+                SourceCode = sourceCode,
+                ApiKey = "test-key",
+                BaseUrl = new Uri("https://example.invalid/"),
+                Priority = priority,
+                Enabled = enabled,
+            };
+        }
 
         return Options.Create(options);
     }

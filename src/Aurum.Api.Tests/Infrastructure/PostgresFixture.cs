@@ -1,4 +1,4 @@
-using Aurum.Api.Shared;
+using Aurum.App.Infrastructure.Data;
 using DotNet.Testcontainers.Builders;
 using Microsoft.EntityFrameworkCore;
 using Testcontainers.PostgreSql;

@@ -1,5 +1,5 @@
-using Aurum.Api.Modules.Constants;
-using Aurum.Api.Modules.Pricing.Sources;
+using Aurum.App.SharedKernel.Constants;
+using Aurum.App.Infrastructure.Pricing.Sources;
 
 namespace Aurum.Api.Tests.Modules.Pricing;
 

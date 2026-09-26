@@ -136,9 +136,65 @@ Two consequences worth knowing:
 
 ## D-5 — Module boundaries
 
-**DONE.** Folder-per-module inside `Aurum.Api`, per the plan's repo layout. `Modules/Pricing` and
-`Modules/Macro` exist; each module exposes a single `Add<Module>Module` extension method as its
-registration seam.
+**SUPERSEDED (2026-09-26). Originally: folder-per-module inside `Aurum.Api`, each module exposing a
+single `Add<Module>Module` extension method as its registration seam. Now: five projects following
+the layer table in `docs/best-practices-api.md`, and every service registration in
+`src/Aurum.Api/Program.cs`.**
+
+The original reasoning still holds on its own terms and is recorded here rather than deleted,
+because the reversal was a direction decision and not a discovery that the first call was wrong.
+Folder-modules kept one build, one deployment artefact and one set of package versions, and the
+`Add<Module>Module` seam meant `Program.cs` knew nothing about module internals.
+
+What changed is the target architecture. `docs/` now specifies a layered solution — SharedKernel,
+Infrastructure.Data, Application, presentation — with CQRS over MediatR, and that shape needs
+assembly boundaries to mean anything: the rule "Application never does HTTP" is a comment in a
+folder layout and a compile error across projects. The DI rule changed with it, to every
+registration in `Program.cs`.
+
+The layout, and the two places it departs from the table:
+
+```
+src/Aurum.App.SharedKernel/            no dependencies, by construction
+src/Aurum.App.Infrastructure.Data/     AurumDbContext, entities, migrations, IUnitOfWork
+src/Aurum.App.Infrastructure.Pricing/  sources, quota, circuits, the poller
+src/Aurum.App.Application/             CQRS contracts, pipeline behaviors, AppLogs
+src/Aurum.Api/                         Program.cs, controllers
+```
+
+`Aurum.App.Infrastructure.Pricing` is a fifth project the table does not list. The price sources are
+external HTTP clients and the poller is a background job, which is neither "EF Core queries,
+repositories, DbContext" nor an Application concern; folding them into `Infrastructure.Data` would
+make that project's own "never does HTTP calls" rule false on day one. And `Aurum.Api` references
+all four rather than the two the table allows it, because a composition root has to name what it
+registers — the table's rule is retained for code in `Controllers/`, where reaching past `IMediator`
+is the violation it is actually about.
+
+**What the DI reversal costs, recorded so nobody rediscovers it as a bug:**
+
+- `Aurum.App.Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")`. Five types stay
+  `internal` — `SourceCircuitStore`, `QueryKeyAuthHandler`, `RegisteredPriceSource` and both options
+  validators — and the composition root needs to name all of them. The alternative was making them
+  public to satisfy a wiring concern, which puts more on the module's surface than the attribute
+  does.
+- `Program.AddPriceSource<T>` had to become a member of the `Program` class rather than a local
+  function in the top-level statements. A local function is unreachable from the test assembly, and
+  the order of two lines inside that method — resilience handler above `QuotaHandler` — is what
+  `ResilienceWiringTests` pins. Without that, the registration would be the one piece of wiring in
+  the module with no test, and the failure it guards is an under-count of quota (D-7).
+- `Program.cs` grows with every feature and every merge into it is a conflict. This is the real
+  ongoing cost and there is no mitigation in this decision; it is accepted.
+
+Rejected — **keeping the `Add<Module>Module` seam alongside the new projects.** It is what the
+module boundaries want, and the layered docs do not actually forbid it. It was rejected because the
+instruction was unambiguous and a half-applied DI rule is worse than either rule applied whole: a
+reader finding some registrations in `Program.cs` and others behind an extension method has to read
+both before adding a third.
+
+Rejected — **a per-layer `ServiceCollectionExtensions`**, which is what `cqrs-guide.md` itself
+implies for repositories. Same reason. If the `Program.cs` conflict rate becomes the dominant cost,
+this is the first thing to reconsider, and reopening it means amending this entry rather than
+quietly adding a file.
 
 ## D-6 — Ollama host sizing
 
@@ -561,7 +617,7 @@ build gate.**
 
 The chain exists for reliability, but the reason it is three *free* providers is arithmetic.
 GoldAPI's 100 requests a month funds one poll every 7h26m. Phase 1's delta engine computes 1m and
-5m windows; at that cadence every short window holds one sample and D-13's null-window invariant
+5m windows; at that cadence every short window holds one sample and D-15's null-window invariant
 returns `null` for all of them, forever. The engine would be untestable against anything but a
 replayed fixture, and the significance classifier would never fire in development. API Ninjas'
 10,000 and MetalpriceAPI's 1,000 are what make a minute-scale cadence reachable at $0, which is
@@ -580,7 +636,7 @@ What it does not buy, and the reason this is worth recording rather than assumin
   GoldAPI is demoted. The other 11,000 buy outage coverage, not speed.
 - **Three providers means three level offsets.** Gold's quoted level differs by a few dollars
   between providers, so every failover injects an apparent move of exactly that offset into the
-  delta engine. D-13's cross-source flag mitigates this; it does not fix it.
+  delta engine. D-15's cross-source flag mitigates this; it does not fix it.
 
 Rejected — **buy the GoldAPI paid tier now.** One provider, one set of response semantics, one
 quota model, and a cadence that supports the delta engine immediately. It also removes the only
@@ -694,3 +750,81 @@ grounds that an infinite client timeout has no safety net if the total-timeout s
 removed. It reintroduces exactly the cancellation this decision exists to move: a backstop that
 fires throws the same unobservable `TaskCanceledException` above the pipeline. The backstop is
 `AddTimeout(TotalTimeout)`, and the validator is what keeps it meaningful.
+
+---
+
+## D-14 — The failover chain's circuit breaker is hand-rolled, not Polly's
+
+**DECIDED: `SourceCircuit` is a two-state machine — closed and open — held per source in
+`SourceCircuitStore` and driven by `FailoverPriceFeed`. It counts consecutive failures, opens at
+`FailureThreshold`, and closes when `clock.GetUtcNow() - _openedAt >= BreakDuration`, leaving the
+failure count at `FailureThreshold - 1`. Quota exhaustion calls none of its methods. State is
+in-memory, authoritative, and never rehydrated at startup.**
+
+`Microsoft.Extensions.Http.Resilience` ships a circuit breaker, it is one line, and the pipeline is
+already registered. It cannot see the failure that matters here. Every source parses the response
+body *above* the handler chain, so a provider returning `200 OK` with a malformed payload or a
+non-positive price raises `PriceSourceException` after `SendAsync` has already returned an outcome
+the pipeline judged successful and unwound — the exact failure mode of a degrading free-tier
+provider. A pipeline breaker would sit at 0% failure rate while the chain spent a lease per poll on
+a source that has not returned a usable price in a day. The breaker has to live above the sources,
+where that exception is observable, which is `FailoverPriceFeed`.
+
+The second half is the clock. Polly's break duration is measured against wall time and there is no
+seam to inject a `TimeProvider` into it, so an open circuit could only be tested by sleeping. That
+is the one invariant this codebase does not bend: the injected `TimeProvider` is the sole authority
+for every timestamp the app writes, and the governor's period arithmetic is already driven by it.
+`SourceCircuit` holds one nullable `DateTimeOffset` and compares it to a clock read, which makes the
+whole machine — open, expire, probe, re-open — drivable on `FakeTimeProvider` in microseconds.
+
+**Consecutive failures, not a failure rate over a rolling window.** The feed polls once every few
+minutes to several hours (D-10). A window short enough to be responsive holds one sample, which
+makes the ratio either 0% or 100%; a window long enough to hold several spans hours of a provider's
+life and reports a recovered provider as still failing. At this sample rate the only statistic with
+content is "the last N polls in a row failed."
+
+**Expire-to-closed leaves the count one short of the threshold.** This is what makes the two-state
+machine behave like a three-state one. Resetting the count to zero on expiry gives a permanently
+broken provider `FailureThreshold` consecutive live calls every cycle, and those calls take
+`FailureThreshold` cadence ticks of their own to happen — so at threshold 3, a 15m break and a 5m
+cadence, half of all polls hit a provider already known to be dead. Leaving the count at
+`FailureThreshold - 1` makes the next ordinary attempt the probe: one failure re-opens for a full
+break, and the steady state is one wasted call per `BreakDuration + 1` cadence tick, or a quarter of
+polls at the same numbers. Same outcome as an explicit half-open state, without the probe-gating
+field.
+
+That absent field is the point of the refinement rather than a side effect of it. A half-open gate
+admits one caller and waits for a verdict, so it needs a third verdict for "called, learned
+nothing" — and the first quota denial after a break is exactly that. Without it the probe is claimed
+by a call that never reports success or failure, and the circuit never closes again. Expire-to-closed
+has no probe to leak, so `QuotaExhaustedException` simply does not touch the state.
+
+**Quota exhaustion is not a fault.** The source is healthy and out of budget; opening on it would
+keep the source out of the chain after its period rolls and its budget is fresh. It is recorded as
+`SourceAttemptOutcome.QuotaExhausted` and clears on the governor's schedule, not the breaker's.
+
+**The state is not durable, which is the opposite rule from `IQuotaGovernor` one folder away.** The
+governor persists because a spent request is a fact about the provider's ledger that outlives our
+process. A circuit is a fact about our own recent observations: a fresh process has none, and a
+provider that went down an hour before a deploy is very likely back. Loading an open circuit at boot
+would blind a new process to a healthy source for a break it did not earn. This is stated in the
+class remarks as well, because against the durability rule sitting next to it the absence reads as
+an oversight. `price_sources.LastFailureAt` / `LastFailureReason` is a projection for operators,
+written once per poll and never read back into the object.
+
+Rejected — **`AddCircuitBreaker` in the resilience pipeline.** Covered above: it cannot observe
+`PriceSourceException`, and its break duration is not injectable. It would also break per
+`HttpClient`, which is per source by construction, so the one thing it gets right is the thing
+`SourceCircuitStore` gets right for free.
+
+Rejected — **persisting circuit state to `price_sources` and rehydrating it.** It makes the breaker
+survive a restart, which sounds like a feature until a deploy during a provider outage leaves a new
+process refusing a recovered source for a break duration it never observed. It also makes the
+breaker a second writer of a row the poller already projects into, with no way to tell a stale open
+state from a current one.
+
+Rejected — **an explicit half-open state with a probe gate.** More honest to read, and it is the
+textbook shape. It buys a field that has to be released on every path out of the probe, including
+the paths that produce no verdict — quota denial, cancellation, a poller shutdown mid-call. A leaked
+gate is a circuit that never closes again, and it is invisible until a source silently stops being
+tried.

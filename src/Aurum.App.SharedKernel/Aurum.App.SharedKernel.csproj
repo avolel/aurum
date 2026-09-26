@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- Deliberately has no PackageReference and no ProjectReference. The layer table in
+       docs/best-practices-api.md gives this project "Depends On: Nothing", and the cheapest way
+       to keep that true is to have nothing to remove. A dependency added here is visible in the
+       diff of this file alone. -->
+
+</Project>
