@@ -63,7 +63,8 @@ services:
       PriceSources__ApiNinjas__ApiKey: ${PriceSources__ApiNinjas__ApiKey:-}
       PriceSources__MetalpriceApi__ApiKey: ${PriceSources__MetalpriceApi__ApiKey:-}
       PriceSources__GoldApiIo__MonthlyRequestLimit: ${PriceSources__GoldApiIo__MonthlyRequestLimit:-100}
-      PricePolling__PollInterval: ${PricePolling__PollInterval:-00:05:00}
+      PricePolling__PollInterval: ${PricePolling__PollInterval:-00:15:00}
+      PriceFeed__Resilience__MaxAttempts: ${PriceFeed__Resilience__MaxAttempts:-3}
     ports:
       - "8080:8080"
     depends_on:

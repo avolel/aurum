@@ -24,8 +24,11 @@ public class PriceSourcesOptionsTests
     /// </summary>
     private static Dictionary<string, string?> WithPolling(Dictionary<string, string?> values)
     {
-        // 12h = 62 polls in 31 days, under every limit these tests configure.
-        values.TryAdd("PricePolling:PollInterval", "12:00:00");
+        // 24h = 31 polls in 31 days, and 93 requests at the default MaxAttempts of 3 — under the
+        // 100-request default limit these tests inherit. It was 12h while the budget guard counted
+        // polls; 62 polls became 186 requests the moment it started counting attempts, so the
+        // cadence that existed to keep tests off this rule was the first thing to trip it.
+        values.TryAdd("PricePolling:PollInterval", "1.00:00:00");
         return values;
     }
 
@@ -369,6 +372,102 @@ public class PriceSourcesOptionsTests
     }
 
     /// <summary>
+    /// A poll is not a request. Every attempt re-enters QuotaHandler and is charged its own lease,
+    /// so the cadence guard has to multiply by MaxAttempts.
+    /// </summary>
+    /// <remarks>
+    /// This is the defect item 4 exists to close: while the guard counted polls it approved a
+    /// cadence the primary's budget could not fund, under-counting worst-case spend threefold.
+    /// The circuit breaker does not bound it — SourceCircuit only observes poll outcomes, so a
+    /// provider that fails twice and succeeds on the third attempt sustains the full multiple
+    /// indefinitely while looking perfectly healthy.
+    /// </remarks>
+    [Fact]
+    public void Poll_budget_counts_every_attempt_not_every_poll()
+    {
+        var failure = ValidationFailure(new()
+        {
+            ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
+            ["PriceSources:GoldApiIo:BaseUrl"] = "https://example.invalid/",
+            ["PriceSources:GoldApiIo:ApiKey"] = "key",
+            ["PriceSources:GoldApiIo:MonthlyRequestLimit"] = "100",
+            // 62 polls in 31 days — inside the limit. 186 requests at 3 attempts each is not.
+            ["PricePolling:PollInterval"] = "12:00:00",
+            ["PriceFeed:Resilience:MaxAttempts"] = "3",
+        });
+
+        Assert.Contains("MaxAttempts", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("186", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same cadence and budget pass with retries switched off, which is what pins the failure
+    /// above to the multiplier rather than to the cadence.
+    /// </summary>
+    [Fact]
+    public void Poll_budget_accepts_the_same_cadence_when_a_poll_spends_one_request()
+    {
+        ValidatedOptions(new()
+        {
+            ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
+            ["PriceSources:GoldApiIo:BaseUrl"] = "https://example.invalid/",
+            ["PriceSources:GoldApiIo:ApiKey"] = "key",
+            ["PriceSources:GoldApiIo:MonthlyRequestLimit"] = "100",
+            ["PricePolling:PollInterval"] = "12:00:00",
+            ["PriceFeed:Resilience:MaxAttempts"] = "1",
+        });
+    }
+
+    /// <summary>
+    /// TotalTimeout has to fit every attempt plus every backoff delay, or the last attempt is
+    /// cancelled part-way and MaxAttempts reads as one number while behaving as another.
+    /// </summary>
+    /// <remarks>
+    /// Both values here are real mistakes rather than invented ones. 30s is
+    /// <c>MaxAttempts × RequestTimeout</c> with the backoff forgotten entirely; 35s is that same
+    /// arithmetic with a few seconds added by eye, and it was the shipped default until this check
+    /// existed to reject it. A truncated attempt still spends its lease, so the cost is silent.
+    /// </remarks>
+    [Theory]
+    [InlineData("00:00:30")]  // 3 × RequestTimeout exactly: no room for either backoff delay
+    [InlineData("00:00:35")]  // the old default: 2s + 4s of backoff unaccounted for, needs 36s
+    public void TotalTimeout_must_fit_every_attempt_and_its_backoff(string totalTimeout)
+    {
+        var failure = ValidationFailure(new()
+        {
+            ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
+            ["PriceSources:GoldApiIo:BaseUrl"] = "https://example.invalid/",
+            ["PriceSources:GoldApiIo:ApiKey"] = "key",
+            ["PriceSources:GoldApiIo:RequestTimeout"] = "00:00:10",
+            ["PriceSources:GoldApiIo:TotalTimeout"] = totalTimeout,
+            ["PriceFeed:Resilience:MaxAttempts"] = "3",
+            ["PriceFeed:Resilience:RetryBackoffBase"] = "00:00:02",
+        });
+
+        Assert.Contains("TotalTimeout", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("MaxAttempts", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("backoff", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same 35s is legal with retries switched off: the requirement scales with MaxAttempts
+    /// rather than being a new floor on TotalTimeout.
+    /// </summary>
+    [Fact]
+    public void TotalTimeout_needs_no_backoff_room_when_there_are_no_retries()
+    {
+        ValidatedOptions(new()
+        {
+            ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
+            ["PriceSources:GoldApiIo:BaseUrl"] = "https://example.invalid/",
+            ["PriceSources:GoldApiIo:ApiKey"] = "key",
+            ["PriceSources:GoldApiIo:RequestTimeout"] = "00:00:10",
+            ["PriceSources:GoldApiIo:TotalTimeout"] = "00:00:35",
+            ["PriceFeed:Resilience:MaxAttempts"] = "1",
+        });
+    }
+
+    /// <summary>
     /// Mirrors PricingModule's binding so these tests exercise the real config paths — the ones
     /// docker-compose.yml and .env actually set — rather than an object graph built by hand.
     /// </summary>
@@ -388,11 +487,26 @@ public class PriceSourcesOptionsTests
 
         var options = Bind(values);
         var registered = registeredCodes.Select(code => new RegisteredPriceSource(code));
-        var result = new PriceSourcesOptionsValidator(registered, Options.Create(polling)).Validate(Options.DefaultName, options);
+        var result = new PriceSourcesOptionsValidator(registered, Options.Create(polling), Resilience(config))
+            .Validate(Options.DefaultName, options);
 
         Assert.False(result.Failed, result.FailureMessage);
         return options;
     }
+
+    /// <summary>
+    /// The resilience knobs from configuration, falling back to the production defaults.
+    /// </summary>
+    /// <remarks>
+    /// The fallback is load-bearing: <c>Get&lt;T&gt;()</c> returns null for a section that is
+    /// absent, and most tests here never set one. Binding null would hand the validator a
+    /// <c>MaxAttempts</c> of zero — which its own guard treats as "another validator owns this
+    /// message" and skips the budget check for, so every test would pass the rule vacuously.
+    /// </remarks>
+    private static IOptions<PriceFeedResilienceOptions> Resilience(IConfiguration config) =>
+        Options.Create(
+            config.GetSection(PriceFeedResilienceOptions.SectionName).Get<PriceFeedResilienceOptions>()
+            ?? new PriceFeedResilienceOptions());
 
     /// <summary>
     /// Runs validation the way the host does — through ValidateOnStart — so a failure here proves
@@ -411,6 +525,11 @@ public class PriceSourcesOptionsTests
 
         services.AddOptions<PricePollingOptions>()
             .BindConfiguration(PricePollingOptions.SectionName);
+
+        // Mirrors Program.cs. BindConfiguration binds onto a fresh instance, so an absent section
+        // leaves the production defaults in place rather than nulling them the way Get<T>() would.
+        services.AddOptions<PriceFeedResilienceOptions>()
+            .BindConfiguration(PriceFeedResilienceOptions.SectionName);
 
         foreach (var code in registeredCodes)
         {

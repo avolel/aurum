@@ -24,7 +24,8 @@ namespace Aurum.App.Infrastructure.Pricing;
 /// </remarks>
 internal class PriceSourcesOptionsValidator(
     IEnumerable<RegisteredPriceSource> registered,
-    IOptions<PricePollingOptions> polling) : IValidateOptions<PriceSourcesOptions>
+    IOptions<PricePollingOptions> polling,
+    IOptions<PriceFeedResilienceOptions> resilience) : IValidateOptions<PriceSourcesOptions>
 {
     /// <summary>
     /// Worst case for a calendar month. Over-estimating the days would under-estimate the spend,
@@ -94,7 +95,13 @@ internal class PriceSourcesOptionsValidator(
                     $"{path}: QuotaPeriod {nameof(QuotaPeriodKind.RollingThirtyDays)} requires PeriodAnchor.");
             }
 
-            ValidateTimeouts(path, source, polling.Value.PollInterval, failures);
+            ValidateTimeouts(
+                path,
+                source,
+                polling.Value.PollInterval,
+                resilience.Value.MaxAttempts,
+                resilience.Value.RetryBackoffBase,
+                failures);
         }
 
         // Only the primary serves every healthy poll, so only its budget has to cover the whole
@@ -106,6 +113,7 @@ internal class PriceSourcesOptionsValidator(
                 $"{PriceSourcesOptions.SectionName}:{primary.Key}",
                 primary.Value,
                 polling.Value.PollInterval,
+                resilience.Value.MaxAttempts,
                 failures);
         }
 
@@ -149,7 +157,12 @@ internal class PriceSourcesOptionsValidator(
     /// on the same poller tick, so its ceiling has to fit the same cadence.</para>
     /// </remarks>
     private static void ValidateTimeouts(
-        string path, PriceSourceOptions source, TimeSpan pollInterval, List<string> failures)
+        string path,
+        PriceSourceOptions source,
+        TimeSpan pollInterval,
+        int maxAttempts,
+        TimeSpan backoffBase,
+        List<string> failures)
     {
         if (source.RequestTimeout <= TimeSpan.Zero)
         {
@@ -164,6 +177,19 @@ internal class PriceSourcesOptionsValidator(
               + $"{source.RequestTimeout}. TotalTimeout bounds the whole retry sequence, so an "
               + "equal or smaller value cancels every retry before it opens a socket and the retry "
               + "strategy silently does nothing.");
+            return;
+        }
+
+        var required = MinimumTotalTimeout(source.RequestTimeout, maxAttempts, backoffBase);
+        if (source.TotalTimeout < required)
+        {
+            failures.Add(
+                $"{path}: TotalTimeout {source.TotalTimeout} is shorter than the {required} needed "
+              + $"for {PriceFeedResilienceOptions.SectionName}:MaxAttempts {maxAttempts} "
+              + $"({maxAttempts} × RequestTimeout {source.RequestTimeout} plus exponential backoff "
+              + $"from {backoffBase}). The last attempt is cancelled part-way or never starts, so "
+              + "MaxAttempts reads as one number and behaves as another — and a truncated attempt "
+              + "still spends its lease.");
             return;
         }
 
@@ -188,7 +214,7 @@ internal class PriceSourcesOptionsValidator(
     /// knows which they meant.
     /// </remarks>
     private static void ValidatePollBudget(
-        string path, PriceSourceOptions source, TimeSpan pollInterval, List<string> failures)
+        string path, PriceSourceOptions source, TimeSpan pollInterval, int maxAttempts, List<string> failures)
     {
         // PricingModule's .Validate lambda rejects a non-positive interval before this runs,
         // and it names the key an operator actually edits (PricePolling:PollInterval).
@@ -197,22 +223,42 @@ internal class PriceSourcesOptionsValidator(
             return;
         }
 
-        var pollsPerPeriod = LongestPeriod.TotalSeconds / pollInterval.TotalSeconds;
-        if (pollsPerPeriod <= source.MonthlyRequestLimit)
+        // PriceFeedResilienceOptions' [Range] owns this message and names the key an operator edits.
+        // Guarded anyway because this validator is registered first and may run before that one: a
+        // zero would multiply the budget check to zero and pass every possible configuration.
+        if (maxAttempts < 1)
         {
             return;
         }
 
-        var minimum = TimeSpan.FromSeconds(LongestPeriod.TotalSeconds / source.MonthlyRequestLimit);
+        var pollsPerPeriod = LongestPeriod.TotalSeconds / pollInterval.TotalSeconds;
+
+        // A poll is not a request. Every attempt re-enters QuotaHandler and is charged its own lease
+        // (D-7), and a provider that fails twice then succeeds sustains the full multiple forever
+        // without opening the circuit — SourceCircuit only observes poll outcomes, never attempts.
+        var requestsPerPeriod = pollsPerPeriod * maxAttempts;
+        if (requestsPerPeriod <= source.MonthlyRequestLimit)
+        {
+            return;
+        }
+
+        // maxAttempts belongs here too: a minimum derived from polls alone would still fail this
+        // same guard, handing the operator a remediation that does not work — the same trap the
+        // days-component comment below guards against.
+        var minimum = TimeSpan.FromSeconds(
+            LongestPeriod.TotalSeconds * maxAttempts / source.MonthlyRequestLimit);
+
         failures.Add(
             $"{path} is the primary source (Priority {source.Priority}). " +
             $"{PricePollingOptions.SectionName}:PollInterval {pollInterval} implies " +
-            $"~{pollsPerPeriod:F0} requests per period but MonthlyRequestLimit is " +
+            $"~{pollsPerPeriod:F0} polls per period, and " +
+            $"{PriceFeedResilienceOptions.SectionName}:MaxAttempts {maxAttempts} charges up to " +
+            $"~{requestsPerPeriod:F0} requests, but MonthlyRequestLimit is " +
             $"{source.MonthlyRequestLimit}. " +
             // The days component is load-bearing: `hh` is the hour *within* a day, so a minimum
             // spanning days renders as its remainder and hands the operator a value that fails
-            // this same guard. Any limit below ~31 crosses that boundary.
-            $"Use an interval of at least {minimum:dd\\.hh\\:mm\\:ss}.");
+            // this same guard. Multiplying by MaxAttempts makes that boundary easier to cross.
+            $"Use an interval of at least {minimum:dd\\.hh\\:mm\\:ss}, or lower MaxAttempts.");
     }
 
     /// <summary>
@@ -256,5 +302,42 @@ internal class PriceSourcesOptionsValidator(
         }
 
         return atLowest[0];
+    }
+
+    /// <summary>
+    /// Wall-clock a full retry sequence needs for every attempt to get its whole RequestTimeout.
+    /// </summary>
+    /// <remarks>
+    /// <para>Reproduces DelayBackoffType.Exponential with jitter off: base × 2^i before retry i.
+    /// Retries number MaxAttempts - 1, so i runs 0 .. MaxAttempts - 2. It is a reconstruction of
+    /// Polly's schedule from the outside, so it is only as true as the three settings it assumes —
+    /// which is why <c>Program.AddPriceSource</c> sets all three explicitly rather than inheriting
+    /// any of them: <c>Delay</c> from <see cref="PriceFeedResilienceOptions.RetryBackoffBase"/>,
+    /// <c>BackoffType</c>, and <c>UseJitter = false</c>.</para>
+    ///
+    /// <para><b>`UseJitter` is the one that bites.</b> <c>HttpRetryStrategyOptions</c> defaults it to
+    /// <c>true</c>, unlike Polly's base options, so this method was wrong the day it was written and
+    /// wrong in the dangerous direction: a jittered delay was measured at 503ms against a 400ms
+    /// nominal, which means the real sequence can outlast any fixed model of it and this method
+    /// under-estimates the ceiling. An under-estimate is what lets the validator approve a
+    /// <c>TotalTimeout</c> that truncates the last attempt — after <c>QuotaHandler</c> has charged
+    /// its lease. Do not restore the default on the grounds that jitter is good practice: it
+    /// disperses many clients retrying in lockstep, and there is one single-instance poller issuing
+    /// one request at a time.</para>
+    ///
+    /// <para>Internal for the same reason as <see cref="LongestPeriod"/>: the shipped-configuration
+    /// test asserts this rule against the real file, and a test that re-implemented the formula
+    /// would assert that it agrees with itself while the two quietly diverged.</para>
+    /// </remarks>
+    internal static TimeSpan MinimumTotalTimeout(
+        TimeSpan requestTimeout, int maxAttempts, TimeSpan backoffBase)
+    {
+        var backoff = TimeSpan.Zero;
+        for (var i = 0; i < maxAttempts - 1; i++)
+        {
+            backoff += backoffBase * Math.Pow(2, i);
+        }
+
+        return requestTimeout * maxAttempts + backoff;
     }
 }

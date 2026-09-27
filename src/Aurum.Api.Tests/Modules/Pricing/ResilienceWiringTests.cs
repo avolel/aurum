@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Data;
@@ -61,7 +62,18 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     /// Builds a provider whose <c>WiringProbeSource</c> client is registered by the production
     /// path, with <paramref name="transport"/> standing in for the network.
     /// </summary>
-    private ServiceProvider BuildProvider(CountingHandler transport, int monthlyRequestLimit = 100)
+    /// <param name="backoffBase">
+    /// Polly's first retry delay. These tests pay it in real seconds (see <see cref="_clock"/>), and
+    /// the production default of 2s makes a three-attempt test sleep for six — so the tests that
+    /// only count calls and ledger rows run at 1ms, and the one test that is *about* the schedule
+    /// sets a value it can measure. A test asserting a count must not also be asserting that Polly
+    /// waits, or it pays for a guarantee it never checks.
+    /// </param>
+    private ServiceProvider BuildProvider(
+        CountingHandler transport,
+        int monthlyRequestLimit = 100,
+        TimeSpan? backoffBase = null,
+        int? maxAttempts = null)
     {
         var services = new ServiceCollection();
 
@@ -71,6 +83,18 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
             SourceCode,
             monthlyRequestLimit,
             QuotaPeriodKind.CalendarMonthUtc));
+
+        services.AddOptions<PriceFeedResilienceOptions>().Configure(o =>
+        {
+            o.RetryBackoffBase = backoffBase ?? TimeSpan.FromMilliseconds(1);
+
+            // Left at the production default unless a test names one, so the attempt count these
+            // tests assert stays the shipped attempt count.
+            if (maxAttempts is { } attempts)
+            {
+                o.MaxAttempts = attempts;
+            }
+        });
 
         // A real governor over the fixture's database. The whole point is that the lease count is
         // the one a provider would have billed, so an in-memory stand-in would test nothing.
@@ -165,6 +189,85 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     /// <summary>
+    /// Polly's real backoff schedule matches the one
+    /// <see cref="PriceSourcesOptionsValidator.MinimumTotalTimeout"/> models.
+    /// </summary>
+    /// <remarks>
+    /// <para>That formula is a reconstruction of Polly's exponential schedule from outside Polly,
+    /// and the validator refuses a <c>TotalTimeout</c> below it. If the real schedule is ever
+    /// <em>longer</em> than modelled — jitter switched on, <c>BackoffType</c> changed, a package
+    /// upgrade moving a default — the formula under-estimates, the validator approves a
+    /// <c>TotalTimeout</c> that truncates the last attempt, and that attempt spends its lease
+    /// without being able to finish. Nothing else in the codebase compares the two.</para>
+    ///
+    /// <para>The transport answers instantly, so each attempt contributes nothing and the elapsed
+    /// span is the backoff alone — which is why the expected value is the formula evaluated at a
+    /// <em>zero</em> request timeout. That isolates the half of the formula that models Polly from
+    /// the half that is plain multiplication.</para>
+    ///
+    /// <para><b>The upper bounds are the load-bearing assertions.</b> A schedule shorter than
+    /// modelled only makes the validator stricter than it needs to be, which costs a few seconds of
+    /// ceiling; a schedule longer than modelled is the silent overspend. The lower bounds are there
+    /// to catch the backoff being skipped altogether, which would make the whole comparison
+    /// vacuous.</para>
+    ///
+    /// <para>What this does not cover: it pins the schedule at one base and three attempts, not for
+    /// all values, and when it fails it says the two disagree without saying which one moved.</para>
+    /// </remarks>
+    [Fact]
+    public async Task Backoff_schedule_matches_what_MinimumTotalTimeout_models()
+    {
+        // Large enough that the governor's Postgres round-trip between attempts is small beside the
+        // signal, small enough that the test costs 0.6s. Both matter: a 20ms base would sit inside
+        // the noise and a 2s base would make this the slowest test in the suite.
+        var backoffBase = TimeSpan.FromMilliseconds(200);
+        const int MaxAttempts = 3;
+
+        var transport = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        await using var provider = BuildProvider(transport, backoffBase: backoffBase, maxAttempts: MaxAttempts);
+        using var scope = provider.CreateScope();
+        var source = scope.ServiceProvider.GetRequiredService<WiringProbeSource>();
+
+        using var response = await source.FetchAsync(Ct);
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+
+        var stamps = transport.Timestamps;
+        Assert.Equal(MaxAttempts, stamps.Count);
+
+        // Per-gap rather than the total only, so a failure names which delay diverged — and so a
+        // linear backoff, whose first gap is right and second is half, cannot hide inside a total.
+        // Per-gap rather than the total only, so a failure names which delay diverged — and so a
+        // linear backoff, whose first gap is right and second is half, cannot hide inside a total.
+        for (var i = 0; i < MaxAttempts - 1; i++)
+        {
+            var observed = Stopwatch.GetElapsedTime(stamps[i], stamps[i + 1]);
+            var modelled = backoffBase * Math.Pow(2, i);
+
+            Assert.InRange(
+                observed,
+                // 25ms of slack downward for timer granularity; the delay itself cannot be skipped.
+                modelled - TimeSpan.FromMilliseconds(25),
+                modelled + GapOverhead);
+        }
+
+        // The tie back to production. Evaluated at TimeSpan.Zero because the attempts themselves
+        // took no measurable time here, so what remains in the formula is exactly the backoff sum.
+        var expected = PriceSourcesOptionsValidator.MinimumTotalTimeout(
+            TimeSpan.Zero, MaxAttempts, backoffBase);
+
+        var span = Stopwatch.GetElapsedTime(stamps[0], stamps[^1]);
+        Assert.InRange(span, expected - TimeSpan.FromMilliseconds(25), expected + GapOverhead * 2);
+    }
+
+    /// <summary>
+    /// Headroom for one inter-attempt gap: a quota acquire against real Postgres, plus the handler
+    /// dispatch either side of it. Generous on purpose — this test exists to catch a schedule that
+    /// is wrong by a factor, not one that is late by a scheduler quantum.
+    /// </summary>
+    private static readonly TimeSpan GapOverhead = TimeSpan.FromMilliseconds(150);
+
+    /// <summary>
     /// The smallest thing that satisfies <see cref="IPriceSource"/> and exposes its
     /// <see cref="HttpClient"/>. It never parses a body, because what these tests observe is the
     /// handler chain rather than any provider's JSON.
@@ -183,17 +286,36 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     }
 }
 
-/// <summary>Counts what actually left the process, and answers from a script.</summary>
+/// <summary>Counts what actually left the process and when, and answers from a script.</summary>
 internal sealed class CountingHandler(Func<HttpRequestMessage, HttpResponseMessage> respond)
     : HttpMessageHandler
 {
+    private readonly Lock _gate = new();
+    private readonly List<long> _timestamps = [];
     private int _callCount;
 
     public int CallCount => Volatile.Read(ref _callCount);
 
+    /// <summary>
+    /// <c>Stopwatch.GetTimestamp()</c> as each request entered, so a test can measure the gaps the
+    /// retry strategy left between attempts. Raw ticks rather than <c>TimeSpan</c> because the unit
+    /// only means anything through <see cref="Stopwatch.GetElapsedTime(long, long)"/>.
+    /// </summary>
+    public IReadOnlyList<long> Timestamps
+    {
+        get { lock (_gate) { return [.. _timestamps]; } }
+    }
+
     protected override Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        // Before respond(), so the stamp is when the attempt reached the network rather than when
+        // the stub finished deciding what to say.
+        lock (_gate)
+        {
+            _timestamps.Add(Stopwatch.GetTimestamp());
+        }
+
         Interlocked.Increment(ref _callCount);
         return Task.FromResult(respond(request));
     }

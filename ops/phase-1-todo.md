@@ -24,7 +24,11 @@ part worth keeping — are exactly what gets lost.
 > Item 2 briefly carried two bullets both labelled `D-10` — the cadence decision took that number,
 > and the other two became `D-11` and `D-12`, pushing items 3–8 down by two. The timeout decision
 > then took `D-13`, which item 3's breaker bullet had been holding, pushing items 5–8 down by one
-> more: the delta engine's null-window invariant is `D-15`, not `D-13` as `D-11`'s prose said.
+> more: the delta engine's null-window invariant was `D-15`, not `D-13` as `D-11`'s prose said.
+> It has since shifted once more. The attempt-count knob deferred out of item 3 took `D-15` when it
+> actually landed, per the log's rule that an ID is allocated when a decision is taken rather than
+> reserved for planned work — so the null-window invariant is now **`D-16`**, and the numbers
+> allocated to items 5–7 are `D-16 … D-18`. `D-11`'s two references were repointed in place.
 
 ---
 
@@ -99,10 +103,11 @@ to fail over to. Each keeps its own quota accounting row.
       `PricePolling:PollInterval`; the enabled entry with the lowest `Priority` must fund it for a
       full period. Holding every source to "this source serves every poll" reads as the safe rule
       but pegs the cadence to the smallest budget in the file — GoldAPI's 100 a month would cap the
-      whole feed at one poll every 7h26m however much headroom the others have. A backup exhausting
+      whole feed at one poll every 22h19m however much headroom the others have. A backup exhausting
       mid-outage is counted and clamped by the governor; `PricePollingService` logs each backup's
       coverage in days at startup so the exemption is visible. Ties for the lowest `Priority`, and a
-      configuration with no enabled source, are refused. **D-10 recorded.**
+      configuration with no enabled source, are refused. **D-10 recorded.** The guard counts
+      *requests*, not polls — item 4's `MaxAttempts` multiplier (D-15) is what makes that true.
 - [x] Validator asserts every registered source code has a configuration entry (carried from item 1).
       `AddPriceSource<T>` emits a `RegisteredPriceSource` tag; the validator compares those against
       the configured codes, so the throw is a `ValidateOnStart` failure rather than a DI-construction
@@ -183,15 +188,50 @@ plan:
   strategies. Registering a `FakeTimeProvider` makes the retry backoff wait on a clock nothing
   advances, so the test hangs rather than failing. Noted in `ResilienceWiringTests`' remarks.
 
-Not done, and deliberately: the plan's `PriceFeed:Resilience:MaxAttempts` knob and the cadence
-guard's multiplier. `MaxRetryAttempts` is still the hardcoded 2 that D-13 shipped, so the budget
-guard under-counts worst-case spend by 3x. **Allocated to item 4** — it is a configuration and
-validator change with its own tests, and folding it in here would have put an unreviewed spend
-multiplier in the same commit as the chain.
+Deferred out of this item and **since landed** (see item 4 below): the
+`PriceFeed:Resilience:MaxAttempts` knob and the cadence guard's multiplier. `MaxRetryAttempts` was
+the hardcoded 2 that D-13 shipped, so the budget guard under-counted worst-case spend by 3x.
+Keeping it out of this commit was the right call — it put an unreviewed spend multiplier on its own
+diff, where the 3x turned out to need a cadence change and a timeout change to absorb it.
 
 ---
 
 ## 4. Latest-quote cache · half a day · blocks 8
+
+### Carried from item 3 — the attempt-count knob · **landed 2026-09-26**
+
+- [x] `PriceFeed:Resilience:MaxAttempts` (default 3) and `RetryBackoffBase` (default 2s).
+      `Program.AddPriceSource` passes Polly `MaxAttempts - 1`; the attempts/retries conversion
+      happens there and nowhere else, so the validator never carries the off-by-one.
+- [x] `ValidatePollBudget` multiplies polls per period by `MaxAttempts`. **The circuit breaker does
+      not bound this multiple** — `SourceCircuit` observes poll outcomes and retries resolve below
+      it, so a provider that fails twice and succeeds on the third sustains 3x indefinitely while
+      reading as healthy. Under a *sustained* outage the breaker very nearly cancels the multiple
+      out, which is why this looked bounded and was not.
+- [x] New rule: `TotalTimeout` must fit `MaxAttempts × RequestTimeout` plus the backoff between
+      attempts (`MinimumTotalTimeout`). All three sources shipped 35s where three 10s attempts at a
+      2s base need 36s, so the last attempt ran on nine seconds of its configured ten and spent its
+      lease anyway.
+- [x] Cadence 5m → 15m and `TotalTimeout` 35s → 40s, both forced by the two guards above.
+      Rejected `MaxAttempts: 1` to keep five minutes: every blip then becomes a failover onto
+      `goldapi.io`'s 100-request month, which a 1% failure rate consumes entirely. **D-15 recorded.**
+- [x] Tests: the guard rejects 186 requests from 62 polls and accepts the same cadence at one
+      attempt; the timeout rule rejects 30s and 35s and accepts 35s at one attempt;
+      `Shipped_total_timeouts_fit_the_shipped_attempt_count` measures the real file against the
+      validator's own formula. 82 pass.
+- [x] `Backoff_schedule_matches_what_MinimumTotalTimeout_models` in `ResilienceWiringTests` measures
+      the real inter-attempt gaps against the formula. **It failed on its first run and found a live
+      defect:** `HttpRetryStrategyOptions` defaults `UseJitter` to `true`, unlike Polly's base
+      options, so the formula had been modelling an un-jittered schedule while the pipeline ran a
+      jittered one — and jitter *lengthens* delays (503ms measured against a 400ms nominal), so the
+      formula under-estimated. `UseJitter = false` is now explicit; jitter disperses a herd and there
+      is one poller. The note this closes called the risk conditional; it was already live.
+- [ ] **Still not covered:** the formula is pinned at one base and three attempts, and a failure says
+      the two disagree without saying which moved. Also `BuildProvider` now defaults
+      `RetryBackoffBase` to 1ms so the count-only tests stop paying six real seconds — which means
+      only this one test would notice a backoff regression.
+
+### The cache itself
 
 - [ ] Singleton `ConcurrentDictionary<symbol, LatestQuote>` over an immutable record, so replacement
       is one atomic reference swap.
@@ -240,7 +280,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
       the level of gold by a few dollars, so a failover between polls produces an apparent move of
       exactly that offset, which at 0.25%-in-5m fabricates an event Phase 2 will then explain
       confidently. `Sample` carries its source ordinal; a window whose baseline and latest differ in
-      source is flagged `CrossSource`. **Record in D-15 that this is a mitigation, not a fix** — the
+      source is flagged `CrossSource`. **Record in D-16 that this is a mitigation, not a fix** — the
       fix is per-source calibration offsets, which needs data we do not have.
 - [ ] **Volatility on three samples is meaningless.** Require `MinSamplesForVolatility` (default 5)
       or report `Volatility = null`, so the classifier's volatility rule is *inapplicable* rather
@@ -255,7 +295,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] `DeltaEngine` is a singleton taking `IServiceScopeFactory` for the warmup query — same
       reasoning as `QuotaHandler`, a long-lived object must not capture a scoped `DbContext`.
 - [ ] `Window_with_no_bracketing_sample_is_null_not_zero`, `Out_of_order_sample_is_dropped`.
-- [ ] **D-15 recorded** — the null-window invariant, and the cross-source mitigation's limits.
+- [ ] **D-16 recorded** — the null-window invariant, and the cross-source mitigation's limits.
 
 ---
 
@@ -286,7 +326,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [x] ~~Migration seeds the two new `price_sources` rows~~ — done early, under item 2. It could not
       wait for this item: the foreign key fires on the first failover, which item 3 delivers.
 - [ ] `Restart_does_not_re_emit_the_same_event`, `Cross_source_delta_requires_higher_magnitude`.
-- [ ] **D-16 recorded** — why `price_events` is not a hypertable.
+- [ ] **D-17 recorded** — why `price_events` is not a hypertable.
 
 ---
 
@@ -323,7 +363,7 @@ returns 0.00% — which is not "no movement", it is "no data". Conflating them i
 - [ ] **`GET /v1/price/sources`** — per-source priority, enabled, last success/failure, circuit
       state, quota used/limit/resets. This is how the failover exit criterion gets demonstrated, and
       how an operator answers "why is the price eight hours old" without a psql session.
-- [ ] **D-17 recorded** — the second module seam, and why endpoints do not fit the `Add*Module` one.
+- [ ] **D-18 recorded** — the second module seam, and why endpoints do not fit the `Add*Module` one.
 
 ---
 
@@ -377,7 +417,7 @@ Existing patterns to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure
 - [ ] A client subscribing mid-interval immediately receives the cached quote and deltas (7)
 - [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` returns 400 naming retention (8)
 - [ ] `docker compose down -v && docker compose up --build` from clean still works (9)
-- [ ] D-15 … D-17 recorded with their rejected alternatives (each item). D-9 … D-14 are done.
+- [ ] D-16 … D-18 recorded with their rejected alternatives (each item). D-9 … D-15 are done.
 
 **Explicitly not in this tranche:** the Expo/RNW dashboard and its FCP < 1.5s criterion, auth, rate
 limiting, tier gating, macro and news ingestion, and the paid GoldAPI upgrade — still a go-live gate,

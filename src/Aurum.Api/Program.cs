@@ -95,6 +95,11 @@ builder.Services.AddOptions<PricePollingOptions>()
         $"{PricePollingOptions.SectionName}:PollInterval must be set to a positive interval.")
     .ValidateOnStart();
 
+builder.Services.AddOptions<PriceFeedResilienceOptions>()
+    .BindConfiguration(PriceFeedResilienceOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 builder.Services.AddOptions<PriceFeedCircuitOptions>()
     .BindConfiguration(PriceFeedCircuitOptions.SectionName)
     .ValidateOnStart();
@@ -221,6 +226,9 @@ public partial class Program
         {
             var options = GetOptions(context.ServiceProvider);
 
+            var resilience = context.ServiceProvider
+                .GetRequiredService<IOptions<PriceFeedResilienceOptions>>().Value;
+
             // Outermost: the whole retry sequence can't run away forever.
             pipeline.AddTimeout(options.TotalTimeout);
 
@@ -255,8 +263,24 @@ public partial class Program
                     .HandleResult(response =>
                         response.StatusCode is HttpStatusCode.RequestTimeout
                                             or >= HttpStatusCode.InternalServerError),
-                MaxRetryAttempts = 2,
+                MaxRetryAttempts = resilience.MaxAttempts - 1,
                 BackoffType = DelayBackoffType.Exponential,
+                Delay = resilience.RetryBackoffBase,
+
+                // Explicitly off, and it has to be: HttpRetryStrategyOptions defaults UseJitter to
+                // TRUE, unlike Polly's base options. Jitter randomises each delay around the
+                // exponential — observed as far as 503ms against a 400ms nominal — so the sequence
+                // can run longer than any fixed model of it, and
+                // PriceSourcesOptionsValidator.MinimumTotalTimeout would under-estimate the ceiling
+                // a TotalTimeout needs. That under-estimate is the direction that truncates the
+                // last attempt after QuotaHandler has already charged its lease (D-15).
+                //
+                // Jitter exists to decorrelate many clients retrying in lockstep. There is one
+                // poller, single-instance by construction, issuing one request at a time — no herd
+                // to disperse, so it buys nothing here and costs a computable timeout ceiling.
+                // Backoff_schedule_matches_what_MinimumTotalTimeout_models is what catches a
+                // re-enable; it found this default rather than being written after it was known.
+                UseJitter = false,
             });
 
             // Innermost: a fresh budget for EACH attempt, because it's inside the retry loop. This

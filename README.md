@@ -18,16 +18,20 @@ with the mid sanity-checked against a public spot quote (2026-09-07). The test s
 Three free tiers rather than the paid GoldAPI upgrade, so the aggregate cadence is usable at $0 and
 the failover chain has something real to fail over to (D-11).
 
-| Priority | Code | Free tier | Outage coverage at 5 min | Notes |
+| Priority | Code | Free tier | Outage coverage at 15 min | Notes |
 |---|---|---|---|---|
 | 1 | `api-ninjas` | ~10,000 / month | primary — funds the cadence | mid only, **gold only** |
-| 2 | `goldapi.io` | 100 / calendar month | 0.3 days | bid + ask + provider mid |
-| 3 | `metalprice-api` | ~1,000 / month | 3.5 days | mid only; query-parameter auth; quotes ounces per USD |
+| 2 | `goldapi.io` | 100 / calendar month | 1.0 days | bid + ask + provider mid |
+| 3 | `metalprice-api` | ~1,000 / month | 10.4 days | mid only; query-parameter auth; quotes ounces per USD |
 
-**API Ninjas is primary because it is the only tier that funds a useful cadence.** At five minutes
-the feed needs ~8,928 requests in a worst-case 31-day period; GoldAPI's 100 funds one poll every
-7h26m, at which the delta engine's 1m and 5m windows hold one sample each and return `null`
-forever. The cost of the order is that the normal path carries **mid only** — GoldAPI's bid/ask
+Coverage assumes a healthy backup spending one request per poll. A flaky one that needs its retries
+burns through the same budget up to three times faster — see `MaxAttempts` below.
+
+**API Ninjas is primary because it is the only tier that funds a useful cadence.** At fifteen
+minutes and three attempts the feed needs ~8,928 requests in a worst-case 31-day period — the same
+figure five minutes implied when a poll was assumed to cost one request, which is what item 4
+corrected. GoldAPI's 100 funds one poll every 22h19m, at which the delta engine's 1m and 5m windows
+hold one sample each and return `null` forever. The cost of the order is that the normal path carries **mid only** — GoldAPI's bid/ask
 now appear only while it is serving as a fallback, and `Bid`/`Ask` are not comparable across
 sources anyway (D-1 note), so they are per-source readings rather than a feed-wide spread.
 
@@ -104,8 +108,8 @@ play — simulator frame times will lie. Each entry says so in its own words; re
 before treating any of them as a measured result.
 
 `ops/decisions/decisions.md` records what is decided and why, including the rejected alternatives —
-**D-1 through D-14** so far. `ops/phase-1-todo.md` is the remaining work, ordered so each item is
-verifiable when it is finished; D-15 onward are allocated there against the items that will take
+**D-1 through D-15** so far. `ops/phase-1-todo.md` is the remaining work, ordered so each item is
+verifiable when it is finished; D-16 onward are allocated there against the items that will take
 them.
 
 ## Layout
@@ -230,12 +234,20 @@ provider's have diverged, which is worth more than making `Limit - Used` arithme
 `QuotaStatus.Limit - Used` is therefore not remaining budget: once `ProviderRejected` is set,
 remaining is zero whatever the counter says.
 
-`PollInterval` and `MonthlyRequestLimit` are coupled, but only through the **primary**:
-`PriceSourcesOptionsValidator` fails the process at boot on a cadence the lowest-`Priority` enabled
-source cannot fund for a period, and tells you the minimum interval that fits. Changing one usually
-means changing the other — or changing which source is primary. Holding *every* source to the full
-period reads as the safe rule and is worse: it pegs the cadence to the smallest budget in the file,
-so each added provider could only slow the feed (D-10).
+`PollInterval`, `MonthlyRequestLimit` and `PriceFeed:Resilience:MaxAttempts` are coupled, but only
+through the **primary**: `PriceSourcesOptionsValidator` fails the process at boot on a cadence the
+lowest-`Priority` enabled source cannot fund for a period, and tells you the minimum interval that
+fits. Changing one usually means changing another — or changing which source is primary. Holding
+*every* source to the full period reads as the safe rule and is worse: it pegs the cadence to the
+smallest budget in the file, so each added provider could only slow the feed (D-10).
+
+**A poll is not a request.** Each attempt re-enters `QuotaHandler` and is charged its own lease, so
+the guard multiplies polls per period by `MaxAttempts` (D-15). Nothing at runtime bounds that
+multiple: the circuit breaker sees poll outcomes, not attempts, so a provider that fails twice and
+then succeeds spends triple every poll while looking perfectly healthy to it. `TotalTimeout` is
+checked against the same number — it has to fit every attempt plus the backoff between them, or the
+last attempt is cut short, spends its lease anyway, and `MaxAttempts` quietly means less than it
+says.
 
 The cadence is one feed-wide value, not a property of each source. A per-source `PollInterval` was
 removed for that reason — the poller builds one `PeriodicTimer` and asks for one price per tick, so

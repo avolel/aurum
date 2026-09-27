@@ -52,6 +52,7 @@ public class ShippedConfigurationTests
         var config = BuildConfiguration();
         var options = BindSources(config);
         var polling = config.GetSection(PricePollingOptions.SectionName).Get<PricePollingOptions>()!;
+        var resilience = Resilience(config).Value;
 
         var primary = options.Sources.Values
             .Where(source => source.Enabled)
@@ -62,10 +63,45 @@ public class ShippedConfigurationTests
         // spend, which is the direction that costs a month of budget rather than a few polls.
         var pollsPerPeriod = PriceSourcesOptionsValidator.LongestPeriod / polling.PollInterval;
 
+        // A poll is not a request. Every attempt re-enters QuotaHandler and is charged its own
+        // lease, and the breaker does not bound that: SourceCircuit observes poll outcomes, so a
+        // provider that fails twice then succeeds sustains the full multiple while looking healthy.
+        var requestsPerPeriod = pollsPerPeriod * resilience.MaxAttempts;
+
         Assert.True(
-            pollsPerPeriod <= primary.MonthlyRequestLimit,
+            requestsPerPeriod <= primary.MonthlyRequestLimit,
             $"Primary '{primary.SourceCode}' allows {primary.MonthlyRequestLimit} requests per "
-          + $"period but PollInterval {polling.PollInterval} implies {pollsPerPeriod:F0}.");
+          + $"period but PollInterval {polling.PollInterval} implies {pollsPerPeriod:F0} polls, "
+          + $"which MaxAttempts {resilience.MaxAttempts} charges as {requestsPerPeriod:F0} requests.");
+    }
+
+    /// <summary>
+    /// Every enabled source's TotalTimeout must fit the shipped MaxAttempts and its backoff.
+    /// </summary>
+    /// <remarks>
+    /// The rule the shipped file broke this time. All three sources shipped <c>00:00:35</c>, which
+    /// is three 10s attempts with the 2s + 4s of backoff between them left out — the last attempt
+    /// ran on nine seconds of its configured ten, spent its lease, and nothing said so. Asserted
+    /// against the validator's own formula rather than a literal, so the two cannot drift.
+    /// </remarks>
+    [Fact]
+    public void Shipped_total_timeouts_fit_the_shipped_attempt_count()
+    {
+        var config = BuildConfiguration();
+        var options = BindSources(config);
+        var resilience = Resilience(config).Value;
+
+        foreach (var source in options.Sources.Values.Where(source => source.Enabled))
+        {
+            var required = PriceSourcesOptionsValidator.MinimumTotalTimeout(
+                source.RequestTimeout, resilience.MaxAttempts, resilience.RetryBackoffBase);
+
+            Assert.True(
+                source.TotalTimeout >= required,
+                $"'{source.SourceCode}' ships TotalTimeout {source.TotalTimeout} but "
+              + $"MaxAttempts {resilience.MaxAttempts} at RequestTimeout {source.RequestTimeout} "
+              + $"needs {required}.");
+        }
     }
 
     /// <summary>
@@ -93,9 +129,23 @@ public class ShippedConfigurationTests
         var registered = options.Sources.Values
             .Select(source => new RegisteredPriceSource(source.SourceCode));
 
-        return new PriceSourcesOptionsValidator(registered, Options.Create(polling))
+        return new PriceSourcesOptionsValidator(registered, Options.Create(polling), Resilience(config))
             .Validate(Options.DefaultName, options);
     }
+
+    /// <summary>
+    /// The shipped resilience knobs, falling back to the production defaults.
+    /// </summary>
+    /// <remarks>
+    /// The fallback keeps this honest if the section is ever removed from the file:
+    /// <c>Get&lt;T&gt;()</c> returns null for an absent section, and a null bound into the
+    /// validator would give it a <c>MaxAttempts</c> of zero — which its own guard skips the budget
+    /// check for, so the shipped file would pass the cadence rule by not being measured against it.
+    /// </remarks>
+    private static IOptions<PriceFeedResilienceOptions> Resilience(IConfiguration config) =>
+        Options.Create(
+            config.GetSection(PriceFeedResilienceOptions.SectionName).Get<PriceFeedResilienceOptions>()
+            ?? new PriceFeedResilienceOptions());
 
     /// <summary>
     /// The shipped file, then the credentials an operator supplies through <c>.env</c>. Layer order

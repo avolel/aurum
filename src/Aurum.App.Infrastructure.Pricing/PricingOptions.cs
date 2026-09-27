@@ -166,7 +166,15 @@ public class PriceSourceOptions
     /// are cancelled before they open a socket; <see cref="PriceSourcesOptionsValidator"/> enforces
     /// that, since the symptom is a retry policy that silently does nothing.
     /// </summary>
-    public TimeSpan TotalTimeout { get; set; } = TimeSpan.FromSeconds(35);
+    /// <remarks>
+    /// 40s rather than the obvious 3 × <see cref="RequestTimeout"/>: the backoff delays are part of
+    /// the sequence too, so three 10s attempts at a 2s base need 30s + 2s + 4s = 36s. The previous
+    /// 35s default was that arithmetic done without the backoff, and it left the last attempt
+    /// running on a truncated budget — <see cref="PriceFeedResilienceOptions.MaxAttempts"/> reading
+    /// as one number and behaving as another. Computed, not chosen: see
+    /// <c>PriceSourcesOptionsValidator.MinimumTotalTimeout</c>, which is what now rejects it.
+    /// </remarks>
+    public TimeSpan TotalTimeout { get; set; } = TimeSpan.FromSeconds(40);
 }
 
 /// <summary>Bound from the <c>PricePolling</c> configuration section.</summary>
@@ -190,4 +198,26 @@ public enum QuotaPeriodKind
 
     /// <summary>Resets every 30 days from a per-source anchor date (e.g. signup).</summary>
     RollingThirtyDays,
+}
+
+public class PriceFeedResilienceOptions
+{
+    public const string SectionName = "PriceFeed:Resilience";
+
+    /// <summary>
+    /// Total HTTP requests one poll may spend, including the first. Named attempts rather than
+    /// retries because this is the number the quota guard multiplies by: every attempt re-enters
+    /// QuotaHandler and is charged its own lease (D-7), so attempts — not retries — are what the
+    /// provider bills.
+    /// </summary>
+    [Range(1, 5)]
+    public int MaxAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// First retry delay; each subsequent retry doubles it. Declared here rather than left to
+    /// Polly's default because the timeout validator has to reproduce the schedule to know
+    /// whether TotalTimeout can fit MaxAttempts, and a default it cannot see is one it cannot
+    /// be held to across a package upgrade.
+    /// </summary>
+    public TimeSpan RetryBackoffBase { get; set; } = TimeSpan.FromSeconds(2);
 }

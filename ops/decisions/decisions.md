@@ -564,6 +564,11 @@ requests a month enabled anywhere in the chain, the fastest legal cadence is one
 and the other two providers' 11,000 requests buy nothing. The plan asked for three free sources so
 the aggregate cadence would be usable at $0; the guard made that unreachable.
 
+*Amended by D-15:* every figure here counts one request per poll, which was true when this was
+written and is not now. A poll spends up to `MaxAttempts` requests, so at the default 3 the
+GoldAPI-pegged cadence above is one poll every 22h19m rather than 7h26m. The decision itself is
+unchanged — the multiplier makes the case for exempting backups stronger, not weaker.
+
 The exemption is safe because of what the governor already guarantees. The failure this module
 exists to prevent is *uncounted* spend — an in-memory counter that resets with the container, or a
 retry that slips past the ledger. A backup that empties its budget during a sustained primary
@@ -617,11 +622,16 @@ build gate.**
 
 The chain exists for reliability, but the reason it is three *free* providers is arithmetic.
 GoldAPI's 100 requests a month funds one poll every 7h26m. Phase 1's delta engine computes 1m and
-5m windows; at that cadence every short window holds one sample and D-15's null-window invariant
+5m windows; at that cadence every short window holds one sample and D-16's null-window invariant
 returns `null` for all of them, forever. The engine would be untestable against anything but a
 replayed fixture, and the significance classifier would never fire in development. API Ninjas'
 10,000 and MetalpriceAPI's 1,000 are what make a minute-scale cadence reachable at $0, which is
 what makes items 5 and 6 verifiable against a live feed rather than only against a fixture.
+
+*Amended by D-15:* the 7h26m above counts one request per poll. At the default `MaxAttempts` of 3 it
+is 22h19m, and "minute-scale cadence" becomes 15 minutes rather than 5. The argument is unaffected
+in direction and stronger in size: the multiplier costs GoldAPI's tier three times as much as it
+costs API Ninjas' in cadence terms, because the constraint is the ratio of budget to polls.
 
 What it does not buy, and the reason this is worth recording rather than assuming:
 
@@ -636,7 +646,7 @@ What it does not buy, and the reason this is worth recording rather than assumin
   GoldAPI is demoted. The other 11,000 buy outage coverage, not speed.
 - **Three providers means three level offsets.** Gold's quoted level differs by a few dollars
   between providers, so every failover injects an apparent move of exactly that offset into the
-  delta engine. D-15's cross-source flag mitigates this; it does not fix it.
+  delta engine. D-16's cross-source flag mitigates this; it does not fix it.
 
 Rejected — **buy the GoldAPI paid tier now.** One provider, one set of response semantics, one
 quota model, and a cadence that supports the delta engine immediately. It also removes the only
@@ -828,3 +838,117 @@ textbook shape. It buys a field that has to be released on every path out of the
 the paths that produce no verdict — quota denial, cancellation, a poller shutdown mid-call. A leaked
 gate is a circuit that never closes again, and it is invisible until a source silently stops being
 tried.
+
+---
+
+## D-15 — The cadence guard counts attempts, not polls
+
+**DECIDED: `PriceFeed:Resilience` carries `MaxAttempts` (default 3) and `RetryBackoffBase` (default
+2s). `Program.AddPriceSource` sets Polly's `MaxRetryAttempts = MaxAttempts - 1` and its `Delay` from
+`RetryBackoffBase`. `PriceSourcesOptionsValidator.ValidatePollBudget` multiplies polls per period by
+`MaxAttempts` before comparing against `MonthlyRequestLimit`, and `ValidateTimeouts` refuses a
+`TotalTimeout` below `MinimumTotalTimeout(RequestTimeout, MaxAttempts, RetryBackoffBase)`. The
+shipped cadence moves to 15 minutes and the shipped `TotalTimeout` to 40s.**
+
+D-13 put a retry loop above `QuotaHandler` so every attempt is charged its own lease, which is what
+the provider bills. The cadence guard D-10 placed at boot went on counting one request per poll.
+Between them, a configuration that read as 8,928 requests a month against `api-ninjas`' 10,000 could
+spend 26,784 — an under-count of three, the direction that costs a month rather than a poll, and the
+one the guard exists to make impossible.
+
+**The knob counts attempts because that is what the guard multiplies by.** Polly counts retries, so
+the two differ by one, and the conversion happens once, at the pipeline registration. Storing
+retries in configuration and adding one inside the validator puts the same arithmetic in two files,
+and the failure mode of getting it wrong is an under-count of exactly one attempt — small enough to
+survive review and large enough to empty a budget early.
+
+**The circuit breaker does not bound this, although it looks as though it should.** Under sustained
+failure it very nearly does: at D-14's threshold of 3 and a 15-minute break, a 5-minute cadence is
+throttled to one probe in three polls, and one probe in three spending three requests is the same
+rate as every poll spending one. The two cancel. The case the breaker cannot see is a provider that
+fails two attempts and succeeds on the third: the poll *succeeded*, so `RecordSuccess` resets the
+count and the circuit never opens, while the source spends three requests every poll indefinitely.
+`SourceCircuit` observes poll outcomes; retries resolve below it and are invisible to it. So the
+most expensive provider behaviour is the one the breaker exists to tolerate — a provider that is
+flaky but always eventually works — and no runtime mechanism catches it. The guard has to.
+
+**`RetryBackoffBase` is configured rather than left to Polly's default**, even though nothing in the
+feed wants to tune it. `MinimumTotalTimeout` reconstructs the backoff schedule from outside Polly to
+decide whether a `TotalTimeout` can fit its attempts, and a schedule built from a default that
+appears in no file here is one a package upgrade can change silently, turning a correct check into a
+wrong one with no diff to review. Declaring it makes `Program.cs` and the validator agree on a value
+both can name.
+
+**`UseJitter = false` is set explicitly, and the test that pins it found a live defect rather than
+confirming one.** `HttpRetryStrategyOptions` defaults `UseJitter` to **`true`**, unlike Polly's base
+`RetryStrategyOptions`, and `Program.AddPriceSource` never set it — so `MinimumTotalTimeout` modelled
+an un-jittered exponential while the pipeline ran a jittered one, from the moment it was written. The
+direction is the harmful one. Measured gaps at a 200ms base came out `(282, 141)`, `(79, 503)`,
+`(214, 251)` against a nominal `(200, 400)`: jitter both re-orders and *lengthens* delays, so the
+real sequence can outlast any fixed model and the method under-estimates the ceiling a `TotalTimeout`
+needs. An under-estimate is precisely what lets the validator approve a `TotalTimeout` that truncates
+the last attempt after `QuotaHandler` has charged its lease.
+
+Turning jitter off rather than modelling its worst case: jitter exists to decorrelate many clients
+retrying in lockstep, and this feed is one single-instance poller issuing one request at a time
+(`PricePollingService` carries that assumption already, as does `Program.cs`'s migrate-at-startup).
+There is no herd to disperse. Modelling the worst case instead would mean inflating the backoff term
+by a factor read off Polly's jitter implementation — a constant from a dependency's internals, which
+is the same class of invisible coupling that `RetryBackoffBase` exists to remove.
+
+This is the one decision here that was not reasoned out in advance.
+`Backoff_schedule_matches_what_MinimumTotalTimeout_models` was written to close a "not covered" note,
+on the assumption it would pass; it failed on its first run and the default was found by measuring.
+Worth stating plainly, because the note it closed described the risk as hypothetical and it was
+already live.
+
+**This does not reverse D-13's refusal to derive `TotalTimeout` from the attempt count.**
+`TotalTimeout` is still an explicit configured value, for the reason given there: a derived ceiling
+moves whenever the attempt count moves, silently. What is new is that the validator now *checks* the
+explicit value against the attempt count. Deriving hides the coupling; checking names it at boot and
+makes the operator resolve it.
+
+**The new timeout rule exists because the previous arithmetic was done by eye.** Three 10s attempts
+need 30s plus 2s and 4s of backoff — 36s. Every source shipped 35s, which is that sum with the
+backoff forgotten, and the default carried the same number. The effect was not a crash: the last
+attempt started at t≈26 and was cancelled at t=35, running on nine seconds of its configured ten,
+spending its lease, and succeeding often enough that nothing looked wrong. `MaxAttempts` read as one
+number and behaved as another, which is the same class of silent divergence the other two rules in
+`ValidateTimeouts` guard, and is why it lives beside them rather than with the budget check.
+
+`MinimumTotalTimeout` is `internal` for the same reason `LongestPeriod` is. `ShippedConfigurationTests`
+asserts the rule against the real `appsettings.json`, and that file exists precisely because unit
+tests built configuration in memory and missed a defect in the shipped one; a test that
+re-implemented the formula would assert that it agrees with itself while the two drifted apart.
+
+### Consequences
+
+- `PricePolling:PollInterval` moves from 5 minutes to 15. At three attempts, 2,976 polls is 8,928
+  requests, inside `api-ninjas`' 10,000; five minutes implied 26,784 and would have emptied the
+  month around day twelve.
+- `TotalTimeout` moves from 35s to 40s on all three sources and on `PriceSourceOptions`' default.
+- The test helper's own cadence had to move too. `WithPolling` used 12 hours, commented as sitting
+  under every limit those tests configure; 62 polls became 186 requests against the 100-request
+  default the moment the guard started counting attempts, so the cadence that existed to keep tests
+  off this rule was the first thing to trip it. It is now 24 hours.
+
+Rejected — **`MaxAttempts: 1`, keeping the 5-minute cadence.** It fits the budget arithmetically:
+8,928 requests against 10,000, no cadence change, no config churn. Every transient blip then becomes
+a failover instead of a retry, and failover lands on `goldapi.io`'s 100-request month — at 8,928
+polls a period, a 1% first-attempt failure rate consumes that budget entirely. A retry spends one of
+ten thousand; a failover spends one of a hundred. The cost does not disappear, it relocates onto the
+smallest budget in the file, which D-10 deliberately leaves unguarded, so the guard would report
+success while the chain quietly ran out of backups.
+
+Rejected — **having the validator read the built Polly pipeline** instead of reconstructing the
+schedule, so the two could not drift by construction. It is the correct shape and the DI lifecycle
+does not permit it: the pipeline is built inside `AddResilienceHandler`'s callback from an
+`IServiceProvider`, and options validation runs while those same options are being resolved.
+Declaring `RetryBackoffBase` is the affordable half of the guarantee.
+
+Rejected — **leaving the guard at one request per poll and treating retry spend as a runtime
+concern**, on the grounds that the governor already counts every request durably and clamps when a
+period is spent. It does, and that is what stops the overspend from reaching the provider — but the
+clamp arrives after the budget is gone, twenty days before the period rolls. The guard exists to
+refuse a configuration that *structurally cannot fit*, and one that spends triple what it claims is
+that configuration whether or not something downstream survives it.

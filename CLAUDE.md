@@ -230,7 +230,7 @@ PricePollingService  →  IPriceFeed (FailoverPriceFeed)
                             ├─ SourceCircuitStore → SourceCircuit (in-memory, per source)
                             └─ IPriceSource, in priority order
                                   └─ HttpClient (typed)
-                                        └─ resilience pipeline   total timeout → retry → per-attempt timeout
+                                        └─ resilience pipeline   total timeout → retry (MaxAttempts) → per-attempt timeout
                                               └─ QuotaHandler (DelegatingHandler)
                                                     └─ auth handler
                                                           └─ IQuotaGovernor → api_quota_windows
@@ -249,6 +249,12 @@ arbitrary in isolation:
   `ResilienceWiringTests.Each_retry_attempt_spends_its_own_lease` is the only thing that catches the
   swap, and it calls `Program.AddPriceSource<T>` rather than hand-composing the chain for exactly
   that reason.
+- **The attempt count is `PriceFeed:Resilience:MaxAttempts`, not a literal.** Polly counts retries
+  and the knob counts attempts, so `Program.AddPriceSource` passes `MaxAttempts - 1`; the conversion
+  happens there and nowhere else, because the cadence guard multiplies by attempts and an off-by-one
+  in two files is an under-count of exactly one attempt per poll (D-15). `RetryBackoffBase` sets
+  Polly's `Delay` explicitly for the same reason `MinimumTotalTimeout` needs it — see the
+  `TotalTimeout` bullet under Configuration.
 - **It takes `IServiceScopeFactory`, not `IQuotaGovernor`.** `IHttpClientFactory` pools handlers for
   minutes, so injecting the scoped governor would capture a `DbContext` in a long-lived object
   shared across concurrent requests.
@@ -298,7 +304,13 @@ Related invariants:
   and is the point at which it is either wired as a projection or deleted. Do not toggle it in psql
   and expect anything to happen.
 - The cadence is one feed-wide value, `PricePolling:PollInterval`, and it is coupled to the
-  **primary** source's `MonthlyRequestLimit` only — the enabled entry with the lowest `Priority`.
+  **primary** source's `MonthlyRequestLimit` — the enabled entry with the lowest `Priority` — **and
+  to `PriceFeed:Resilience:MaxAttempts`**. A poll is not a request: every attempt re-enters
+  `QuotaHandler` and is charged its own lease, so the guard multiplies polls per period by
+  `MaxAttempts` before comparing (D-15). **The circuit breaker does not bound that multiple.**
+  `SourceCircuit` observes poll outcomes, and retries resolve below it, so a provider that fails two
+  attempts and succeeds on the third spends triple forever while the breaker reads it as healthy —
+  the most expensive provider behaviour is the one the breaker exists to tolerate.
   `PriceSourcesOptionsValidator` fails the process at boot when that budget cannot fund the cadence
   for a period. Backups are deliberately exempt (D-10): holding every source to the full period
   pegs the cadence to the smallest budget in the file, so each added provider could only slow the
@@ -366,6 +378,24 @@ using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLim
   the entry's identity.
 - `appsettings.json` ships `ApiKey` as the empty string deliberately. A placeholder there would
   satisfy `[Required]` and put the hole straight back.
+- **`PriceFeed:Resilience` is a flat section, not part of the source map**, and binds with
+  `ValidateDataAnnotations()` — its `[Range]` on `MaxAttempts` is on the options object's own
+  property, so the descent problem above does not apply to it. It is feed-wide for the same reason
+  the cadence is: the poller makes one request per tick and the retry policy is the same for every
+  source.
+- **`TotalTimeout` must fit `MaxAttempts × RequestTimeout` plus the backoff between attempts**, and
+  `PriceSourcesOptionsValidator.MinimumTotalTimeout` is what computes it — 3 × 10s at a 2s base
+  needs 36s, not the 35s that shipped until item 4. Below that the last attempt runs on a truncated
+  budget or never starts, so `MaxAttempts` reads as one number and behaves as another, and a
+  truncated attempt still spends its lease. `RetryBackoffBase` exists so that method reconstructs a
+  schedule this repository names rather than a Polly default it cannot see.
+- **`UseJitter = false` is set explicitly and must stay that way.** `HttpRetryStrategyOptions`
+  defaults it to **`true`**, unlike Polly's base options, so `MinimumTotalTimeout` modelled the
+  wrong schedule until `Backoff_schedule_matches_what_MinimumTotalTimeout_models` caught it — a
+  jittered delay measured 503ms against a 400ms nominal, so the sequence can outlast any fixed model
+  and the formula under-estimates. Jitter disperses many clients retrying in lockstep; there is one
+  single-instance poller issuing one request at a time, so it buys nothing and costs a computable
+  ceiling. That test is the only thing standing between a re-enabled default and a silent overspend.
 
 ### Tests
 
