@@ -211,21 +211,27 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     /// to catch the backoff being skipped altogether, which would make the whole comparison
     /// vacuous.</para>
     ///
-    /// <para>What this does not cover: it pins the schedule at one base and three attempts, not for
-    /// all values, and when it fails it says the two disagree without saying which one moved.</para>
+    /// <para>This is the Polly half only. The arithmetic half is
+    /// <c>PriceSourcesOptionsTests.MinimumTotalTimeout_sums_an_exponential_schedule</c>, which needs
+    /// no clock, so when this fails and that passes, the retry pipeline moved and the formula did
+    /// not.</para>
+    ///
+    /// <para>Rows cost their backoff sum in real time, about 1.6s together. Each base is large
+    /// enough that the governor's Postgres round-trip between attempts is small beside the signal: a
+    /// 20ms base would sit inside the noise, and the production 2s would make this the slowest test
+    /// in the suite.</para>
     /// </remarks>
-    [Fact]
-    public async Task Backoff_schedule_matches_what_MinimumTotalTimeout_models()
+    [Theory]
+    [InlineData(200, 3)]  // the original case: two delays, ~600ms
+    [InlineData(100, 4)]  // three delays, ~700ms: a wrong multiplier cannot match all three
+    [InlineData(300, 2)]  // one delay, ~300ms: the edge where linear and exponential agree
+    public async Task Backoff_schedule_matches_what_MinimumTotalTimeout_models(int backoffBaseMs, int maxAttempts)
     {
-        // Large enough that the governor's Postgres round-trip between attempts is small beside the
-        // signal, small enough that the test costs 0.6s. Both matter: a 20ms base would sit inside
-        // the noise and a 2s base would make this the slowest test in the suite.
-        var backoffBase = TimeSpan.FromMilliseconds(200);
-        const int MaxAttempts = 3;
+        var backoffBase = TimeSpan.FromMilliseconds(backoffBaseMs);
 
         var transport = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
 
-        await using var provider = BuildProvider(transport, backoffBase: backoffBase, maxAttempts: MaxAttempts);
+        await using var provider = BuildProvider(transport, backoffBase: backoffBase, maxAttempts: maxAttempts);
         using var scope = provider.CreateScope();
         var source = scope.ServiceProvider.GetRequiredService<WiringProbeSource>();
 
@@ -233,13 +239,11 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
 
         var stamps = transport.Timestamps;
-        Assert.Equal(MaxAttempts, stamps.Count);
+        Assert.Equal(maxAttempts, stamps.Count);
 
         // Per-gap rather than the total only, so a failure names which delay diverged — and so a
         // linear backoff, whose first gap is right and second is half, cannot hide inside a total.
-        // Per-gap rather than the total only, so a failure names which delay diverged — and so a
-        // linear backoff, whose first gap is right and second is half, cannot hide inside a total.
-        for (var i = 0; i < MaxAttempts - 1; i++)
+        for (var i = 0; i < maxAttempts - 1; i++)
         {
             var observed = Stopwatch.GetElapsedTime(stamps[i], stamps[i + 1]);
             var modelled = backoffBase * Math.Pow(2, i);
@@ -254,10 +258,12 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
         // The tie back to production. Evaluated at TimeSpan.Zero because the attempts themselves
         // took no measurable time here, so what remains in the formula is exactly the backoff sum.
         var expected = PriceSourcesOptionsValidator.MinimumTotalTimeout(
-            TimeSpan.Zero, MaxAttempts, backoffBase);
+            TimeSpan.Zero, maxAttempts, backoffBase);
 
+        // One GapOverhead per gap: the headroom is per inter-attempt round-trip, so a fixed
+        // multiple would be too tight at four attempts and too loose at two.
         var span = Stopwatch.GetElapsedTime(stamps[0], stamps[^1]);
-        Assert.InRange(span, expected - TimeSpan.FromMilliseconds(25), expected + GapOverhead * 2);
+        Assert.InRange(span, expected - TimeSpan.FromMilliseconds(25), expected + GapOverhead * (maxAttempts - 1));
     }
 
     /// <summary>

@@ -468,6 +468,58 @@ public class PriceSourcesOptionsTests
     }
 
     /// <summary>
+    /// The formula alone, with no clock and no pipeline, so a failure here means the arithmetic
+    /// moved rather than Polly.
+    /// </summary>
+    /// <remarks>
+    /// <para>Every <paramref name="expectedSeconds"/> is worked by hand. Computing it in the test as
+    /// a loop over <c>base × 2^i</c> would re-implement the method and assert that it agrees with
+    /// itself — the trap <c>ResilienceWiringTests</c> avoids by calling
+    /// <c>Program.AddPriceSource</c>.</para>
+    ///
+    /// <para>The rows are chosen to separate formulas that coincide on the shipped case. At one
+    /// backoff delay a linear and an exponential schedule are identical, and at two a doubled
+    /// multiplier can still land on a plausible total; four delays leave no room for either.</para>
+    ///
+    /// <para><c>Backoff_schedule_matches_what_MinimumTotalTimeout_models</c> is the other half: it
+    /// measures Polly and cannot see this arithmetic, and this cannot see Polly.</para>
+    /// </remarks>
+    [Theory]
+    [InlineData(10, 3, 2, 36)]  // shipped settings: 30s of attempts + 2s + 4s — why 35s was rejected
+    [InlineData(10, 1, 2, 10)]  // no retries, so no backoff at all: the MaxAttempts - 1 edge
+    [InlineData(10, 2, 2, 22)]  // one delay only: linear agrees here, which is why 3 attempts is also needed
+    [InlineData(10, 5, 1, 65)]  // 1 + 2 + 4 + 8 = 15s of backoff: catches a wrong multiplier
+    [InlineData(10, 3, 0, 30)]  // zero base must neither throw nor go negative
+    public void MinimumTotalTimeout_sums_an_exponential_schedule(
+        int requestTimeoutSeconds, int maxAttempts, int backoffBaseSeconds, int expectedSeconds)
+    {
+        var actual = PriceSourcesOptionsValidator.MinimumTotalTimeout(
+            TimeSpan.FromSeconds(requestTimeoutSeconds),
+            maxAttempts,
+            TimeSpan.FromSeconds(backoffBaseSeconds));
+
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), actual);
+    }
+
+    /// <summary>
+    /// The defaults a service gets when there is no <c>PriceFeed:Resilience</c> section at all.
+    /// </summary>
+    /// <remarks>
+    /// Every retry test in <c>ResilienceWiringTests</c> overrides <c>RetryBackoffBase</c> to keep
+    /// the suite fast, so a default that silently became zero would pass all of them while
+    /// production lost its backoff. <c>ShippedConfigurationTests</c> reads <c>appsettings.json</c>,
+    /// which does not reach the property initialisers this pins.
+    /// </remarks>
+    [Fact]
+    public void Resilience_defaults_are_the_shipped_attempt_count_and_backoff()
+    {
+        var defaults = new PriceFeedResilienceOptions();
+
+        Assert.Equal(3, defaults.MaxAttempts);
+        Assert.Equal(TimeSpan.FromSeconds(2), defaults.RetryBackoffBase);
+    }
+
+    /// <summary>
     /// Mirrors PricingModule's binding so these tests exercise the real config paths — the ones
     /// docker-compose.yml and .env actually set — rather than an object graph built by hand.
     /// </summary>
