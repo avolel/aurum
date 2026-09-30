@@ -213,7 +213,7 @@ Aurum.App.Infrastructure.Data/Repositories/PriceSources/
 - Catch `FluentValidation.ValidationException` on command endpoints → return 400
 - `CancellationToken` on every async action method
 - No business logic, no DB access, no external HTTP calls, no `async void`
-- Always use `ApiResponse<T>` wrapper (`Aurum.App.Application/Common/DTOs/ApiResponse.cs`) — never return anonymous types
+- Always use `ApiResponse<T>` wrapper (`Aurum.App.SharedKernel/Common/ApiResponse.cs`) — never return anonymous types
  
 ### Handler Rules (replaces Service Layer)
  

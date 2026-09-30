@@ -185,7 +185,7 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 76 tests. Most of them start a real copy of the database in Docker rather than a fake one,
+There are 83 tests. Most of them start a real copy of the database in Docker rather than a fake one,
 because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 

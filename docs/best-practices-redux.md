@@ -1,463 +1,509 @@
-# Redux Best Practices for React Native
- 
-**Architecture, Patterns & Performance Guidelines**
- 
+# Redux in React Native: how to organise it
+
+> **None of this exists yet.** There's no Redux in this repository. `app/` is an empty Expo starting
+> point. This guide describes the target for Phase 4, not code you can use today. Examples use
+> made-up names from this app's domain (prices, alerts, sign-in).
+
+**What Redux is:** a single shared store for data many screens need. Screens read from it, and send it
+"actions" (messages describing what happened) to change it. **Redux Toolkit** (RTK) is the official
+set of helpers that removes most of the repetitive code Redux used to need.
+
 ---
- 
-## 1. Project Structure
- 
-A well-organized project structure is critical for scalability and team productivity. Structure your Redux code using a feature-based approach that groups related logic together.
- 
-### 1.1 Recommended Directory Layout
- 
+
+## 1. Folders
+
+Group Redux code by feature, not by kind of file.
+
+### 1.1 Suggested layout
+
 ```
 app/
-  store/
-    index.ts              # Store configuration
-    rootReducer.ts        # Combined reducers
-    middleware.ts          # Custom middleware
-  features/
-    auth/
-      authSlice.ts        # Slice (reducer + actions)
-      authSelectors.ts    # Memoized selectors
-      authThunks.ts       # Async operations
-      authTypes.ts        # TypeScript interfaces
-      __tests__/          # Co-located tests
-    products/
-      productSlice.ts
-      productSelectors.ts
-      productApi.ts       # RTK Query API definition
-  hooks/
-    useAppDispatch.ts     # Typed dispatch hook
-    useAppSelector.ts     # Typed selector hook
-  services/
-    api.ts                # RTK Query base API
+  store/
+    index.ts              # creates the store
+    rootReducer.ts        # combines every feature's slice
+    middleware.ts         # custom steps actions pass through
+  features/
+    auth/
+      authSlice.ts        # the slice: this feature's data and the functions that change it
+      authSelectors.ts    # functions that read from the store, cached
+      authThunks.ts       # async work (server calls and so on)
+      authTypes.ts        # TypeScript types
+      __tests__/          # tests, kept next to the code
+    prices/
+      pricesSlice.ts
+      pricesSelectors.ts
+      pricesApi.ts        # server calls, written with RTK Query
+  hooks/
+    useAppDispatch.ts     # typed version of useDispatch
+    useAppSelector.ts     # typed version of useSelector
+  services/
+    api.ts                # RTK Query's shared base setup
 ```
- 
-> ✅
-**Feature-Based Organization:** Group all Redux logic (slice, selectors, thunks, types, tests) by feature domain rather than by file type. This makes it easy to find, modify, and delete entire features as a unit.
- 
-### 1.2 File Naming Conventions
- 
-| File Type | Naming Pattern |
-|-----------|---------------|
-| Slice files | `featureSlice.ts` (e.g., `authSlice.ts`) |
-| Selector files | `featureSelectors.ts` (e.g., `authSelectors.ts`) |
-| Thunk files | `featureThunks.ts` (e.g., `authThunks.ts`) |
-| RTK Query APIs | `featureApi.ts` (e.g., `schedulingApi.ts`) — colocated in the feature folder,
-**not** a shared `store/api/` bucket, and **not** `feature.api.ts`. This is the one file type that does not take the `.slice.ts`/`.reducer.ts` suffix CLAUDE.md lists, because it is not a hand-written reducer |
-| Type definitions | `featureTypes.ts` (e.g., `authTypes.ts`) |
- 
+
+> ✅ **Group by feature.** Keep all of a feature's Redux code (slice, selectors, thunks, types,
+> tests) in one folder. Then a feature is easy to find, change, or delete as a whole.
+
+### 1.2 File names
+
+| Kind of file | Name | Example |
+|--------------|------|---------|
+| Slice | `featureSlice.ts` | `authSlice.ts` |
+| Selectors | `featureSelectors.ts` | `authSelectors.ts` |
+| Thunks | `featureThunks.ts` | `authThunks.ts` |
+| RTK Query server calls | `featureApi.ts` | `pricesApi.ts` |
+| Types | `featureTypes.ts` | `authTypes.ts` |
+
+RTK Query files sit in the feature's folder, **not** in a shared `store/api/` folder, and are named
+`featureApi.ts`, **not** `feature.api.ts`.
+
+The original guide said this was the one kind of file that doesn't take the `.slice.ts` or
+`.reducer.ts` ending "that CLAUDE.md lists". This repository's CLAUDE.md lists no such endings, and
+`docs/best-practices.md` suggests `alerts.reducer.ts`-style names. Settle on one style before Phase 4.
+
 ---
- 
-## 2. Redux Toolkit Configuration
- 
-Always use Redux Toolkit (RTK) as the standard approach. Never write Redux logic by hand — RTK eliminates boilerplate and enforces best practices by default.
- 
-### 2.1 Store Setup
- 
+
+## 2. Setting up Redux Toolkit
+
+Always use Redux Toolkit. Never write Redux code the old manual way: Toolkit removes most of the
+repetitive code and makes the safe patterns the default.
+
+### 2.1 Creating the store
+
 ```typescript
 // store/index.ts
 import { configureStore } from '@reduxjs/toolkit';
 import { setupListeners } from '@reduxjs/toolkit/query';
 import rootReducer from './rootReducer';
 import { apiSlice } from '../services/api';
- 
+
 export const store = configureStore({
-  reducer: rootReducer,
-  middleware: (getDefaultMiddleware) =>
-    getDefaultMiddleware({
-      serializableCheck: {
-        ignoredActions: ['persist/PERSIST'],
-      },
-      immutableCheck: __DEV__,
-    }).concat(apiSlice.middleware),
+  reducer: rootReducer,
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      // The saving-to-disk library sends this action with values that can't be turned into JSON
+      serializableCheck: {
+        ignoredActions: ['persist/PERSIST'],
+      },
+      // Only check for accidental changes to the store while developing; it's slow
+      immutableCheck: __DEV__,
+    }).concat(apiSlice.middleware),
 });
- 
+
+// Lets RTK Query refetch when the app comes back to the foreground or reconnects
 setupListeners(store.dispatch);
- 
+
 export type RootState = ReturnType<typeof store.getState>;
 export type AppDispatch = typeof store.dispatch;
 ```
- 
-### 2.2 Typed Hooks
- 
-Create pre-typed hooks to avoid repeating type annotations throughout the app. Import these instead of the plain react-redux hooks.
- 
+
+### 2.2 Typed hooks
+
+Make typed versions of the two Redux hooks once, so no screen has to repeat the types. Import these
+instead of the plain ones.
+
 ```typescript
 // hooks/useAppDispatch.ts
 import { useDispatch } from 'react-redux';
 import type { AppDispatch } from '../store';
 export const useAppDispatch = useDispatch.withTypes<AppDispatch>();
- 
+
 // hooks/useAppSelector.ts
 import { useSelector } from 'react-redux';
 import type { RootState } from '../store';
 export const useAppSelector = useSelector.withTypes<RootState>();
 ```
- 
-> ❌
-**Avoid:** Never import `useDispatch` or `useSelector` directly from react-redux in components. Always use the typed wrappers. This eliminates type casting and catches type mismatches at compile time.
- 
+
+> ❌ **Don't** import `useDispatch` or `useSelector` straight from `react-redux` in a component. Always
+> use the typed versions. Then you never need to cast types by hand, and mismatches are caught when
+> the code is built.
+
 ---
- 
-## 3. Slice Design Patterns
- 
-Slices are the fundamental building block of modern Redux. Each slice owns a portion of state and defines the reducers and actions for that state.
- 
-### 3.1 Slice Structure Template
- 
+
+## 3. Slices
+
+A slice is one feature's share of the store, with the functions (called reducers) that change it.
+
+### 3.1 A slice template
+
 ```typescript
 // features/auth/authSlice.ts
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
 import { loginUser, logoutUser } from './authThunks';
 import { AuthState } from './authTypes';
- 
+
 const initialState: AuthState = {
-  user: null,
-  token: null,
-  status: 'idle',       // 'idle' | 'loading' | 'succeeded' | 'failed'
-  error: null,
+  user: null,
+  token: null,
+  status: 'idle',       // 'idle' | 'loading' | 'succeeded' | 'failed'
+  error: null,
 };
- 
+
 const authSlice = createSlice({
-  name: 'auth',
-  initialState,
-  reducers: {
-    clearError(state) {
-      state.error = null;
-    },
-    updateProfile(state, action: PayloadAction<Partial<User>>) {
-      if (state.user) {
-        Object.assign(state.user, action.payload);
-      }
-    },
-  },
-  extraReducers: (builder) => {
-    builder
-      .addCase(loginUser.pending, (state) => {
-        state.status = 'loading';
-        state.error = null;
-      })
-      .addCase(loginUser.fulfilled, (state, action) => {
-        state.status = 'succeeded';
-        state.user = action.payload.user;
-        state.token = action.payload.token;
-      })
-      .addCase(loginUser.rejected, (state, action) => {
-        state.status = 'failed';
-        state.error = action.payload ?? 'Login failed';
-      });
-  },
+  name: 'auth',
+  initialState,
+  reducers: {
+    clearError(state) {
+      // Looks like changing the state directly, but Toolkit (through a library called Immer)
+      // turns this into a safe copy
+      state.error = null;
+    },
+    updateProfile(state, action: PayloadAction<Partial<User>>) {
+      if (state.user) {
+        Object.assign(state.user, action.payload);
+      }
+    },
+  },
+  // Responses to the async sign-in steps
+  extraReducers: (builder) => {
+    builder
+      .addCase(loginUser.pending, (state) => {
+        state.status = 'loading';
+        state.error = null;
+      })
+      .addCase(loginUser.fulfilled, (state, action) => {
+        state.status = 'succeeded';
+        state.user = action.payload.user;
+        state.token = action.payload.token;
+      })
+      .addCase(loginUser.rejected, (state, action) => {
+        state.status = 'failed';
+        state.error = action.payload ?? 'Login failed';
+      });
+  },
 });
 ```
- 
-### 3.2 State Shape Guidelines
- 
-- Keep state flat and normalized — avoid deeply nested objects.
-- Use a consistent status enum: `'idle' | 'loading' | 'succeeded' | 'failed'`.
-- Store server-provided IDs, not client-generated ones where possible.
-- Only store data in Redux that is truly global or shared across screens.
-- Keep form state, animation state, and UI-only state in local component state.
- 
-### 3.3 When to Use Redux vs Local State
- 
-| Use Redux For | Use Local State For |
-|--------------|-------------------|
-| Authentication & session data | Form input values |
-| Cached server data shared across screens | UI toggles (modal open, accordion expanded) |
-| App-wide settings and preferences | Animation and gesture state |
-| Data needed after navigation | Ephemeral data (tooltips, hover state) |
-| Offline-capable data | Scroll position |
- 
+
+### 3.2 How to shape the data
+
+- Keep it flat. Avoid objects nested deep inside objects.
+- Use the same four statuses everywhere: `'idle' | 'loading' | 'succeeded' | 'failed'`.
+- Store IDs the server gave you, not ones made up in the app, where possible.
+- Only put data in Redux if many screens need it.
+- Keep form input, animations and anything that only affects one screen's look in that component's own
+  state.
+
+### 3.3 Redux or the component's own state?
+
+| Put in Redux | Keep in the component |
+|--------------|-----------------------|
+| Sign-in and session data | What's typed in a form |
+| Server data several screens use | Whether a panel is open or a section expanded |
+| App-wide settings | Animation and gesture state |
+| Data needed after moving to another screen | Short-lived things (tooltips, hover) |
+| Data that must work offline | Scroll position |
+
 ---
- 
-## 4. Selectors & Memoization
- 
-Well-designed selectors are crucial for performance in React Native. They prevent unnecessary re-renders by ensuring components only update when their specific data changes.
- 
-### 4.1 Selector Patterns
- 
+
+## 4. Selectors
+
+A selector is a function that reads a piece of the store. Good selectors matter for speed in React
+Native: a component only redraws when the specific data it selected changes.
+
+### 4.1 Patterns
+
 ```typescript
-// features/products/productSelectors.ts
+// features/prices/pricesSelectors.ts
 import { createSelector } from '@reduxjs/toolkit';
 import { RootState } from '../../store';
- 
-// Simple selectors (no memoization needed)
-export const selectProducts = (state: RootState) => state.products.items;
-export const selectProductStatus = (state: RootState) => state.products.status;
- 
-// Derived data selectors (memoized with createSelector)
-export const selectActiveProducts = createSelector(
-  [selectProducts],
-  (products) => products.filter((p) => p.isActive)
+
+// Plain selectors: they only read, so no caching needed
+export const selectAlerts = (state: RootState) => state.alerts.items;
+export const selectAlertsStatus = (state: RootState) => state.alerts.status;
+
+// Selectors that work something out: cached with createSelector, so the result is only
+// recalculated when selectAlerts returns something new
+export const selectActiveAlerts = createSelector(
+  [selectAlerts],
+  (alerts) => alerts.filter((a) => a.isActive)
 );
- 
-// Parameterized selectors
-export const selectProductById = createSelector(
-  [selectProducts, (_state: RootState, id: string) => id],
-  (products, id) => products.find((p) => p.id === id)
+
+// Selectors that take an extra value
+export const selectAlertById = createSelector(
+  [selectAlerts, (_state: RootState, id: string) => id],
+  (alerts, id) => alerts.find((a) => a.id === id)
 );
 ```
- 
-### 4.2 Selector Rules
- 
-1. Always co-locate selectors with their slice in a dedicated selectors file.
-2. Use `createSelector` for any computation or filtering — never derive data inside components.
-3. Keep selectors small and composable — build complex selectors from simpler ones.
-4. Never create new object or array references inside selectors unless using `createSelector`.
-5. Prefer multiple fine-grained `useAppSelector` calls over a single call returning a large object.
- 
-> ❌
-**Common Anti-Pattern:** Calling `useAppSelector(state => ({ a: state.x.a, b: state.y.b }))` creates a new object every render, causing unnecessary re-renders. Use separate `useAppSelector` calls or `createSelector` instead.
- 
+
+### 4.2 Rules
+
+1. Keep selectors next to their slice, in a selectors file.
+2. Use `createSelector` for anything that filters or calculates. Never work data out inside a
+   component.
+3. Keep selectors small, and build bigger ones out of smaller ones.
+4. Never create a new object or array inside a selector, unless it's wrapped in `createSelector`.
+5. Prefer several small `useAppSelector` calls over one call returning a big object.
+
+> ❌ **Common mistake:** `useAppSelector(state => ({ a: state.x.a, b: state.y.b }))` creates a new
+> object on every draw, so the component redraws every time. Use two `useAppSelector` calls, or
+> `createSelector`.
+
 ---
- 
-## 5. Async Operations & Data Fetching
- 
-Choose the right async pattern based on the complexity and caching needs of your data operations.
- 
-### 5.1 RTK Query (Preferred for Server State)
- 
-RTK Query should be the default choice for any server data fetching. It provides automatic caching, request deduplication, background refetching, and optimistic updates out of the box.
- 
-> **In this repo, build on `apiBaseQuery` (`src/store/api/apiBaseQuery.ts`), never
-> `fetchBaseQuery`.** The generic example below is the library's shape, not ours:
-> `fetchBaseQuery` bypasses the axios interceptors that attach the token, unwrap the
-> `ApiResponse<T>` envelope, and raise the `SESSION_EXPIRED` overlay. See
-> [scheduling-rtk-query-plan.md](scheduling-rtk-query-plan.md) ›
-*Phase 3*.
- 
+
+## 5. Async work and fetching data
+
+Pick the pattern that matches how complex the work is and whether its results should be cached.
+
+### 5.1 RTK Query (the default for server data)
+
+RTK Query should be the first choice for fetching server data. It caches results, merges identical
+requests made at the same time, refetches in the background, and can show a change before the server
+confirms it.
+
+> **The original app built on its own `apiBaseQuery` (`src/store/api/apiBaseQuery.ts`), never on
+> `fetchBaseQuery`.** Its reason: `fetchBaseQuery` skips the shared request code that attached the
+> login token, unwrapped the `ApiResponse<T>` wrapper, and showed a "session expired" screen. Neither
+> `apiBaseQuery` nor the plan it pointed to (`scheduling-rtk-query-plan.md`) exists in this
+> repository. The example below is the library's standard shape. Aurum will need the same kind of
+> wrapper, because every answer from the API comes inside `ApiResponse<T>`.
+
 ```typescript
 // services/api.ts
 import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
- 
+
 export const apiSlice = createApi({
-  reducerPath: 'api',
-  baseQuery: fetchBaseQuery({
-    baseUrl: Config.API_URL,
-    prepareHeaders: (headers, { getState }) => {
-      const token = (getState() as RootState).auth.token;
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      return headers;
-    },
-  }),
-  tagTypes: ['Product', 'User', 'Order'],
-  endpoints: () => ({}), // Inject endpoints in feature files
+  reducerPath: 'api',
+  baseQuery: fetchBaseQuery({
+    baseUrl: Config.API_URL,
+    // Attach the login token to every request
+    prepareHeaders: (headers, { getState }) => {
+      const token = (getState() as RootState).auth.token;
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      return headers;
+    },
+  }),
+  // Labels used to know which cached results to refetch after a change
+  tagTypes: ['Price', 'Alert', 'PriceSource'],
+  endpoints: () => ({}), // each feature adds its own endpoints in its own file
 });
 ```
- 
-### 5.2 createAsyncThunk (For Complex Operations)
- 
-Use `createAsyncThunk` for operations that need side effects beyond simple data fetching, such as multi-step workflows, local storage writes, or navigation triggers.
- 
+
+### 5.2 `createAsyncThunk` (for more involved work)
+
+Use `createAsyncThunk` when the work does more than fetch data: several steps in a row, saving to the
+phone, or moving to another screen.
+
 ```typescript
 // features/auth/authThunks.ts
 import { createAsyncThunk } from '@reduxjs/toolkit';
- 
+
 export const loginUser = createAsyncThunk(
-  'auth/login',
-  async (credentials: LoginRequest, { rejectWithValue }) => {
-    try {
-      const response = await authApi.login(credentials);
-      await SecureStore.setItemAsync('token', response.token);
-      return response;
-    } catch (error) {
-      return rejectWithValue(parseApiError(error));
-    }
-  }
+  'auth/login',
+  async (credentials: LoginRequest, { rejectWithValue }) => {
+    try {
+      const response = await authApi.login(credentials);
+      // Keep the token in the phone's encrypted storage
+      await SecureStore.setItemAsync('token', response.token);
+      return response;
+    } catch (error) {
+      return rejectWithValue(parseApiError(error));
+    }
+  }
 );
 ```
- 
-### 5.3 Decision Matrix
- 
-| Scenario | Recommended Pattern | Reason |
-|----------|-------------------|--------|
-| CRUD operations on server data | RTK Query | Built-in caching & invalidation |
-| Authentication flows | createAsyncThunk | Complex side effects needed |
-| File upload with progress | createAsyncThunk | Progress tracking required |
-| Search with debouncing | RTK Query + skip | Automatic caching per query arg |
-| WebSocket real-time data | RTK Query streaming | Built-in lifecycle management |
- 
+
+### 5.3 Which to use
+
+| Situation | Use | Why |
+|-----------|-----|-----|
+| Reading, creating, updating and deleting server data | RTK Query | Caching and refetching built in |
+| Sign-in | `createAsyncThunk` | Several side effects |
+| File upload with a progress bar | `createAsyncThunk` | Needs progress tracking |
+| Search as you type | RTK Query, with `skip` until there's input | Caches each search separately |
+| Live data over a socket (such as live gold prices) | RTK Query streaming updates | Handles connecting and disconnecting |
+
 ---
- 
-## 6. React Native Performance
- 
-React Native has unique performance considerations compared to web React. Redux patterns must be adapted to minimize bridge crossings and prevent jank on lower-end devices.
- 
-### 6.1 FlatList Optimization
- 
+
+## 6. Speed in React Native
+
+React Native has its own speed concerns. Redux use needs to keep work off the main thread and avoid
+stutter on slower phones.
+
+### 6.1 Long lists (`FlatList`)
+
 ```typescript
-// Avoid: Re-rendering entire list on any state change
-const ProductList = () => {
-  const products = useAppSelector(selectActiveProducts);
-  const renderItem = useCallback(
-    ({ item }: { item: Product }) => <ProductCard product={item} />,
-    []
-  );
-  return (
-    <FlatList
-      data={products}
-      renderItem={renderItem}
-      keyExtractor={(item) => item.id}
-      removeClippedSubviews={true}
-      maxToRenderPerBatch={10}
-      windowSize={5}
-    />
-  );
+const AlertList = () => {
+  const alerts = useAppSelector(selectActiveAlerts);
+  // Same function every draw, so list rows aren't redrawn for no reason
+  const renderItem = useCallback(
+    ({ item }: { item: PriceAlert }) => <AlertCard alert={item} />,
+    []
+  );
+  return (
+    <FlatList
+      data={alerts}
+      renderItem={renderItem}
+      keyExtractor={(item) => item.id}
+      removeClippedSubviews={true}  // drop rows that are off screen
+      maxToRenderPerBatch={10}
+      windowSize={5}
+    />
+  );
 };
- 
-// ProductCard should be React.memo'd
-const ProductCard = React.memo(({ product }: Props) => {
-  // Renders only when this specific product changes
-  return <View>...</View>;
+
+// React.memo: only redraw a card when its own alert changes
+const AlertCard = React.memo(({ alert }: Props) => {
+  return <View>...</View>;
 });
 ```
- 
-### 6.2 Performance Rules
- 
-1. Use `React.memo` on all list item components connected to Redux.
-2. Prefer entity adapter's normalized shape for large collections.
-3. Use `shallowEqual` as the equality function when selecting objects.
-4. Avoid dispatching actions in rapid succession — batch with `unstable_batchedUpdates` or use RTK listeners.
-5. Profile with React DevTools and Flipper before optimizing. Measure, don't guess.
-6. Keep the serializable middleware enabled in `__DEV__` only to avoid production overhead.
- 
-### 6.3 Entity Adapter for Normalized State
- 
-When managing collections of items (users, products, messages), use `createEntityAdapter` to automatically normalize state and generate optimized CRUD reducers.
- 
+
+### 6.2 Rules
+
+1. Wrap every list row that reads from Redux in `React.memo`.
+2. For big collections, use the flat shape that `createEntityAdapter` gives (below).
+3. When selecting an object, compare with `shallowEqual` (compare each field, not the object itself).
+4. Don't send many actions back to back. Group them with `unstable_batchedUpdates`, or use RTK
+   listeners.
+5. Measure with React DevTools and Flipper before optimising. Measure, don't guess.
+6. Only run the "can this be turned into JSON" check while developing (`__DEV__`), to avoid slowing
+   down the released app.
+
+### 6.3 `createEntityAdapter` for collections
+
+For collections (alerts, users, messages), `createEntityAdapter` stores items by ID in a flat shape,
+and gives you ready-made functions to add, update and remove them.
+
 ```typescript
 import { createEntityAdapter } from '@reduxjs/toolkit';
- 
-const productsAdapter = createEntityAdapter<Product>({
-  sortComparer: (a, b) => a.name.localeCompare(b.name),
+
+const alertsAdapter = createEntityAdapter<PriceAlert>({
+  sortComparer: (a, b) => a.name.localeCompare(b.name),
 });
- 
-const initialState = productsAdapter.getInitialState({
-  status: 'idle' as const,
+
+const initialState = alertsAdapter.getInitialState({
+  status: 'idle' as const,
 });
- 
-// Generates { ids: [], entities: {} } shape
-// Provides: addOne, addMany, updateOne, removeOne, setAll, etc.
+
+// Gives the shape { ids: [], entities: {} }
+// and the functions addOne, addMany, updateOne, removeOne, setAll, and more
 ```
- 
+
 ---
- 
-## 7. Middleware & Side Effects
- 
-### 7.1 RTK Listener Middleware (Preferred)
- 
-Use `listenerMiddleware` for reactive side effects that respond to dispatched actions. It replaces redux-saga and redux-observable with a simpler, more testable API.
- 
+
+## 7. Side effects
+
+A side effect is anything an action causes beyond changing the store: saving to the phone, moving
+screens, calling the server.
+
+### 7.1 RTK listeners (first choice)
+
+Use `listenerMiddleware` to run code when a particular action happens. It replaces older libraries
+(redux-saga, redux-observable) with something simpler and easier to test.
+
 ```typescript
 import { createListenerMiddleware } from '@reduxjs/toolkit';
- 
+
 export const listenerMiddleware = createListenerMiddleware();
- 
+
+// When sign-out finishes: delete the token, clear cached server data, go to the sign-in screen
 listenerMiddleware.startListening({
-  actionCreator: logoutUser.fulfilled,
-  effect: async (_action, listenerApi) => {
-    await SecureStore.deleteItemAsync('token');
-    listenerApi.dispatch(apiSlice.util.resetApiState());
-    navigationRef.reset({ index: 0, routes: [{ name: 'Login' }] });
-  },
+  actionCreator: logoutUser.fulfilled,
+  effect: async (_action, listenerApi) => {
+    await SecureStore.deleteItemAsync('token');
+    listenerApi.dispatch(apiSlice.util.resetApiState());
+    navigationRef.reset({ index: 0, routes: [{ name: 'Login' }] });
+  },
 });
 ```
- 
-### 7.2 Middleware Selection Guide
- 
-| Use Case | Tool | Notes |
-|----------|------|-------|
-| React to actions | Listener middleware | First choice for side effects |
-| Analytics & logging | Custom middleware | Lightweight, single-purpose |
-| Complex async workflows | Listener middleware | Supports cancellation & forking |
-| Token refresh | baseQuery wrapper | RTK Query's automatic retry |
- 
+
+### 7.2 Which tool for which job
+
+| Job | Tool | Notes |
+|-----|------|-------|
+| React to an action | Listener | First choice |
+| Analytics and logging | A small custom middleware | One job only |
+| Multi-step async work | Listener | Can be cancelled, and can start sub-tasks |
+| Refreshing an expired login token | A wrapper around RTK Query's base setup | Retries the request after refreshing |
+
 ---
- 
-## 8. Testing Strategy
- 
-Test Redux logic independently from components. Slices, selectors, and thunks should have dedicated unit tests.
- 
-### 8.1 Testing Priorities
- 
-| Layer | Priority | Tool | Coverage Target |
-|-------|----------|------|----------------|
-| Reducers / Slices | High | Jest | 90%+ |
+
+## 8. Testing
+
+Test Redux code separately from components. Slices, selectors and thunks each get their own tests.
+
+### 8.1 What to test first
+
+MSW (Mock Service Worker) fakes the server for tests. RNTL is React Native Testing Library.
+
+| What | Priority | Tool | How much to cover |
+|------|----------|------|-------------------|
+| Slices | High | Jest | 90%+ |
 | Selectors | High | Jest | 90%+ |
 | Thunks | Medium | Jest + MSW | 80%+ |
-| Connected components | Medium | RNTL + mock store | Critical paths |
+| Components that read from Redux | Medium | RNTL + a test store | The important paths |
 | RTK Query endpoints | Medium | Jest + MSW | 80%+ |
- 
-### 8.2 Slice Test Example
- 
+
+### 8.2 A slice test
+
 ```typescript
 describe('authSlice', () => {
-  it('should set loading state on login pending', () => {
-    const state = authReducer(initialState, loginUser.pending('', credentials));
-    expect(state.status).toBe('loading');
-    expect(state.error).toBeNull();
-  });
- 
-  it('should store user on login success', () => {
-    const payload = { user: mockUser, token: 'abc123' };
-    const state = authReducer(
-      initialState,
-      loginUser.fulfilled(payload, '', credentials)
-    );
-    expect(state.user).toEqual(mockUser);
-    expect(state.status).toBe('succeeded');
-  });
+  it('sets loading while sign-in is in progress', () => {
+    const state = authReducer(initialState, loginUser.pending('', credentials));
+    expect(state.status).toBe('loading');
+    expect(state.error).toBeNull();
+  });
+
+  it('stores the user when sign-in works', () => {
+    const payload = { user: mockUser, token: 'abc123' };
+    const state = authReducer(
+      initialState,
+      loginUser.fulfilled(payload, '', credentials)
+    );
+    expect(state.user).toEqual(mockUser);
+    expect(state.status).toBe('succeeded');
+  });
 });
 ```
- 
+
 ---
- 
-## 9. Persistence & Offline Support
- 
-### 9.1 Redux Persist Configuration
- 
-Use redux-persist with a whitelist approach — explicitly opt in slices rather than persisting everything. Use secure storage for sensitive data like tokens.
- 
+
+## 9. Saving to the phone and working offline
+
+### 9.1 Setting up redux-persist
+
+redux-persist saves parts of the store to the phone so they survive a restart. List the slices to
+save (an allow list), rather than saving everything. Use encrypted storage for anything sensitive,
+like login tokens.
+
 ```typescript
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { persistReducer, persistStore } from 'redux-persist';
 import * as SecureStore from 'expo-secure-store';
- 
+
 const persistConfig = {
-  key: 'root',
-  storage: AsyncStorage,
-  whitelist: ['settings', 'offlineQueue'],
-  blacklist: ['api'],  // Never persist RTK Query cache
-  version: 1,
-  migrate: createMigrate(migrations, { debug: __DEV__ }),
+  key: 'root',
+  storage: AsyncStorage,
+  whitelist: ['settings', 'offlineQueue'],  // only these slices are saved
+  blacklist: ['api'],                       // never save RTK Query's cache
+  version: 1,
+  // Upgrades saved data when the store's shape changes between versions
+  migrate: createMigrate(migrations, { debug: __DEV__ }),
 };
 ```
- 
-### 9.2 Persistence Rules
- 
-- Never persist RTK Query cache — it has its own cache management.
-- Always use a whitelist, never rely on blacklist alone.
-- Store tokens in SecureStore (Expo) or Keychain, never in AsyncStorage.
-- Version your persist config and write migrations for state shape changes.
-- Set a reasonable timeout for rehydration in the loading screen.
- 
+
+### 9.2 Rules
+
+- Never save RTK Query's cache. It manages its own.
+- Always list what to save. Never rely only on a list of what not to save.
+- Keep tokens in SecureStore (Expo) or the phone's Keychain, never in AsyncStorage, which isn't
+  encrypted.
+- Give the saved data a version number, and write an upgrade step whenever the store's shape changes.
+- Put a sensible time limit on loading saved data while the loading screen shows.
+
 ---
- 
-## 10. Common Anti-Patterns to Avoid
- 
-| Anti-Pattern | Correct Approach |
-|-------------|-----------------|
-| Storing everything in Redux | Only global or shared state belongs in Redux |
-| Mutating state outside Immer (in createSlice) | Always use Immer's draft state inside reducers |
-| Putting non-serializable values in state (Date, Map, Set) | Convert to plain objects/arrays or ISO strings |
-| Dispatching inside reducers | Use listener middleware or thunks for side effects |
-| Importing the store directly in components | Always use hooks (useAppSelector, useAppDispatch) |
-| Writing manual action type constants | Use createSlice — it generates action creators automatically |
-| Large monolithic slices | Split into focused slices by feature domain |
-| Using connect() HOC | Prefer hooks API (useSelector, useDispatch) in all new code |
- 
-> ✅
-**Golden Rule:** If you find yourself writing boilerplate, you are probably not using Redux Toolkit correctly. RTK exists to eliminate repetitive code — if something feels tedious, check the RTK docs for a built-in solution.
- 
+
+## 10. Common mistakes
+
+| Mistake | Instead |
+|---------|---------|
+| Putting everything in Redux | Only data many screens share |
+| Changing state outside a Toolkit reducer | Only change it inside reducers, where Immer makes it safe |
+| Storing values that can't be turned into JSON (`Date`, `Map`, `Set`) | Use plain objects, arrays, or date strings (ISO format) |
+| Sending actions from inside a reducer | Use listeners or thunks for side effects |
+| Importing the store directly in a component | Always use `useAppSelector` and `useAppDispatch` |
+| Writing action name constants by hand | Use `createSlice`; it makes them for you |
+| One huge slice | Split into small slices by feature |
+| The old `connect()` wrapper | Use the hooks in all new code |
+
+> ✅ **Rule of thumb:** if you find yourself writing the same code over and over, you're probably not
+> using Redux Toolkit as intended. It exists to remove repetitive code. If something feels tedious,
+> check the Toolkit docs for a built-in way.
