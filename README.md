@@ -1,167 +1,183 @@
 # Aurum
 
-Gold price intelligence platform.
+Aurum tracks the price of gold. It asks outside price services for the current price on a regular
+schedule, stores every answer, and will later show those prices in an app.
 
-**Current state: the foundation is complete, and Phase 1 items 0–3 are done.**
+**Where things stand: the groundwork is done, and Phase 1 items 0 to 3 are finished.**
 
-Built and verified: the schema and first migration against `timescale/timescaledb-ha:pg17`, with
-`price_ticks` a hypertable on daily chunks under a 30-day retention policy and pgvector present
-(D-3, D-4); `PostgresQuotaGovernor`, durable and race-safe, with per-source budgets resolved from
-configuration rather than a fall-through default (D-7, D-9); a budget that survives a real
-`docker compose restart api`, not just a fresh `DbContext` in a test; and
-`docker compose down -v && docker compose up --build` from an empty volume reaching a healthy `api`
-with `/health` and `/health/ready` both 200. Real ticks have landed from the live GoldAPI account,
-with the mid sanity-checked against a public spot quote (2026-09-07). The test suite is green.
+What has been built and checked by hand:
 
-### The three sources
+- The database is set up. Prices are stored in a table called `price_ticks`. You read and write it
+  like any other table, but behind the scenes a database add-on called TimescaleDB stores each day's
+  prices separately. That lets the database delete prices older than 30 days by throwing away whole
+  days at once, which is much faster than finding and deleting old rows one by one. This cleanup
+  runs on its own; no code in this app does it.
+- A request counter keeps track of how many requests the app has sent to each price service this month,
+  so it never goes over the free allowance. The count is saved in the database, so it survives a
+  restart. I tested that with a real restart, not only in the test suite.
+- Starting from a completely empty database, `docker compose up` brings the whole system up, and both
+  health-check pages (`/health` and `/health/ready`) answer "OK".
+- Real prices have come in from the live GoldAPI account. On 2026-09-07 I compared one against a
+  public gold price and they matched.
+- All tests pass.
 
-Three free tiers rather than the paid GoldAPI upgrade, so the aggregate cadence is usable at $0 and
-the failover chain has something real to fail over to (D-11).
+The numbers in brackets, like (D-7), point to entries in the decision log,
+`ops/decisions/decisions.md`. Each entry explains a choice I made and what I turned down.
 
-| Priority | Code | Free tier | Outage coverage at 15 min | Notes |
+## The three price services
+
+I use the free plans of three services instead of paying for one. That gets prices often enough
+at no cost, and gives the app somewhere to turn when one service stops answering (D-11).
+
+| Order tried | Service | Free allowance | How long it can cover for the others | Notes |
 |---|---|---|---|---|
-| 1 | `api-ninjas` | ~10,000 / month | primary — funds the cadence | mid only, **gold only** |
-| 2 | `goldapi.io` | 100 / calendar month | 1.0 days | bid + ask + provider mid |
-| 3 | `metalprice-api` | ~1,000 / month | 10.4 days | mid only; query-parameter auth; quotes ounces per USD |
+| 1st | `api-ninjas` | about 10,000 requests a month | it is the main one | one price only; **gold only** |
+| 2nd | `goldapi.io` | 100 requests a calendar month | about 1 day | buy price, sell price and a middle price |
+| 3rd | `metalprice-api` | about 1,000 requests a month | about 10 days | one price only; the API key goes in the web address; its answer also has an upside-down ounces-per-dollar figure, which the app ignores |
 
-Coverage assumes a healthy backup spending one request per poll. A flaky one that needs its retries
-burns through the same budget up to three times faster — see `MaxAttempts` below.
+"How long it can cover" assumes the backup works on the first try. A backup that keeps failing and
+retrying uses up its allowance up to three times faster.
 
-**API Ninjas is primary because it is the only tier that funds a useful cadence.** At fifteen
-minutes and three attempts the feed needs ~8,928 requests in a worst-case 31-day period — the same
-figure five minutes implied when a poll was assumed to cost one request, which is what item 4
-corrected. GoldAPI's 100 funds one poll every 22h19m, at which the delta engine's 1m and 5m windows
-hold one sample each and return `null` forever. The cost of the order is that the normal path carries **mid only** — GoldAPI's bid/ask
-now appear only while it is serving as a fallback, and `Bid`/`Ask` are not comparable across
-sources anyway (D-1 note), so they are per-source readings rather than a feed-wide spread.
+**Why API Ninjas goes first:** it is the only free plan big enough to let the app check the price every 15
+minutes. Every check can take up to three tries, and each try counts against the allowance, so a
+31-day month can need about 8,928 requests. GoldAPI's 100 requests would allow one check roughly
+every 22 hours. That is too slow for the "how much did the price move in the last 1 or 5 minutes"
+feature planned for later, which would never have enough readings to work.
 
-Each keeps its own `api_quota_windows` ledger. They register through one `Program.AddPriceSource<T>`
-helper — every registration in the application is in `Program.cs` (D-5) — which attaches the
-resilience pipeline and the `QuotaHandler` as part of registering the client. A source registered
-without the handler compiles, works, and spends its budget uncounted, which is the one wiring
-mistake in this module that produces no symptom at all; `ResilienceWiringTests` drives that helper
-directly for exactly that reason. Sources resolve as `IEnumerable<IPriceSource>` rather than through
-keyed DI, so the chain never carries its own list of key strings (D-12), and `FailoverPriceFeed`
-orders them from configuration.
+The downside: API Ninjas gives one price, not separate buy and sell prices. The app only sees buy and sell
+prices when GoldAPI is standing in. Those prices can't be compared across services anyway (see the
+note under D-1).
 
-**The aggregate is not a budget.** Only the *primary* — the enabled entry with the lowest
-`Priority` — has to fund the cadence for a whole period; backups are exempt and may exhaust
-mid-outage, where the governor counts and clamps them cleanly (D-10). So the cadence ceiling is set
-by whichever source sits at Priority 1, not by the ~11,100 total. The other ~11,000 buy outage
-coverage, not speed.
+**Only the first service has to last the whole month.** The backups are allowed to run out during a
+long outage. When they do, the counter notices and stops sending them requests (D-10). So how often
+the app checks the price is set by the first service alone. The extra 11,000 or so requests from the
+others buy time during an outage, not faster updates.
 
-GoldAPI's free-tier facts are checked against the account page rather than the docs — **100 requests
-per calendar month, UTC** — so its `MonthlyRequestLimit` and `QuotaPeriod` reflect measured values,
-and `PriceSourcesOptionsValidator` refuses to boot a cadence the primary cannot fund, naming the
-minimum interval that fits. D-8 keeps us on the free tier for development and makes the paid tier a
-gate on Phase 1 go-live, before anything user-facing ships. The tier is a configuration number and
-nothing branches on 100 (D-9 removed the last place that did), so moving up is two environment
-variables and a restart.
+### How much of this I have actually confirmed
 
-> **The other two tiers are taken from published documentation, not from an account page.** That
-> now matters more than it did: `api-ninjas` is the primary, so its 10,000 is the single number the
-> whole cadence rests on, and it is the one that has not been verified the way GoldAPI's 100 was.
-> If the real tier is lower, or resets on a rolling window rather than a calendar month, the
-> governor counts and clamps correctly against the *configured* number while the provider clamps
-> against a different one — the divergence shows up as `ProviderRejectedAt` on a row that still
-> reads as having budget. Confirming both against their account pages is worth doing before the
-> failover chain starts leaning on them.
+I checked GoldAPI's limit on the account page itself: **100 requests per calendar month, reset at
+midnight UTC on the 1st.** If you set a check interval that the first service can't afford for a
+whole month, the app refuses to start and tells you the shortest interval that would work. Moving to
+a paid plan later means changing two settings and restarting. No code depends on the number 100
+(D-8, D-9).
 
-### The failover chain (item 3, landed)
+> **The other two limits come from each service's published documentation. Nobody has checked them
+> on an account page.** That matters most for API Ninjas, because the whole schedule depends on its
+> 10,000. If the real limit is lower, or resets on a different day, the app's counter and theirs will
+> disagree. You would see it as a row in the counter table that says the app still has requests left but
+> also says the service turned it away. Check both account pages before relying on them.
 
-`PricePollingService` no longer picks a source. It asks `IPriceFeed` for a quote, and
-`FailoverPriceFeed` walks the chain: enabled sources in `Priority` order, ties broken on the source
-code, skipping any whose circuit is open, moving on immediately when one is out of quota, and
-returning the first quote anyone produces.
+## What happens when a service fails (item 3, done)
 
-- **`Enabled: false` now actually removes a source from the chain.** It previously changed nothing —
-  the poller selected straight off `IEnumerable<IPriceSource>`, which has no `Enabled` to filter on.
-- **One source running out of quota no longer idles the feed.** The poller sleeps only when *every*
-  source is spent, and then only until the *earliest* `ResetsAt`. A single fault or a single open
-  circuit keeps it on cadence, because both clear in minutes while a quota period can be a month.
-- **The circuit breaker is hand-rolled, not Polly's** (D-14). Every source parses its response body
-  *above* the handler chain, so a provider returning `200 OK` full of junk raises
-  `PriceSourceException` after the pipeline has already judged the request successful — a pipeline
-  breaker would sit at 0% failure while the chain spent a lease per poll on a dead provider. The
-  breaker lives in `FailoverPriceFeed`, where that exception is visible, and measures its break by
-  comparing two `TimeProvider` reads, so the whole machine is drivable on `FakeTimeProvider`.
-- **Circuit state is in-memory and never rehydrated**, which is the opposite of the governor's rule
-  one folder away and deliberately so. `price_sources.LastFailureAt` / `LastFailureReason` is its
-  operator-facing projection, written once per poll.
+The part of the app that checks the price on a schedule no longer picks a service itself. It asks
+for "a price", and a separate piece goes down the list:
 
-Two behaviour changes worth knowing about: success no longer clears `LastFailureReason` (it used to,
-while leaving `LastFailureAt` set, producing rows asserting a failure with no reason — compare the
-two timestamps to tell current from historical), and a source skipped for an open circuit writes
-nothing, so the fault that opened the circuit is not overwritten.
+1. Try the services in the order above, skipping any that are switched off in the settings.
+2. Skip any service that has failed several times recently. It gets a rest before the app tries it again.
+   This is called a **circuit breaker**, after the electrical kind: it "trips" to stop sending
+   requests to something broken.
+3. If a service has used up its monthly allowance, move straight to the next one.
+4. Return the first price any service gives back.
 
-Not built yet: the latest-quote cache, the delta engine, the SignalR hub and the REST endpoints —
-items 4 onward in `ops/phase-1-todo.md`.
+What changed as a result:
 
-**`PriceSource.IsEnabled`, the entity column, still has no reader and no writer.** Configuration is
-authoritative for whether a source is in the chain; the column is seeded and descriptive. Item 8
-serves `price_sources` over HTTP and is where it gets wired as a projection or deleted.
+- **Switching a service off in the settings now works.** Before, the setting existed but nothing
+  read it.
+- **One service running out no longer stops the whole feed.** The app only pauses when *every*
+  service has run out, and then only until the *first* one resets. A single failure or a single
+  tripped breaker doesn't pause anything, because those clear up in minutes and an allowance can
+  take a month to come back.
+- **I wrote my own circuit breaker instead of using the one in the Polly library** (D-14). Polly
+  (the library that handles the app's retries and timeouts) only sees whether the request went through. A
+  service can answer "OK" with a page of nonsense, and the app only finds that out later, when it tries to
+  read the price out of it. Polly's breaker would think that service was fine and keep paying for
+  requests to it. Mine sits where the nonsense is visible.
+- **The breaker's memory is thrown away on restart, on purpose.** The request counter works the
+  other way and is kept forever. The difference: a request the app spent is spent no matter what, but "this
+  service was failing" is only the app's own recent impression, and a fresh start has none. For people
+  looking at the database, the `price_sources` table shows each service's most recent failure and
+  why.
 
-The three spikes were closed without being run: D-1 and D-2 are declared rather than measured, and
-D-6 is deferred to Phase 2 planning. D-2 settles web on `lightweight-charts` and leaves the native
-chart, and what a web/native split would cost BO-4, to Phase 4 where a physical device is actually in
-play — simulator frame times will lie. Each entry says so in its own words; read the status line
-before treating any of them as a measured result.
+Two smaller changes:
 
-`ops/decisions/decisions.md` records what is decided and why, including the rejected alternatives —
-**D-1 through D-15** so far. `ops/phase-1-todo.md` is the remaining work, ordered so each item is
-verifiable when it is finished; D-16 onward are allocated there against the items that will take
-them.
+- A successful price no longer wipes out the reason for the last failure. Compare the time of the last
+  failure with the time of the last success to tell whether the failure is current.
+- When a service is skipped because its breaker is tripped, nothing is written, so the original
+  failure reason stays visible.
 
-## Layout
+**Not built yet:** the saved "latest price", the "how much did it move" feature, live updates to the
+app, and the web endpoints. Those are items 4 onward in `ops/phase-1-todo.md`.
+
+**The `IsEnabled` column in the `price_sources` table does nothing.** Nothing reads it and nothing
+writes it. The settings file decides which services are on. Item 8 will either hook the column up
+or delete it. Don't change it in the database and expect anything to happen.
+
+## Decisions that were made without testing
+
+Three early experiments were closed without being run. D-1 and D-2 are decisions I stated rather
+than measured, and D-6 is put off until Phase 2. D-2 picks `lightweight-charts` for charts on the web
+and leaves the phone version until Phase 4, when there is a real phone to test on. Phone simulators
+give misleading speed numbers. Each entry says this in its status line, so read that before treating
+one as a measured result.
+
+The decision log has **D-1 to D-15** so far. `ops/phase-1-todo.md` lists the remaining work in an
+order where each item can be checked when it is finished. Numbers D-16 and up are already assigned
+there to the items that will need them.
+
+## Where things are
 
 ```
-docker-compose.yml           postgres (timescale+pgvector), ollama, api
-ops/db/init/                 extension bootstrap, runs once on an empty volume
-ops/decisions/               decision log (D-1 onward, IDs cited from code)
-docs/                        architecture and convention guides
-src/Aurum.App.SharedKernel/        ApiResponse<T>, PageResult<T>, audit fields, SupportedSymbol
-src/Aurum.App.Infrastructure.Data/ AurumDbContext, entities, migrations, IUnitOfWork
+docker-compose.yml                 starts the database, Ollama (a local AI model) and the API
+ops/db/init/                       one-time database setup, runs only on an empty database
+ops/decisions/                     the decision log (D-1 onward; the code refers to these numbers)
+docs/                              guides on how the code is organised
+src/Aurum.App.SharedKernel/        small pieces every project uses
+src/Aurum.App.Infrastructure.Data/ the database: tables, changes to them, saving
 src/Aurum.App.Infrastructure.Pricing/
-  Sources/                   the three providers, the failover chain, the circuit breaker
-  Quota/                     the governor and its HTTP handler
-  Jobs/                      PricePollingService
-src/Aurum.App.Application/         CQRS contracts, pipeline behaviors, application logging
-src/Aurum.Api/                     Program.cs — every registration — and controllers
-src/Aurum.Api.Tests/               unit tests and integration tests against a real Postgres
-app/                         Expo scaffold; charting settled on lightweight-charts (D-2)
+  Sources/                         the three price services, the fallback order, the circuit breaker
+  Quota/                           the request counter
+  Jobs/                            the timer that checks the price
+src/Aurum.App.Application/         the rules for handling requests, and logging
+src/Aurum.Api/                     the web API; Program.cs sets everything up
+src/Aurum.Api.Tests/               tests, run against a real database
+app/                               the start of the mobile app; nothing much in it yet
 ```
 
-Five projects following the layer table in `docs/best-practices-api.md`, with two departures from it
-that D-5 records: a separate `Infrastructure.Pricing` for the external clients and the background
-job, and `Aurum.Api` referencing everything because it is the composition root.
+The code is split into five projects, based on the layout in `docs/best-practices-api.md`, with two
+differences recorded in D-5:
 
-**Every service registration is in `src/Aurum.Api/Program.cs`.** There is no `Add<Module>Module`
-extension method and no per-layer `ServiceCollectionExtensions`. D-5 was originally the
-folder-module seam and now records the reversal and what it costs.
+- The code that talks to outside price services and runs the timer has its own project,
+  `Infrastructure.Pricing`, because it doesn't fit the database project.
+- `Aurum.Api` can see every other project, because it is the one place where everything gets
+  connected together.
 
-`docs/best-practices.md` and `docs/best-practices-redux.md` describe a React Native admin
-application that does not exist in this repository — `app/` is an Expo scaffold. Treat them as the
-Phase 4 target, not as a description of anything importable today.
+**All of that connecting happens in one file: `src/Aurum.Api/Program.cs`.** No other file sets up
+services. D-5 explains why, and what that costs.
 
-## Running
+`docs/best-practices.md` and `docs/best-practices-redux.md` describe a finished app that doesn't
+exist here yet. `app/` is an empty starting point. Treat those two guides as the goal for Phase 4, not
+as a description of code you can use today.
+
+## Running it
 
 ```bash
-cp .env.example .env      # fill in POSTGRES_PASSWORD and the three provider API keys
+cp .env.example .env      # fill in the database password and the three API keys
 docker compose up --build
 ```
 
-The API applies migrations at startup. `/health` is liveness, `/health/ready` gates on Postgres.
+On startup the API brings the database up to date by itself. `/health` tells you the API is running.
+`/health/ready` also checks it can reach the database.
 
-Every provider key is `[Required]`, and `appsettings.json` ships each `ApiKey` as the empty string
-on purpose: a missing key fails the process at boot rather than spending the month one 401 at a
-time. A placeholder there would satisfy `[Required]` and put the hole straight back.
+**Every API key is required.** The settings file ships each key blank on purpose. A missing key stops
+the app at startup. Without that, the app would start fine and then be turned away by the service
+on every request for a month, and every turned-away request still counts against the allowance. A
+fake key in the settings file would bring that problem back.
 
-Startup migration and `PricePollingService` both assume a **single instance**. Both are wrong the
-moment the API scales out — the poller would double-spend the quota, and two instances would race
-the migration.
+**Only run one copy of the API.** If two copies ran, both would check prices and spend the allowance
+twice, and both would try to update the database at the same moment.
 
-Requires Docker access. If `docker ps` says permission denied, add yourself to the `docker` group
-(`sudo usermod -aG docker $USER`) and log back in — nothing here runs without it.
+You need permission to use Docker. If `docker ps` says "permission denied", run
+`sudo usermod -aG docker $USER` and log out and back in. Nothing here works without it.
 
 ## Tests
 
@@ -169,94 +185,99 @@ Requires Docker access. If `docker ps` says permission denied, add yourself to t
 dotnet test
 ```
 
-76 tests. `SourceCircuitTests` and `FailoverPriceFeedTests` need **no container** and run in
-milliseconds — the payoff of a breaker that measures time by comparing two `TimeProvider` reads
-instead of holding a timer. `ShippedConfigurationTests` binds the API's real `appsettings.json` and runs the validator
-over it, because every other test here builds configuration in memory — which is how a five-minute
-cadence shipped against a 100-request primary and failed only at `docker compose up`. Integration
-tests spin up `timescale/timescaledb-ha:pg17` via Testcontainers rather than
-mocking: hypertables and vector columns behave differently enough from vanilla Postgres that a mock
-would validate nothing. One container per collection, migrated once; tests clean up their own rows.
+There are 76 tests. Most of them start a real copy of the database in Docker rather than a fake one,
+because the special table types the app uses behave differently from a plain database and a fake would
+prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
-`QuotaGovernorTests` and `QuotaHandlerTests` are the quota subsystem's specification — including
-`Concurrent_acquires_never_oversubscribe`, which races 40 callers on separate `DbContext`s against a
-budget of 10.
+Tests worth knowing about:
 
-`ResilienceWiringTests` calls the production registration, `Program.AddPriceSource<T>`, and swaps
-only the primary handler for a counting stub. The subject is the order of two lines inside that
-method — the resilience pipeline above `QuotaHandler` — so hand-composing the chain in the test
-would re-declare that order and assert the test agrees with itself. On its first run it found that
-the retry predicate held only exception clauses and so never retried a failing status code at all: a
-provider answering 503 all day was never retried, and the strategy read as configured while doing
-nothing.
+- **The circuit breaker and fallback tests** (`SourceCircuitTests`, `FailoverPriceFeedTests`) don't
+  need Docker and finish in a few milliseconds. That's because the breaker reads the time from a clock
+  the tests can control, instead of setting a real timer.
+- **`ShippedConfigurationTests`** checks the real settings file. Every other test makes up its own
+  settings, which is how a setting that the app couldn't afford once shipped and only failed when the
+  app started for real.
+- **`QuotaGovernorTests` and `QuotaHandlerTests`** describe exactly how the request counter should
+  behave. One of them sends 40 requests at the same moment against a limit of 10, to prove none slip
+  through.
+- **`ResilienceWiringTests`** checks that every retry is counted against the allowance. It uses the
+  real setup code from `Program.cs` rather than rebuilding it, because the thing being tested is the
+  order of two lines in that code. The first time it ran it found that the app never retried when a
+  service answered with an error code. The retry setting looked right and did nothing.
 
-Some of those tests exist to hold a decision in place rather than to catch a bug. "No refunds on a
-failed request" is enforced by nothing in the code except a `catch` block that isn't there, so
-`Transport_failure_still_spends_the_lease` is what makes reintroducing one fail out loud. Deleting a
-test like that because it "tests nothing" removes the guard, not the redundancy.
+**Some tests guard a decision, not a bug.** For example, the app never gives back a request that failed,
+because the service still counts it. Nothing in the code says so; the rule is simply that there is
+no code to give it back. `Transport_failure_still_spends_the_lease` is what makes adding that code
+fail loudly. If you delete a test like that because "it tests nothing", you remove the guard.
 
-**Known flake in the fixture.** `PostgresFixture` waits on `pg_isready`, which reports the server is
-accepting connections before Patroni has finished creating `aurum_test`. When it loses that race
-every test in the collection fails at setup with `database "aurum_test" does not exist`. A re-run
-passes. The wait strategy needs to check for the database, not the server.
+**Known random failure.** The tests sometimes start before the test database has finished being
+created. When that happens, every test in the group fails with `database "aurum_test" does not
+exist`. Running them again works. The fix is to wait for the database itself, not just the database
+server.
 
-## Why the quota governor matters
+## Why the request counter matters
 
-Every source here bills on a period quota, and the smallest is 100 requests a month. An in-memory
-rate limiter that resets when the container restarts can spend a month of requests in an afternoon,
-and every individual request looks fine while it happens. Accounting is therefore durable (Postgres)
-and enforced at the HTTP boundary as a `DelegatingHandler` — above it, Phase 1's retries and failover
-chain would spend budget without being counted.
+Every service the app uses limits how many requests it gets per month, and the smallest limit is 100. A
+counter kept only in memory starts from zero on every restart. It could spend a month of requests in
+an afternoon, and each single request would look fine while it happened. So:
 
-**The governor is per-source and knows nothing about any particular provider.** It takes a source
-code, reads that source's `MonthlyRequestLimit` and `QuotaPeriod` from configuration, and accounts
-against them. There is no shared budget, no default budget, and no branch on a provider name
-anywhere in it — `RequireByCode` throws on an unconfigured source rather than guessing, because a
-fabricated budget is indistinguishable downstream from a real one (D-9). Two period shapes are
-supported, chosen per source: `CalendarMonthUtc` resets at 00:00 UTC on the first, and
-`RollingThirtyDays` resets every 30 days from that source's own `PeriodAnchor` — providers really do
-differ on this, and rolling our counter on a different day from theirs makes the ledger and the
-account disagree with nothing in either saying so.
+- **The count is saved in the database.**
+- **It's checked on the way out the door.** The counter sits just before the request leaves the app,
+  underneath the retries and the fallback logic. If it sat any higher, retries would slip past it
+  uncounted.
 
-The counter lives in `api_quota_windows`, **one row per (source, accounting period)** — so the three
-sources hold three independent ledgers that clamp independently, and one exhausting its budget says
-nothing about the others. Acquiring a request is a single
-`INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`, so the budget check and the increment happen
-inside one row lock — a `SELECT` followed by an `UPDATE` leaves a gap where two callers both see the
-last request available. Budget returns at a period boundary because the period key changes and the
-next acquire creates a fresh row; nothing is scheduled and nothing is reset, and spent rows are kept
-as history.
+**Each service is counted separately, and the counter knows nothing about any particular service.**
+It looks up that service's limit and reset schedule in the settings. There is no shared limit and no
+default. If a service has no settings, the counter stops with an error rather than guessing, because
+a guessed limit looks exactly like a real one to everything downstream (D-9).
 
-When a provider rejects us for quota, the clamp is written to that source's row as
-`ProviderRejectedAt` and never by moving the counter — so a row can read "0 used of 10,000,
-rejected," and that contradiction is the point. It is the only evidence that our count and that
-provider's have diverged, which is worth more than making `Limit - Used` arithmetically tidy.
-`QuotaStatus.Limit - Used` is therefore not remaining budget: once `ProviderRejected` is set,
-remaining is zero whatever the counter says.
+Services reset on different schedules, and each one is set to match its provider:
 
-`PollInterval`, `MonthlyRequestLimit` and `PriceFeed:Resilience:MaxAttempts` are coupled, but only
-through the **primary**: `PriceSourcesOptionsValidator` fails the process at boot on a cadence the
-lowest-`Priority` enabled source cannot fund for a period, and tells you the minimum interval that
-fits. Changing one usually means changing another — or changing which source is primary. Holding
-*every* source to the full period reads as the safe rule and is worse: it pegs the cadence to the
-smallest budget in the file, so each added provider could only slow the feed (D-10).
+- **Calendar month:** resets at midnight UTC on the 1st.
+- **Rolling 30 days:** resets every 30 days, counting from a start date set for that service.
 
-**A poll is not a request.** Each attempt re-enters `QuotaHandler` and is charged its own lease, so
-the guard multiplies polls per period by `MaxAttempts` (D-15). Nothing at runtime bounds that
-multiple: the circuit breaker sees poll outcomes, not attempts, so a provider that fails twice and
-then succeeds spends triple every poll while looking perfectly healthy to it. `TotalTimeout` is
-checked against the same number — it has to fit every attempt plus the backoff between them, or the
-last attempt is cut short, spends its lease anyway, and `MaxAttempts` quietly means less than it
-says.
+If the app's counter reset on a different day from the service's, the two would drift apart with no sign
+anywhere.
 
-The cadence is one feed-wide value, not a property of each source. A per-source `PollInterval` was
-removed for that reason — the poller builds one `PeriodicTimer` and asks for one price per tick, so
-every value but the primary's was read by nothing. A stale `PriceSources__GoldApiIo__PollInterval`
-in an operator's `.env` binds to nothing and raises no error.
+**How the count is stored.** The `api_quota_windows` table has one row per service per month. Each
+service's rows are separate, so one service running out says nothing about the others. A new month
+means a new row, so nothing ever has to be reset, and old rows stay as history.
 
-Every timestamp in that table comes from the injected `TimeProvider`, including the audit fields that
-`AurumDbContext` stamps. The context takes the clock as a required constructor parameter for that
-reason: an optional one with a wall-clock default compiles everywhere and reverts silently.
+Taking one request from the allowance is a single database statement that checks and adds one in the
+same step, while the row is locked. Doing it in two steps (read the count, then add one) leaves a gap
+where two requests can both see "one left" and both go through.
 
-If you are about to replace that SQL with EF: read the class remarks on `PostgresQuotaGovernor`
-first, and `ops/decisions/decisions.md` (D-7) for the decisions behind it.
+**When a service turns the app away for going over.** The app records the time it happened on that month's row
+(`ProviderRejectedAt`) and leave the count alone. So a row can say "0 used out of 10,000, turned
+away", and that mismatch is the point: it's the only sign the app's count and theirs have drifted apart.
+It also means "limit minus used" is **not** how many requests are left. Once a row is marked as
+turned away, none are left.
+
+**How often the app checks, and the allowance, are linked.** Three settings go together: how often the app checks
+the price, the first service's monthly limit, and how many tries it allows per check. If the first
+service can't afford the schedule for a whole month, the app won't start, and it tells you the
+shortest interval that would work. Changing one of these usually means changing another, or
+changing which service goes first. Holding every service to a full month sounds safer but is worse:
+the schedule would then be set by the smallest allowance, and adding a service could only ever slow
+things down (D-10).
+
+**One check can be up to three requests.** Every try is counted, so the startup check multiplies
+checks per month by tries per check (D-15). Nothing stops that while the app is running. The circuit
+breaker only sees whether a check worked in the end, so a service that fails twice and then succeeds
+costs three requests every time while looking perfectly healthy. The overall time limit for a check
+must also leave room for every try plus the waits between them. If it doesn't, the last try gets cut
+off, is still counted, and "3 tries" really means fewer.
+
+**There is one check interval for the whole feed.** Each service used to have its own interval
+setting, but the app only ever makes one check at a time, so only the first service's setting was
+ever used. That setting was removed. If an old `PriceSources__GoldApiIo__PollInterval` is still in
+someone's `.env`, it does nothing and gives no warning.
+
+**All times come from one clock.** Every time the app saves, including "created at" and "updated at"
+on each row, comes from the same clock object that is handed to the database code. It's required,
+not optional. An optional clock that falls back to the computer's own clock would work everywhere
+and quietly give two different times in the same table.
+
+If you're thinking of replacing the counter's database statement with ordinary Entity Framework code
+(the library the app uses to talk to the database), first read the notes at the top of
+`PostgresQuotaGovernor` and D-7 in the decision log.

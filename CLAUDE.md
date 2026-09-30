@@ -2,6 +2,38 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Policy: all documentation is written in plain English
+
+**This is mandatory and applies every time, with no exceptions.** It covers:
+
+- `README.md`, everything in `docs/`, `ops/` (including the decision log), and `app/README.md`.
+- Plans in `plans/`, and any plan written in chat or in plan mode.
+- Anything else written for a person to read that is not code: todo lists, handoff notes, summaries.
+
+It does **not** cover code comments or this file's own reference sections below, unless the owner
+says otherwise.
+
+The rules:
+
+1. Use everyday words. Write the way you would explain it to a smart colleague from another team.
+2. Short sentences. One idea per sentence.
+3. Avoid jargon. If a technical term can't be avoided, explain it in the same sentence it first
+   appears, e.g. "a circuit breaker, which stops calling a service that keeps failing."
+4. Spell out every acronym the first time it is used.
+5. Say what happens, not what the pattern is called: "the app refuses to start" rather than "fails
+   fast at boot."
+6. Names of files, classes, settings and tables are fine in backticks when the reader needs to find
+   them. Don't use them as a replacement for explaining what the thing does.
+7. Don't swap jargon for vague words. "Split into one piece per day" is jargon-free and still says
+   nothing. Say what the thing is and why it matters to the reader.
+8. Never write "we", "us" or "our". Use "I" / "my" for what the owner did or decided ("I checked the
+   account page", "I wrote my own circuit breaker"). Use "the app" for what the code does ("the app
+   checks the price every 15 minutes", "the service turned the app away").
+9. Keep every fact. Plain English means simpler words, not less information. When rewriting an old
+   doc, check each claim against the code before restating it.
+
+When editing an older doc that doesn't follow this yet, rewrite the section you touch to follow it.
+
 ## Commands
 
 ```bash
