@@ -189,6 +189,17 @@ public class PricePollingOptions
     public const string SectionName = "PricePolling";
 
     public TimeSpan PollInterval { get; set; }
+
+    /// <summary>
+    /// Age beyond which the latest-quote cache flags a price as stale. Null means twice
+    /// <see cref="PollInterval"/>.
+    /// </summary>
+    /// <remarks>
+    /// In this section rather than its own because the default is derived from
+    /// <see cref="PollInterval"/>; a separate section would let the two drift with nothing reading
+    /// both.
+    /// </remarks>
+    public TimeSpan? StaleAfter { get; set; }
 }
 
 public enum QuotaPeriodKind
