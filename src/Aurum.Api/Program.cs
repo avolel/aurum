@@ -5,6 +5,7 @@ using Aurum.App.Application.Common.Behaviors;
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Repositories;
 using Aurum.App.Infrastructure.Pricing;
+using Aurum.App.Infrastructure.Pricing.Cache;
 using FluentValidation;
 using MediatR;
 using Aurum.App.Infrastructure.Pricing.Jobs;
@@ -93,6 +94,10 @@ builder.Services.AddOptions<PricePollingOptions>()
     .Validate(
         o => o.PollInterval > TimeSpan.Zero,
         $"{PricePollingOptions.SectionName}:PollInterval must be set to a positive interval.")
+    .Validate(
+        PricePollingOptions.StaleAfterExceedsPollInterval,
+        $"{PricePollingOptions.SectionName}:StaleAfter must be unset or longer than PollInterval; "
+          + "at or below it, every price is flagged stale one poll after it arrives.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<PriceFeedResilienceOptions>()
@@ -115,6 +120,10 @@ builder.Services.AddSingleton<IValidateOptions<PriceFeedCircuitOptions>, PriceFe
 // timestamps plus the clock — nothing HTTP-bearing for IHttpClientFactory to recycle underneath
 // it, which is the constraint D-12 imposed on the sources themselves.
 builder.Services.AddSingleton<SourceCircuitStore>();
+
+// Singleton for the same reason: the newest price must outlive a poll and a request. So it must
+// reach the database through IServiceScopeFactory, never by holding a scoped DbContext (D-16).
+builder.Services.AddSingleton<ILatestQuoteCache, LatestQuoteCache>();
 
 builder.Services.AddScoped<IQuotaGovernor, PostgresQuotaGovernor>();
 

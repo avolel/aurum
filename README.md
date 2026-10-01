@@ -120,8 +120,8 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-15** so far. `ops/phase-1-todo.md` lists the remaining work in an
-order where each item can be checked when it is finished. Numbers D-16 and up are already assigned
+The decision log has **D-1 to D-16** so far. `ops/phase-1-todo.md` lists the remaining work in an
+order where each item can be checked when it is finished. Numbers D-17 and up are already assigned
 there to the items that will need them.
 
 ## Where things are

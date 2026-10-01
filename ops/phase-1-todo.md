@@ -27,7 +27,7 @@ A few terms used below:
 - **Circuit breaker**: the part that stops calling a service after several failures in a row, and
   tries again after a rest.
 
-> **Decision numbers.** D-9 to D-15 are taken and written up:
+> **Decision numbers.** D-9 to D-16 are taken and written up:
 >
 > | Number | Decision | Item |
 > |---|---|---|
@@ -38,16 +38,18 @@ A few terms used below:
 > | D-13 | where the per-try time limit lives | 3 |
 > | D-14 | my own circuit breaker | 3 |
 > | D-15 | the startup check counts tries | 4 (moved out of 3) |
+> | D-16 | the latest price kept in memory, its age worked out when read | 4 |
 >
 > Numbers are handed out when a decision is actually made, not held back for planned work. So the
-> Phase 1 plan's draft list is now off by **four**. The numbers used below are the real ones.
+> Phase 1 plan's draft list is now off by **five**. The numbers used below are the real ones.
 >
 > How it drifted: item 2 briefly had two decisions both labelled D-10. The interval decision kept it,
 > and the other two became D-11 and D-12, pushing items 3 to 8 down by two. The time limit decision
 > then took D-13, which item 3's breaker had been holding, pushing items 5 to 8 down one more. Then
-> the "count tries" setting moved out of item 3 took D-15 when it was actually done. So the "no
-> answer, not zero" rule for the price-move feature is now **D-16**, and items 5 to 7 use **D-16 to
-> D-18**. D-11's two references to it were updated in place.
+> the "count tries" setting moved out of item 3 took D-15 when it was actually done. Then item 4's
+> saved latest price took D-16 on 2026-09-30, because it was decided first. So the "no answer, not
+> zero" rule for the price-move feature is now **D-17**, and items 5, 6 and 8 use **D-17 to D-19**.
+> D-11's two references to that rule were updated in place both times.
 
 > **Since D-5 (2026-09-26):** every service is now set up in `src/Aurum.Api/Program.cs`. The
 > `PricingModule`, `AddPricingModule`, `AddRealtimeModule` and `Add<Module>Module` methods mentioned in
@@ -277,27 +279,43 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
       switched off on purpose (`UseJitter = false`). They exist to spread out a crowd of programs
       retrying at once, and there's only one timer. The note this replaced said the risk might happen.
       It was already happening.
-- [ ] **Still not covered:**
-      - The formula is only tested at one starting wait and three tries. When it fails, it says the two
-        disagree without saying which one changed.
-      - `BuildProvider` in the tests now sets `RetryBackoffBase` to 1 millisecond, so tests that only
-        count requests stop spending six real seconds waiting. That means only this one test would
-        notice if the waits between tries went wrong.
+- [x] **Closed the two gaps left above** (2026-09-30):
+      - The formula now has its own test, `MinimumTotalTimeout_sums_an_exponential_schedule`, which
+        needs no clock and no Docker. It runs five cases worked out by hand, including one with four
+        tries, where three waits leave no room for a wrong multiplier. The Polly test now runs at three
+        starting waits and try counts. So when one fails, the name says which side changed: the
+        arithmetic or the real retries.
+      - `Resilience_defaults_are_the_shipped_attempt_count_and_backoff` checks that the defaults are 3
+        tries and a 2-second starting wait. Every other retry test overrides the wait to 1
+        millisecond, so before this nothing would have noticed the default dropping to zero.
 
 ### The saved price itself
 
-- [ ] Keep the latest price per symbol in one shared, thread-safe dictionary
+- [x] Keep the latest price per symbol in one shared, thread-safe dictionary
       (`ConcurrentDictionary<symbol, LatestQuote>`), holding a record that never changes after it's
-      created. Swapping in a new price is then one step that can't be half-done.
-- [ ] **Not .NET's built-in memory cache (`IMemoryCache`).** It throws entries away after a set time,
+      created. Swapping in a new price is then one step that can't be half-done. Built as
+      `LatestQuoteCache` in `src/Aurum.App.Infrastructure.Pricing/Cache/`, registered once for the
+      whole app in `Program.cs`.
+- [x] **Not .NET's built-in memory cache (`IMemoryCache`).** It throws entries away after a set time,
       which is exactly wrong when checks can be hours apart. Whether a price is fresh has to be
       *worked out when it's read*, using the app's clock, not enforced by throwing it away.
-- [ ] Holds the price, whether a backup supplied it (`IsFallback`), and which services were tried
+- [x] Holds the price, whether a backup supplied it (`IsFallback`), and which services were tried
       (`AttemptedSources`). Offers `Age` and `IsStale`, measured against a setting that defaults to
       twice `PollInterval`. That's what makes the goal in §8 ("price visible within twice the check
       interval") something you can actually check, not just a hope.
-- [ ] **Reload at startup** from the newest price per symbol in the database, sharing item 5's startup
-      read. Otherwise a restart leaves `/v1/price/live` empty for up to a full check interval.
+      - `Age` is measured from when the service took the price (`ObservedAt`), not when the app got
+        it, so a service stuck on an old price shows up as an ageing price.
+      - Only a strictly newer price replaces the held one, so a slower backup can't move the
+        displayed price backwards in time.
+      - The setting is `PricePolling:StaleAfter`. The app refuses to start if it's at or below
+        `PollInterval`.
+      - 10 tests without Docker, plus 5 for the setting. The test for writers running at the same time
+        was checked against a deliberately broken version, and it fails on every run.
+- [x] **D-16 written up.**
+- [ ] **Reload at startup** from the newest price per symbol in the database. Otherwise a restart
+      leaves `/v1/price/live` empty for up to a full check interval. The saved price has its own
+      startup read (`EnsureWarmAsync`) for now, and the poller waits for it before its first check.
+      Item 5 merges the two startup reads later.
 - [ ] After each check, the timer does things in this order: **save in memory → save to the database →
       send to connected apps.** A database hiccup must not hide a price the app successfully fetched.
       The in-memory copy isn't the official record.
@@ -347,7 +365,7 @@ no data". Mixing the two up is the purest form of the risk in §14, "delayed dat
       looks like the price moved by exactly that amount. At a threshold of 0.25% in 5 minutes, that
       invents a big move that Phase 2 will then confidently explain. Each price records which service
       it came from, and a window whose starting and latest prices came from different services is
-      flagged `CrossSource`. **Write in D-16 that this reduces the problem but doesn't fix it.** The fix
+      flagged `CrossSource`. **Write in D-17 that this reduces the problem but doesn't fix it.** The fix
       is a correction per service, which needs data I don't have yet.
 - [ ] **Measuring how jumpy the price is (volatility) from three prices means nothing.** Require at
       least `MinSamplesForVolatility` prices (default 5), or report `Volatility = null`. Then the
@@ -366,7 +384,7 @@ no data". Mixing the two up is the purest form of the risk in §14, "delayed dat
       something that lives for the whole app must not hold on to a database connection meant for one
       unit of work.
 - [ ] Tests: `Window_with_no_bracketing_sample_is_null_not_zero`, `Out_of_order_sample_is_dropped`.
-- [ ] **D-16 written up**: the "no answer, not zero" rule, and the limits of the different-services
+- [ ] **D-17 written up**: the "no answer, not zero" rule, and the limits of the different-services
       flag.
 
 ---
@@ -409,7 +427,7 @@ no data". Mixing the two up is the purest form of the risk in §14, "delayed dat
       wait for this item, because the "must match a row" rule fails on the first switch to a backup,
       and item 3 delivers that.
 - [ ] Tests: `Restart_does_not_re_emit_the_same_event`, `Cross_source_delta_requires_higher_magnitude`.
-- [ ] **D-17 written up**: why `price_events` isn't a TimescaleDB table.
+- [ ] **D-18 written up**: why `price_events` isn't a TimescaleDB table.
 
 ---
 
@@ -459,7 +477,7 @@ note at the top.*
       success and failure, its breaker state, and its requests used, limit and reset time. This is how
       to show the fallback goal being met, and how whoever runs the app answers "why is the price eight
       hours old?" without opening the database.
-- [ ] **D-18 written up**: the second setup method, and why endpoints don't fit the `Add*Module` one.
+- [ ] **D-19 written up**: the second setup method, and why endpoints don't fit the `Add*Module` one.
 
 ---
 
@@ -519,7 +537,7 @@ Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/L
 - [ ] An app that subscribes partway through a gap immediately receives the saved price and moves (7)
 - [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` answers 400 and names the 30-day limit (8)
 - [ ] `docker compose down -v && docker compose up --build` from empty still works (9)
-- [ ] D-16 to D-18 written up with the options turned down (each item). D-9 to D-15 are done.
+- [ ] D-17 to D-19 written up with the options turned down (each item). D-9 to D-16 are done.
 
 **Deliberately not in this batch:** the dashboard app and its under-1.5-seconds goal, logins, limiting
 how often people can call the API, paid tiers, economic and news data, and the paid GoldAPI plan. The

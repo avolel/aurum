@@ -200,6 +200,18 @@ public class PricePollingOptions
     /// both.
     /// </remarks>
     public TimeSpan? StaleAfter { get; set; }
+
+    /// <summary>
+    /// <see cref="StaleAfter"/> is unset, or longer than one <see cref="PollInterval"/>.
+    /// </summary>
+    /// <remarks>
+    /// A threshold at or below the interval flags every price stale as soon as it is one poll old,
+    /// so the flag is on most of the time and people learn to ignore it. A method rather than an
+    /// inline lambda in <c>Program.cs</c> so the test calls the rule the host runs instead of a
+    /// copy of it.
+    /// </remarks>
+    internal static bool StaleAfterExceedsPollInterval(PricePollingOptions options) =>
+        options.StaleAfter is not { } staleAfter || staleAfter > options.PollInterval;
 }
 
 public enum QuotaPeriodKind

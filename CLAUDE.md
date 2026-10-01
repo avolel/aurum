@@ -100,7 +100,7 @@ one lives and what is actually in it today.
 src/
 ├── Aurum.App.SharedKernel/            ApiResponse<T>, PageResult<T>, AuditableEntity, SupportedSymbol
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
-├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/ — the price feed
+├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/ — the price feed
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/
 ├── Aurum.Api/                         Program.cs (every registration), Controllers/
 └── Aurum.Api.Tests/
@@ -359,6 +359,31 @@ Related invariants:
   bypasses `ApplyAuditFields` entirely, so `CreatedAt` / `UpdatedAt` must still be passed explicitly
   there.
 
+### The latest-quote cache (D-16)
+
+`LatestQuoteCache` (`Pricing/Cache/`) holds the newest `PriceQuote` per symbol for item 8's
+`/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. **Warm-up (`EnsureWarmAsync`)
+is still a `NotImplementedException` stub and the poller does not call `Record` yet** — item 4 steps
+4 and 5. Nothing reaches the stub until then.
+
+- **A `ConcurrentDictionary`, not `IMemoryCache`.** Eviction makes "eight hours old" look identical
+  to "never had a price", and the age is the product requirement. Do not "upgrade" it.
+- **Newest-only by `ObservedAt`, strictly.** The comparison lives inside `AddOrUpdate`'s update
+  delegate; a `TryGetValue`-then-indexer rewrite reopens the check-then-set gap. The delegate may run
+  more than once under contention, so it must stay side-effect free — the debug log for a dropped
+  quote is decided afterwards by `ReferenceEquals(held, incoming)`.
+- **`Age = clock.GetUtcNow() - Quote.ObservedAt`, computed in `Get`, never stored.** Not
+  `ReceivedAt`: a provider answering 200 with a frozen `ObservedAt` would look fresh forever.
+  `Age_is_measured_from_ObservedAt_not_ReceivedAt` pins this.
+- **`LatestQuote` must not carry `SourceAttempt`.** It holds an `Exception`, which a cached quote
+  would pin for hours. `Record` takes the whole `PriceFeedResult` so that projection happens in one
+  place; `A_cached_quote_holds_no_exception_reference` is a decision-pinning test, not dead weight.
+- `ILatestQuoteCache` and both records are **public** although only `Program.cs` names the
+  implementation: item 8 decides whether Application references this project or redeclares the
+  interface, and internal types would take the first option away.
+- Symbol keys are `OrdinalIgnoreCase` to match `PriceSourcesOptions.Sources` and
+  `PriceFeedResult.UsedFallback`.
+
 ### Database
 
 Postgres with TimescaleDB and pgvector (`timescale/timescaledb-ha:pg17`, decision D-3).
@@ -428,6 +453,12 @@ using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLim
   and the formula under-estimates. Jitter disperses many clients retrying in lockstep; there is one
   single-instance poller issuing one request at a time, so it buys nothing and costs a computable
   ceiling. That test is the only thing standing between a re-enabled default and a silent overspend.
+- **`PricePolling:StaleAfter`** is optional; null means twice `PollInterval`, derived once when the
+  cache is constructed. It lives beside `PollInterval` because its default is computed from it. The
+  rule (unset, or strictly longer than `PollInterval`) is
+  `PricePollingOptions.StaleAfterExceedsPollInterval`, a method rather than an inline `.Validate`
+  lambda so `PricePollingOptionsTests` calls the rule the host runs. A threshold at or below the
+  interval flags every price stale one poll after it arrives.
 
 ### Tests
 
@@ -449,10 +480,25 @@ test agrees with itself. It uses `TimeProvider.System`, unlike everything else h
 `FakeTimeProvider` makes the retry backoff wait on a clock nothing advances and the test hangs
 rather than failing.
 
-The circuit and chain tests (`SourceCircuitTests`, `FailoverPriceFeedTests`) need **no container**
-and run in milliseconds. That is the payoff of `SourceCircuit` measuring time by comparing two
-`TimeProvider` reads instead of holding a timer, and it is half of D-14's case against Polly's
-breaker.
+The backoff check is split in two so a failure says which side moved.
+`PriceSourcesOptionsTests.MinimumTotalTimeout_sums_an_exponential_schedule` tests the formula with
+hand-worked expectations and no clock; `Backoff_schedule_matches_what_MinimumTotalTimeout_models`
+measures Polly at three base/attempt rows (~1.6s of real waiting). Keep the expectations typed in by
+hand — computing them with a `base × 2^i` loop re-implements the formula. Every other wiring test
+overrides `RetryBackoffBase` to 1ms, so `Resilience_defaults_are_the_shipped_attempt_count_and_backoff`
+is what notices the production default changing.
+
+The circuit, chain and cache tests (`SourceCircuitTests`, `FailoverPriceFeedTests`,
+`LatestQuoteCacheTests`) need **no container** and run in milliseconds. That is the payoff of
+measuring time by comparing two `TimeProvider` reads instead of holding a timer or an eviction, and it
+is half of D-14's case against Polly's breaker.
+
+`LatestQuoteCacheTests.Concurrent_records_leave_a_consistent_entry` runs rounds on dedicated threads
+behind a `Barrier` and checks after every round. Its first version checked only the final state and
+**passed every run against a deliberately broken check-then-set implementation** — only the last few
+writes decide the final state, and by then most writers had finished. Do not collapse it back into
+one long run, and do not swap the threads for `Task.Run`: pool threads arrive at the barrier
+staggered.
 
 `PricePollingServiceTests` does need Postgres, because the `price_sources` projection is half its
 subject. Its waits are the fragile part: `ScriptedPriceFeed.WaitForCallAsync` completes when the

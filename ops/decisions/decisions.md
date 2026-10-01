@@ -711,7 +711,7 @@ not of building.**
 The fallback list exists for reliability, but the reason it's three *free* services is arithmetic.
 GoldAPI's 100 requests a month pays for one check every 7 hours 26 minutes. Phase 1's "how much did the
 price move" feature compares prices over 1-minute and 5-minute windows. At that schedule, every short
-window would have one reading in it, and D-16's rule of "not enough readings means no answer" would
+window would have one reading in it, and D-17's rule of "not enough readings means no answer" would
 return nothing for all of them, forever. That feature could only be tested against replayed made-up
 data, and the part that flags big moves would never go off during development. API Ninjas' 10,000
 requests and MetalpriceAPI's 1,000 are what make checks every few minutes possible at no cost. That
@@ -736,7 +736,7 @@ What it doesn't buy, and why that's worth writing down instead of assuming:
   API Ninjas has been moved to first place (see the README). The other 11,000 buy cover during
   outages, not faster updates.
 - **Three services means three slightly different prices.** Each service quotes gold a few dollars
-  differently, so every switch to a backup looks like the price moved by exactly that amount. D-16's
+  differently, so every switch to a backup looks like the price moved by exactly that amount. D-17's
   "this came from a different service" flag reduces that problem. It doesn't fix it.
 
 Turned down: **buying GoldAPI's paid plan now.** One service, one answer format, one way of counting,
@@ -1095,3 +1095,100 @@ that's used up. It does, and that's what stops the overspending from reaching th
 cut-off arrives after the allowance is gone, twenty days before the month rolls over. The startup check
 exists to refuse settings that *can't possibly fit*, and settings that spend three times what they
 claim are exactly that, whether or not something further down saves the day.
+
+---
+
+## D-16 — The latest price is kept in the app's memory, and its age is worked out when it's read
+
+**DECIDED:**
+
+- `LatestQuoteCache` keeps the newest price for each symbol in memory, for the whole time the app is
+  running. Item 8's `/v1/price/live` will answer from it without reading the database.
+- It only accepts a price that is newer than the one it already holds, judged by `ObservedAt` (the
+  time the service says the price was taken). An older or equal price is dropped.
+- How old a price is (`Age`) is worked out at the moment someone asks: the app's clock minus
+  `ObservedAt`. It's never stored.
+- A price counts as out of date (`IsStale`) once its age passes `PricePolling:StaleAfter`. That setting
+  defaults to twice `PollInterval`, and the app refuses to start if it's set at or below
+  `PollInterval`.
+- At startup, `EnsureWarmAsync` reloads the newest saved price per symbol from the database.
+  `PricePollingService` waits for it before its first check.
+- After each successful check, the order is: save in memory, then save to the database, then (from
+  item 7) send to connected apps.
+
+*Status on 2026-09-30:* the in-memory part and the `StaleAfter` setting are built and tested. The
+startup reload and the change to `PricePollingService` are item 4's next two steps.
+
+**Why the app needs this at all.** Nothing in the running app held "the current price":
+
+- The fallback list (`FailoverPriceFeed`) is created fresh for each unit of work and forgets
+  everything afterwards.
+- The prices table deletes anything older than 30 days.
+- Prices only arrive every 15 minutes (D-15). Reading the table on every request to show one number
+  that changes four times an hour is wasted work.
+
+**Age is measured from when the price was taken, not from when the app received it.** That is the
+whole age of the price, including any delay at the service. One failure in particular needs this: a
+service that keeps answering "OK" but stops updating its price. Each answer arrives on time, so an
+age measured from `ReceivedAt` would look fresh forever. Measured from `ObservedAt`, the age keeps
+climbing and the price turns stale, which is the truth. The app's own clock (`TimeProvider`) is used,
+never the database's `now()`, for the same reason as the request counter (D-7).
+
+**Only newer prices are accepted.** The backups don't all update at the same speed. Without this
+rule, a switch to a slower backup would move the displayed price backwards in time between two
+checks. Item 5's short-term price history (a ring buffer, which keeps the last few readings and
+overwrites the oldest) uses the same rule. If the saved price accepted readings that the history
+drops, the latest price and the chart beside it would disagree. The cost, stated plainly: when a
+service gets stuck, the held price stays where it is and its age keeps climbing. That's the correct
+reading, not a bug.
+
+The check and the swap happen in one step (`ConcurrentDictionary.AddOrUpdate`, with the comparison
+inside it). Checking first and writing afterwards leaves a gap where two writers both see the old
+price and the slower one overwrites the newer one. I checked that the test for this
+(`Concurrent_records_leave_a_consistent_entry`) actually catches that gap. I swapped in the
+check-then-write version and the test failed on every run. Its first version only looked at the final
+price and passed against the broken code every time, so it was rewritten to check after every round
+of writes.
+
+**The stored record leaves out the details of failed tries.** Each try (`SourceAttempt`) carries the
+full error for logging. Keeping those would hold on to error details and everything attached to them
+for as long as the price stays current, which can be hours. The saved price keeps only the list of
+services that were called (`AttemptedSources`).
+
+**A reloaded price is honest about what this run of the app didn't see.**
+
+- Its `AttemptedSources` is empty. That means "this run of the app didn't see which services were
+  called", not "no service was called". Item 8 must not show it as a failed fallback list.
+- Its `IsFallback` is worked out by comparing the price's service with the first enabled service in
+  the current settings. So if the service order changes across a restart, the flag can flip on a price
+  that didn't change.
+
+**The reload is a method the poller waits for, not a separate background service.** Background
+services start in the order they're registered. Relying on that is a rule nobody re-reads before
+adding another one, and getting it wrong shows up as an empty `/v1/price/live` that looks like a
+normal fresh start. Item 5's history needs the same startup read, so matching it now means the two can
+later be merged by deleting one of them.
+
+Turned down: **.NET's built-in memory cache (`IMemoryCache`).** It throws entries away after a set
+time, which is exactly wrong when checks can be hours apart. A thrown-away entry looks the same as
+"the app never had a price", when the honest answer is "here's the price, and it's eight hours old".
+Showing the age is the requirement. A cache that enforces freshness by deleting can only delete, so
+the age a person needs to see is the one thing it destroys.
+
+Turned down: **item 8 reading the newest price from the database on every request.** It's correct and
+simple. But every `/v1/price/live` call becomes a read of the prices table. And because that table
+deletes anything over 30 days old, the endpoint's answer after a long outage would depend on a cleanup
+job.
+
+Turned down: **keeping the latest price on `FailoverPriceFeed`.** It's created fresh for each unit of
+work, so each one would start with its own empty copy.
+
+Turned down: **always keeping the latest write instead of only newer prices.** One swap with no
+comparison, which is simpler. But a slower backup then moves the displayed price backwards in time.
+
+Turned down: **measuring age from `ReceivedAt`.** It gives a neater threshold, because the age then
+lines up with the check interval. But it can't see a service that keeps answering successfully with a
+frozen price.
+
+Turned down: **putting `StaleAfter` in its own settings section.** Its default comes from
+`PollInterval`. In separate sections the two could drift apart, and nothing would read both.
