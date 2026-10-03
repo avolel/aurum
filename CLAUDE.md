@@ -362,9 +362,25 @@ Related invariants:
 ### The latest-quote cache (D-16)
 
 `LatestQuoteCache` (`Pricing/Cache/`) holds the newest `PriceQuote` per symbol for item 8's
-`/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. **Warm-up (`EnsureWarmAsync`)
-is still a `NotImplementedException` stub and the poller does not call `Record` yet** — item 4 steps
-4 and 5. Nothing reaches the stub until then.
+`/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. `PricePollingService` awaits
+`EnsureWarmAsync` before its first poll and calls `Record` after every successful one.
+
+- **`Record` runs before the tick is added to the `DbContext`.** Memory, then database, then (item 7)
+  clients: a failed save must not hide a price the app fetched. A failed poll never records — the
+  `AllSourcesFailedException` path projects onto `price_sources` and rethrows, and the held quote's
+  growing `Age` is the signal. `A_poll_writes_the_cache_before_it_persists` was mutation-checked
+  against `Record` moved below the save.
+- **Warm-up is awaited by the poller, not a hosted service of its own** — hosted-service start order
+  is registration order, and nobody re-reads that before adding one. Item 5's ring buffer warms the
+  same way so the two can merge by deletion. A warm-up that throws is logged and polling continues:
+  an unhandled exception in `ExecuteAsync` stops the host by default.
+- **Warm-up goes through `Record`**, so it is idempotent and cannot overwrite a newer live quote.
+  It builds `PriceQuote` with the constructor, not `Normalize`, so a since-tightened plausibility band
+  cannot fail boot over stored data. A warmed quote has empty `AttemptedSources` ("not observed by
+  this process") and `IsFallback` derived from the *current* primary, so reordering sources across a
+  restart can flip it.
+- It visits `SupportedSymbol.All`. A symbol added to `SupportedSymbol` but not to `All` is never
+  warmed.
 
 - **A `ConcurrentDictionary`, not `IMemoryCache`.** Eviction makes "eight hours old" look identical
   to "never had a price", and the age is the product requirement. Do not "upgrade" it.
@@ -500,8 +516,17 @@ writes decide the final state, and by then most writers had finished. Do not col
 one long run, and do not swap the threads for `Task.Run`: pool threads arrive at the barrier
 staggered.
 
+`LatestQuoteCacheWarmupTests` is the Postgres half of the cache. It inserts ticks with **seeded**
+source codes — `price_ticks.SourceCode` has a foreign key to `price_sources` — and deletes *every*
+tick in `InitializeAsync`, because warm-up reads the newest row per symbol whatever its source.
+`PricePollingServiceTests` deletes every tick for the same reason: a newer leftover row would be
+warmed first and the cache would then drop the test's quote as older. Both rely on the collection
+running one class at a time.
+
 `PricePollingServiceTests` does need Postgres, because the `price_sources` projection is half its
-subject. Its waits are the fragile part: `ScriptedPriceFeed.WaitForCallAsync` completes when the
+subject. `A_poll_writes_the_cache_before_it_persists` makes the save fail with a source code that is
+not seeded, so the foreign key rejects it — no mocked `DbContext` needed. `WaitForCachedAsync` is
+`WaitUntilAsync` for the in-memory cache. Its waits are the fragile part: `ScriptedPriceFeed.WaitForCallAsync` completes when the
 feed is *entered*, and the poller writes the tick afterwards, so a test that asserts straight after
 that wait races the save. `WaitUntilAsync` polls the database for the side effect instead.
 

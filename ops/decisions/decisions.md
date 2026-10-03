@@ -1116,8 +1116,7 @@ claim are exactly that, whether or not something further down saves the day.
 - After each successful check, the order is: save in memory, then save to the database, then (from
   item 7) send to connected apps.
 
-*Status on 2026-09-30:* the in-memory part and the `StaleAfter` setting are built and tested. The
-startup reload and the change to `PricePollingService` are item 4's next two steps.
+All of this was built and tested by 2026-10-03.
 
 **Why the app needs this at all.** Nothing in the running app held "the current price":
 
@@ -1169,6 +1168,22 @@ adding another one, and getting it wrong shows up as an empty `/v1/price/live` t
 normal fresh start. Item 5's history needs the same startup read, so matching it now means the two can
 later be merged by deleting one of them.
 
+**A failed reload doesn't stop the app.** If the database read at startup throws, the poller logs the
+error and carries on to its first check. Left alone, the error would end the poller, and by default
+that stops the whole app. That would take the price feed down because a convenience failed. The first
+successful check fills the saved price anyway. Until then the app has no price to show, which is the
+same as starting on an empty database.
+
+**The reload rebuilds the price exactly as it was stored.** It doesn't re-run the check that rejects
+implausible prices (`PriceQuote.Normalize`). That check already passed when the price was fetched. If
+it has since been tightened, re-running it on old data could make the app fail at startup over a price
+it already accepted.
+
+**The order is tested by breaking it.** `A_poll_writes_the_cache_before_it_persists` gives the poller a
+price whose service isn't in the `price_sources` table, so saving it to the database always fails. The
+test then checks that the saved price was still updated. I moved the memory write below the database
+save to confirm the test notices. It failed, as it should.
+
 Turned down: **.NET's built-in memory cache (`IMemoryCache`).** It throws entries away after a set
 time, which is exactly wrong when checks can be hours apart. A thrown-away entry looks the same as
 "the app never had a price", when the honest answer is "here's the price, and it's eight hours old".
@@ -1192,3 +1207,8 @@ frozen price.
 
 Turned down: **putting `StaleAfter` in its own settings section.** Its default comes from
 `PollInterval`. In separate sections the two could drift apart, and nothing would read both.
+
+Turned down: **letting a failed reload stop the app.** It would make a database problem at startup
+impossible to miss. But the app already moves its database to the latest version at startup, so the
+database was reachable a moment earlier. A failure here is far more likely to be brief than permanent,
+and the first check fixes it. The error is logged either way.

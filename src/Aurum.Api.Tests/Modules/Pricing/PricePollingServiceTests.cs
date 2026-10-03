@@ -2,6 +2,7 @@ using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.Infrastructure.Pricing;
+using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
@@ -45,10 +46,12 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        // Shared database; each test starts from a clean slate for the rows it asserts on.
+        // Shared database; each test starts from a clean slate for the rows it asserts on. Every
+        // tick, not only this class's sources: the poller warms the latest-quote cache from the
+        // newest stored tick whatever its source, and a newer leftover row would make the cache
+        // drop this test's quote as older. The collection runs one class at a time.
         await using var db = fixture.CreateDbContext();
-        await db.PriceTicks.Where(t => t.SourceCode == Primary || t.SourceCode == Secondary)
-            .ExecuteDeleteAsync(Ct);
+        await db.PriceTicks.ExecuteDeleteAsync(Ct);
         await db.PriceSources.Where(s => s.Code == Primary || s.Code == Secondary)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(s => s.LastSuccessAt, (DateTimeOffset?)null)
@@ -58,7 +61,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private (PricePollingService Poller, FakeTimeProvider Clock) Build(IPriceFeed feed)
+    private (PricePollingService Poller, FakeTimeProvider Clock, LatestQuoteCache Cache) Build(IPriceFeed feed)
     {
         var clock = new FakeTimeProvider(Start);
 
@@ -69,14 +72,18 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         // them once one has failed.
         services.AddTransient(_ => fixture.CreateDbContext(clock));
 
-        var poller = new PricePollingService(
-            services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
-            clock,
-            Options.Create(new PricePollingOptions { PollInterval = PollInterval }),
-            NullLogger<PricePollingService>.Instance);
+        var scopes = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+        var sources = TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true));
+        var polling = Options.Create(new PricePollingOptions { PollInterval = PollInterval });
 
-        return (poller, clock);
+        // The real cache rather than a stub: the order tests below are about what it holds after
+        // the poller has written to it, and a stub would assert the poller called a method.
+        var cache = new LatestQuoteCache(scopes, sources, clock, polling, NullLogger<LatestQuoteCache>.Instance);
+
+        var poller = new PricePollingService(
+            scopes, sources, clock, polling, cache, NullLogger<PricePollingService>.Instance);
+
+        return (poller, clock, cache);
     }
 
     private static PriceFeedResult Quote(string sourceCode, IReadOnlyList<SourceAttempt> attempts) =>
@@ -113,6 +120,28 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Fail($"Timed out waiting for {because}.");
     }
 
+    /// <summary>
+    /// <see cref="WaitUntilAsync"/> for the in-memory cache: the poller records after the feed
+    /// returns, so the same race applies, with no database to poll.
+    /// </summary>
+    private static async Task<LatestQuoteSnapshot> WaitForCachedAsync(ILatestQuoteCache cache, string symbol)
+    {
+        var deadline = DateTime.UtcNow + CallTimeout;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            if (cache.Get(symbol) is { } snapshot)
+            {
+                return snapshot;
+            }
+
+            await Task.Delay(25, Ct);
+        }
+
+        Assert.Fail($"Timed out waiting for a cached {symbol} quote.");
+        return null!;
+    }
+
     private static async Task AssertNoFurtherCallAsync(ScriptedPriceFeed feed, int expected)
     {
         var next = feed.WaitForCallAsync(expected + 1);
@@ -134,7 +163,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                 new SourceAttempt(Secondary, SourceAttemptOutcome.QuotaExhausted, "spent", null, soon),
             ]));
 
-        var (poller, clock) = Build(feed);
+        var (poller, clock, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -172,7 +201,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SourceAttempt(Secondary, SourceAttemptOutcome.Success),
         ]));
 
-        var (poller, clock) = Build(feed);
+        var (poller, clock, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -203,7 +232,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                 new SourceAttempt(Secondary, SourceAttemptOutcome.QuotaExhausted, "spent", null, Start.AddDays(30)),
             ]));
 
-        var (poller, clock) = Build(feed);
+        var (poller, clock, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -229,7 +258,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                 new SourceAttempt(Secondary, SourceAttemptOutcome.Faulted, "HTTP 500.", new HttpRequestException()),
             ]));
 
-        var (poller, clock) = Build(feed);
+        var (poller, clock, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -255,7 +284,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SourceAttempt(Secondary, SourceAttemptOutcome.Success),
         ]));
 
-        var (poller, _) = Build(feed);
+        var (poller, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -298,7 +327,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         var feed = new ScriptedPriceFeed(_ => Quote(Secondary,
             [new SourceAttempt(Secondary, SourceAttemptOutcome.Success)]));
 
-        var (poller, _) = Build(feed);
+        var (poller, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -341,7 +370,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SourceAttempt(Secondary, SourceAttemptOutcome.Success),
         ]));
 
-        var (poller, _) = Build(feed);
+        var (poller, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -377,7 +406,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                     new HttpRequestException()),
             ]));
 
-        var (poller, _) = Build(feed);
+        var (poller, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -408,5 +437,86 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
         Assert.Empty(await db.PriceTicks.AsNoTracking()
             .Where(t => t.SourceCode == Primary || t.SourceCode == Secondary).ToListAsync(Ct));
+    }
+
+    /// <summary>
+    /// The order rule — memory, then database — as a test. The tick's source is not seeded in
+    /// <c>price_sources</c>, so its foreign key fails <c>SaveChangesAsync</c> on every poll.
+    /// </summary>
+    /// <remarks>
+    /// If <c>Record</c> moved below the save, the throw would skip it and the wait would time out.
+    /// That is the whole discriminating power of this test, and it was checked by making exactly
+    /// that move.
+    /// </remarks>
+    [Fact]
+    public async Task A_poll_writes_the_cache_before_it_persists()
+    {
+        const string Unseeded = "not-in-price-sources";
+
+        var feed = new ScriptedPriceFeed(_ => Quote(Unseeded,
+            [new SourceAttempt(Unseeded, SourceAttemptOutcome.Success)]));
+
+        var (poller, _, cache) = Build(feed);
+        await poller.StartAsync(Ct);
+
+        LatestQuoteSnapshot cached;
+        try
+        {
+            await feed.WaitForCallAsync(1).WaitAsync(CallTimeout, Ct);
+            cached = await WaitForCachedAsync(cache, SupportedSymbol.Gold);
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        Assert.Equal(Unseeded, cached.Value.Quote.SourceCode);
+
+        // And the database never got it, so the cached price is one the save would have lost.
+        await using var db = fixture.CreateDbContext();
+        Assert.False(await db.PriceTicks.AnyAsync(t => t.SourceCode == Unseeded, Ct));
+    }
+
+    [Fact]
+    public async Task A_failed_poll_leaves_the_previous_quote_in_place()
+    {
+        var feed = new ScriptedPriceFeed(call => call == 0
+            ? Quote(Primary, [new SourceAttempt(Primary, SourceAttemptOutcome.Success)])
+            : throw new AllSourcesFailedException(
+                SupportedSymbol.Gold,
+                [
+                    new SourceAttempt(Primary, SourceAttemptOutcome.Faulted, "HTTP 503.", new HttpRequestException()),
+                    new SourceAttempt(Secondary, SourceAttemptOutcome.Faulted, "HTTP 500.", new HttpRequestException()),
+                ]));
+
+        var (poller, clock, cache) = Build(feed);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            await feed.WaitForCallAsync(1).WaitAsync(CallTimeout, Ct);
+            await WaitForCachedAsync(cache, SupportedSymbol.Gold);
+
+            clock.Advance(PollInterval);
+            await feed.WaitForCallAsync(2).WaitAsync(CallTimeout, Ct);
+
+            // The failed poll's projection is its last side effect, so once it is visible the
+            // poll has finished and anything it was going to do to the cache, it has done.
+            await WaitUntilAsync(
+                db => db.PriceSources.AnyAsync(s => s.Code == Primary && s.LastFailureAt != null, Ct),
+                "the failed poll to finish");
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        var held = cache.Get(SupportedSymbol.Gold)!;
+
+        // The first poll's quote, untouched, and older by exactly the interval that went by. A
+        // failed poll writes nothing to the cache; price_sources is where its reason lives.
+        Assert.Equal(Start, held.Value.Quote.ObservedAt);
+        Assert.Equal([Primary], held.Value.AttemptedSources);
+        Assert.Equal(PollInterval, held.Age);
     }
 }

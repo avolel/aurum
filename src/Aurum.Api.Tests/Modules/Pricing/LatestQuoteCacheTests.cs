@@ -1,8 +1,10 @@
 using System.Reflection;
+using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -34,7 +36,18 @@ public class LatestQuoteCacheTests
             StaleAfter = staleAfter,
         });
 
-        return (new LatestQuoteCache(clock, polling, NullLogger<LatestQuoteCache>.Instance), clock);
+        // Warm-up is the only path that opens a scope, and it lives in LatestQuoteCacheWarmupTests,
+        // so an empty container is enough here and keeps this class off Postgres.
+        var scopes = new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+
+        var cache = new LatestQuoteCache(
+            scopes,
+            TestPriceSources.ForChain((Primary, 1, true), (Backup, 2, true)),
+            clock,
+            polling,
+            NullLogger<LatestQuoteCache>.Instance);
+
+        return (cache, clock);
     }
 
     private static PriceQuote Quote(

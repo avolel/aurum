@@ -1,5 +1,6 @@
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
+using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,7 @@ public class PricePollingService(
     IOptions<PriceSourcesOptions> options,
     TimeProvider clock,
     IOptions<PricePollingOptions> polling,
+    ILatestQuoteCache cache,
     ILogger<PricePollingService> logger) : BackgroundService
 {
     /// <summary>
@@ -46,6 +48,27 @@ public class PricePollingService(
         // PriceSourcesOptionsValidator, so an overspending configuration fails the process at boot
         // instead of after the host has reported healthy.
         LogBudgetCoverage(polling.Value.PollInterval);
+
+        // Awaited here rather than run as its own hosted service: hosted services start in
+        // registration order, which is a rule nobody re-reads before adding one, and getting it
+        // wrong shows up as an empty /v1/price/live that looks like a normal fresh start (D-16).
+        // Item 5's ring buffer warms the same way, so the two can later merge by deletion.
+        try
+        {
+            await cache.EnsureWarmAsync(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            // Best-effort. An unhandled exception here would end ExecuteAsync and, by default,
+            // stop the host — taking the poller down over a convenience. The first successful
+            // poll fills the cache anyway; until then /v1/price/live has no price, as on a fresh
+            // database.
+            logger.LogError(ex, "Latest-quote warm-up failed; the cache stays empty until the first poll.");
+        }
 
         using var timer = new PeriodicTimer(polling.Value.PollInterval, clock);
 
@@ -145,6 +168,12 @@ public class PricePollingService(
             await db.SaveChangesAsync(ct);
             throw;
         }
+
+        // Memory first, then the database, then (item 7) connected clients. The cache is not the
+        // record of truth, but a database hiccup must not hide a price the app successfully
+        // fetched. A failed poll never reaches here: the AllSourcesFailedException path above
+        // projects onto price_sources and rethrows, and the held quote's growing Age says the rest.
+        cache.Record(result);
 
         db.PriceTicks.Add(result.Quote.ToTick());
         await ProjectAttemptsAsync(db, result.Attempts, ct);

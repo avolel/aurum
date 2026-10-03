@@ -245,7 +245,7 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
 
 ---
 
-## 4. Saved latest price · half a day · needed by 8
+## 4. Saved latest price · DONE · needed by 8
 
 ### Carried over from item 3: the number-of-tries setting · **finished 2026-09-26**
 
@@ -312,13 +312,25 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
       - 10 tests without Docker, plus 5 for the setting. The test for writers running at the same time
         was checked against a deliberately broken version, and it fails on every run.
 - [x] **D-16 written up.**
-- [ ] **Reload at startup** from the newest price per symbol in the database. Otherwise a restart
+- [x] **Reload at startup** from the newest price per symbol in the database. Otherwise a restart
       leaves `/v1/price/live` empty for up to a full check interval. The saved price has its own
       startup read (`EnsureWarmAsync`) for now, and the poller waits for it before its first check.
       Item 5 merges the two startup reads later.
-- [ ] After each check, the timer does things in this order: **save in memory → save to the database →
+      - A reloaded price has an empty list of services tried, because this run of the app didn't see
+        them. Whether it came from a backup is worked out from the current settings.
+      - If the reload fails, the poller logs it and starts checking anyway, instead of stopping the
+        app.
+      - It goes through the same "newer only" rule, so it can never replace a newer live price.
+      - 5 tests against a real database: newest price per symbol, safe to run twice, empty database,
+        and the backup flag under two different service orders.
+- [x] After each check, the timer does things in this order: **save in memory → save to the database →
       send to connected apps.** A database hiccup must not hide a price the app successfully fetched.
-      The in-memory copy isn't the official record.
+      The in-memory copy isn't the official record. Sending to connected apps is item 7; there is
+      nothing to call yet.
+      - Tested with a price the database refuses to save. The saved price still updates. I moved the
+        memory write below the save to confirm the test catches the wrong order, and it did.
+      - A failed check leaves the held price alone, and its age keeps growing. Also tested.
+      - 113 tests pass in total on 2026-10-03.
 
 ---
 

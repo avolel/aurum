@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
+using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Pricing.Sources;
+using Aurum.App.SharedKernel.Constants;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace Aurum.App.Infrastructure.Pricing.Cache;
@@ -25,15 +28,21 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
     private readonly ConcurrentDictionary<string, LatestQuote> _quotes =
         new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IOptions<PriceSourcesOptions> _sources;
     private readonly TimeProvider _clock;
     private readonly ILogger<LatestQuoteCache> _logger;
     private readonly TimeSpan _staleAfter;
 
     public LatestQuoteCache(
+        IServiceScopeFactory scopeFactory,
+        IOptions<PriceSourcesOptions> sources,
         TimeProvider clock,
         IOptions<PricePollingOptions> polling,
         ILogger<LatestQuoteCache> logger)
     {
+        _scopeFactory = scopeFactory;
+        _sources = sources;
         _clock = clock;
         _logger = logger;
 
@@ -88,7 +97,65 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
         return new LatestQuoteSnapshot(held, age, IsStale: age > _staleAfter);
     }
 
-    // Step 4 of item 4. Nothing registers this class until then, so nothing can reach it.
-    public Task EnsureWarmAsync(CancellationToken ct) =>
-        throw new NotImplementedException("Warm-up lands in item 4, step 4.");
+    /// <remarks>
+    /// <para>Safe to repeat: every tick goes through <see cref="Record"/>, so a second warm-up — or
+    /// one racing the first poll — cannot replace a newer live quote with the stored one.</para>
+    ///
+    /// <para>A reloaded quote has two fields this process did not observe, and both are stated
+    /// rather than invented:</para>
+    /// <list type="bullet">
+    /// <item><c>AttemptedSources</c> is empty. Empty means "not observed by this process", not "no
+    /// source was called"; item 8 must not render it as a failed chain.</item>
+    /// <item><c>IsFallback</c> is derived by comparing the tick's source with the primary in the
+    /// <em>current</em> configuration, not remembered. Reordering sources across a restart can
+    /// therefore flip it on a price that has not changed.</item>
+    /// </list>
+    /// </remarks>
+    public async Task EnsureWarmAsync(CancellationToken ct)
+    {
+        var enabled = _sources.Value.EnabledInFailoverOrder();
+        if (enabled.Count == 0)
+        {
+            // PriceSourcesOptionsValidator refuses this at boot, and the poller returns before
+            // calling here. Without a primary there is nothing honest to derive IsFallback from.
+            return;
+        }
+
+        var primary = enabled[0].SourceCode;
+
+        // A scope per warm-up, never a held DbContext: this object lives for the whole process,
+        // and a captured context would be shared by every later caller (same reason as QuotaHandler).
+        using var scope = _scopeFactory.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AurumDbContext>();
+
+        foreach (var symbol in SupportedSymbol.All)
+        {
+            // Served by the (Symbol, ObservedAt DESC) index; one row per symbol.
+            var tick = await db.PriceTicks.AsNoTracking()
+                .Where(t => t.Symbol == symbol)
+                .OrderByDescending(t => t.ObservedAt)
+                .FirstOrDefaultAsync(ct);
+
+            if (tick is null)
+            {
+                _logger.LogInformation("No stored {Symbol} tick to warm the latest-quote cache from.", symbol);
+                continue;
+            }
+
+            // The constructor, not PriceQuote.Normalize: this tick already passed Normalize when it
+            // was fetched, and re-running the plausibility band on stored data could throw at boot
+            // over a band that has since been tightened.
+            var quote = new PriceQuote(
+                tick.Symbol, tick.ObservedAt, tick.ReceivedAt, tick.Bid, tick.Ask, tick.Mid, tick.SourceCode);
+
+            // No attempts: see the remarks. PriceFeedResult derives UsedFallback from the primary.
+            Record(new PriceFeedResult(quote, primary, Attempts: []));
+
+            // Information, not Debug: until item 8 serves the price, this line is the only way to
+            // see that a restart picked up the last known price.
+            _logger.LogInformation(
+                "Warmed {Symbol} from stored tick: {SourceCode}, observed {ObservedAt:o}, {Age} old.",
+                symbol, tick.SourceCode, tick.ObservedAt, _clock.GetUtcNow() - tick.ObservedAt);
+        }
+    }
 }

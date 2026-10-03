@@ -105,8 +105,14 @@ Two smaller changes:
 - When a service is skipped because its breaker is tripped, nothing is written, so the original
   failure reason stays visible.
 
-**Not built yet:** the saved "latest price", the "how much did it move" feature, live updates to the
-app, and the web endpoints. Those are items 4 onward in `ops/phase-1-todo.md`.
+**The latest price is now kept in the app's memory** (D-16). After each check the app saves it in
+memory first, then to the database. At startup it reloads the newest saved price, so a restart doesn't
+leave it empty. How old the price is gets worked out when it's read, from the time the service says
+the price was taken. A price counts as out of date after twice the check interval, which the
+`PricePolling:StaleAfter` setting can change. Nothing serves it over the web yet; that's item 8.
+
+**Not built yet:** the "how much did it move" feature, live updates to the app, and the web
+endpoints. Those are items 5 onward in `ops/phase-1-todo.md`.
 
 **The `IsEnabled` column in the `price_sources` table does nothing.** Nothing reads it and nothing
 writes it. The settings file decides which services are on. Item 8 will either hook the column up
