@@ -26,7 +26,7 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
 
     private static CancellationToken Ct => CancellationToken.None;
 
-    private static readonly DateTimeOffset Now = new(2026, 6, 10, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = PostgresFixture.RecentMinute;
 
     public async Task InitializeAsync()
     {

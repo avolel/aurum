@@ -39,7 +39,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
     /// </summary>
     private static readonly TimeSpan QuietTimeout = TimeSpan.FromMilliseconds(250);
 
-    private static readonly DateTimeOffset Start = new(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Start = PostgresFixture.RecentMinute;
     private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(5);
 
     private const string Primary = "api-ninjas";

@@ -570,9 +570,8 @@ staggered.
 **Tests that store ticks must date them within 30 days of the real clock.** `price_ticks` has
 TimescaleDB's 30-day retention policy, and its background job drops old chunks by the database
 server's real time, not the fake clock. A fixed date older than that loses its rows whenever the job
-runs mid-test, so the test fails only sometimes. `DeltaEngineWarmupTests` uses the real time truncated
-to the minute for this reason. `LatestQuoteCacheWarmupTests` and `PricePollingServiceTests` still use
-fixed June 2026 dates and are exposed to it.
+runs mid-test, so the test fails only sometimes. Every class that stores ticks dates them from
+`PostgresFixture.RecentMinute`, the real time cut down to the whole minute.
 
 `LatestQuoteCacheWarmupTests` is the Postgres half of the cache. It inserts ticks with **seeded**
 source codes — `price_ticks.SourceCode` has a foreign key to `price_sources` — and deletes *every*
