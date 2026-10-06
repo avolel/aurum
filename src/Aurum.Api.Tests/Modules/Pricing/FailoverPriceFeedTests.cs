@@ -37,8 +37,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task The_primary_serves_the_poll_and_the_backups_are_never_called()
     {
-        var primary = ScriptedPriceSource.Succeeding(Primary, 1);
-        var backup = ScriptedPriceSource.Succeeding(Secondary, 2);
+        var primary = ScriptedPriceSource.Succeeding(Primary);
+        var backup = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
@@ -54,8 +54,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task A_fault_fails_over_to_the_next_source()
     {
-        var primary = ScriptedPriceSource.Faulting(Primary, 1, "HTTP 503 Service Unavailable.");
-        var backup = ScriptedPriceSource.Succeeding(Secondary, 2);
+        var primary = ScriptedPriceSource.Faulting(Primary, "HTTP 503 Service Unavailable.");
+        var backup = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
@@ -77,8 +77,8 @@ public class FailoverPriceFeedTests
     public async Task Quota_exhaustion_moves_on_immediately_and_does_not_open_the_circuit()
     {
         var resetsAt = Start.AddDays(20);
-        var primary = ScriptedPriceSource.OutOfQuota(Primary, 1, resetsAt);
-        var backup = ScriptedPriceSource.Succeeding(Secondary, 2);
+        var primary = ScriptedPriceSource.OutOfQuota(Primary, resetsAt);
+        var backup = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, circuits, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
@@ -101,8 +101,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task Open_circuit_source_is_not_called()
     {
-        var primary = ScriptedPriceSource.Faulting(Primary, 1);
-        var backup = ScriptedPriceSource.Succeeding(Secondary, 2);
+        var primary = ScriptedPriceSource.Faulting(Primary);
+        var backup = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, circuits, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
@@ -129,8 +129,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task A_disabled_source_is_not_in_the_chain()
     {
-        var disabled = ScriptedPriceSource.Succeeding(Primary, 1);
-        var enabled = ScriptedPriceSource.Succeeding(Secondary, 2);
+        var disabled = ScriptedPriceSource.Succeeding(Primary);
+        var enabled = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Primary, 1, false), (Secondary, 2, true)),
@@ -158,9 +158,9 @@ public class FailoverPriceFeedTests
         var sources = new[]
         {
             // Registration order deliberately unrelated to priority: DI order must not decide it.
-            ScriptedPriceSource.Faulting(Tertiary, 3),
-            ScriptedPriceSource.Faulting(Secondary, 2),
-            ScriptedPriceSource.Faulting(Primary, 1),
+            ScriptedPriceSource.Faulting(Tertiary),
+            ScriptedPriceSource.Faulting(Secondary),
+            ScriptedPriceSource.Faulting(Primary),
         };
 
         var (feed, _, _) = Build(options, sources);
@@ -207,8 +207,8 @@ public class FailoverPriceFeedTests
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
             [
-                ScriptedPriceSource.OutOfQuota(Primary, 1, later),
-                ScriptedPriceSource.OutOfQuota(Secondary, 2, soon),
+                ScriptedPriceSource.OutOfQuota(Primary, later),
+                ScriptedPriceSource.OutOfQuota(Secondary, soon),
             ]);
 
         var thrown = await Assert.ThrowsAsync<AllSourcesFailedException>(
@@ -227,8 +227,8 @@ public class FailoverPriceFeedTests
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
             [
-                ScriptedPriceSource.OutOfQuota(Primary, 1, Start.AddDays(20)),
-                ScriptedPriceSource.Faulting(Secondary, 2),
+                ScriptedPriceSource.OutOfQuota(Primary, Start.AddDays(20)),
+                ScriptedPriceSource.Faulting(Secondary),
             ]);
 
         var thrown = await Assert.ThrowsAsync<AllSourcesFailedException>(
@@ -245,8 +245,8 @@ public class FailoverPriceFeedTests
         var (feed, circuits, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
             [
-                ScriptedPriceSource.Faulting(Primary, 1),
-                ScriptedPriceSource.OutOfQuota(Secondary, 2, Start.AddDays(20)),
+                ScriptedPriceSource.Faulting(Primary),
+                ScriptedPriceSource.OutOfQuota(Secondary, Start.AddDays(20)),
             ],
             new PriceFeedCircuitOptions { FailureThreshold = 1 });
 
@@ -265,8 +265,8 @@ public class FailoverPriceFeedTests
     public async Task An_invalid_symbol_is_not_failed_over()
     {
         var primary = ScriptedPriceSource.Throwing(
-            Primary, 1, () => new ArgumentException("Expected a 6-character symbol like XAUUSD."));
-        var backup = ScriptedPriceSource.Succeeding(Secondary, 2);
+            Primary, () => new ArgumentException("Expected a 6-character symbol like XAUUSD."));
+        var backup = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, circuits, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
@@ -286,8 +286,8 @@ public class FailoverPriceFeedTests
     public async Task An_unexpected_exception_is_a_fault_rather_than_the_end_of_the_chain()
     {
         var primary = ScriptedPriceSource.Throwing(
-            Primary, 1, () => new InvalidOperationException("a defect in one source"));
-        var backup = ScriptedPriceSource.Succeeding(Secondary, 2);
+            Primary, () => new InvalidOperationException("a defect in one source"));
+        var backup = ScriptedPriceSource.Succeeding(Secondary);
 
         var (feed, circuits, _) = Build(
             TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
@@ -304,8 +304,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task A_source_registered_but_absent_from_configuration_is_not_in_the_chain()
     {
-        var configured = ScriptedPriceSource.Succeeding(Secondary, 2);
-        var unconfigured = ScriptedPriceSource.Succeeding("never-configured", 1);
+        var configured = ScriptedPriceSource.Succeeding(Secondary);
+        var unconfigured = ScriptedPriceSource.Succeeding("never-configured");
 
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Secondary, 2, true)),
@@ -324,7 +324,7 @@ public class FailoverPriceFeedTests
     {
         var (feed, _, _) = Build(
             TestPriceSources.ForChain((Primary, 1, false)),
-            [ScriptedPriceSource.Succeeding(Primary, 1)]);
+            [ScriptedPriceSource.Succeeding(Primary)]);
 
         var thrown = await Assert.ThrowsAsync<AllSourcesFailedException>(
             () => feed.GetLatestQuoteAsync(SupportedSymbol.Gold, CancellationToken.None));
@@ -335,5 +335,21 @@ public class FailoverPriceFeedTests
         // poller to sleep until a reset that no attempt ever supplied.
         Assert.False(thrown.AllQuotaExhausted);
         Assert.Null(thrown.EarliestResetsAt);
+    }
+
+    [Fact]
+    public async Task A_failure_reason_is_truncated_to_the_column_width()
+    {
+        var (feed, circuits, _) = Build(
+            TestPriceSources.ForChain((Primary, 1, true)),
+            [ScriptedPriceSource.Faulting(Primary, new string('x', 1000))]);
+
+        var thrown = await Assert.ThrowsAsync<AllSourcesFailedException>(
+            () => feed.GetLatestQuoteAsync(SupportedSymbol.Gold, CancellationToken.None));
+
+        // price_sources.LastFailureReason is nvarchar(512). An unbounded provider message throws
+        // 22001 out of SaveChangesAsync and loses the tick fetched in the same unit of work.
+        Assert.Equal(512, thrown.Attempts.Single().FailureReason!.Length);
+        Assert.Equal(512, circuits.For(Primary).Snapshot().LastFailureReason!.Length);
     }
 }

@@ -16,7 +16,7 @@ internal sealed class SourceCircuit(string sourceCode, TimeProvider clock, Price
     // when the last failure happened
     private DateTimeOffset? _lastFailureAt;
 
-    // what it was — capped at 512 chars,
+    // what it was — capped by FailoverPriceFeed,
     // and never built from a request URI, because
     // MetalpriceAPI puts its API key in the query string
     private string? _lastFailureReason;
@@ -50,9 +50,9 @@ internal sealed class SourceCircuit(string sourceCode, TimeProvider clock, Price
             Settle(now);
             _lastFailureAt = now;
 
-            // Capped, and the caller must never build this from a request URI: MetalpriceAPI
+            // The caller caps this and must never build it from a request URI: MetalpriceAPI
             // puts the API key in the query string, and this value is projected to price_sources.
-            _lastFailureReason = reason.Length <= 512 ? reason : reason[..512];
+            _lastFailureReason = reason;
             _consecutiveFailures++;
 
             // Only open a closed circuit. Without the null check, a failure recorded while the

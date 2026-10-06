@@ -113,15 +113,8 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
     /// </remarks>
     public async Task EnsureWarmAsync(CancellationToken ct)
     {
-        var enabled = _sources.Value.EnabledInFailoverOrder();
-        if (enabled.Count == 0)
-        {
-            // PriceSourcesOptionsValidator refuses this at boot, and the poller returns before
-            // calling here. Without a primary there is nothing honest to derive IsFallback from.
-            return;
-        }
-
-        var primary = enabled[0].SourceCode;
+        // PriceSourcesOptionsValidator guarantees at least one enabled source at boot.
+        var primary = _sources.Value.EnabledInFailoverOrder()[0].SourceCode;
 
         // A scope per warm-up, never a held DbContext: this object lives for the whole process,
         // and a captured context would be shared by every later caller (same reason as QuotaHandler).

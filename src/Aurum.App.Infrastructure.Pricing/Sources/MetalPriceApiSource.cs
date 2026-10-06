@@ -1,21 +1,15 @@
-using System.Net;
 using Aurum.App.SharedKernel.Constants;
-using Microsoft.Extensions.Options;
 
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
 public class MetalPriceApiSource(
     HttpClient http,
-    IOptions<PriceSourcesOptions> options,
     TimeProvider clock,
     ILogger<MetalPriceApiSource> logger) : IPriceSource
 {
     public const string SourceCode = "metalprice-api";
-    private readonly PriceSourceOptions _options = options.Value.RequireByCode(SourceCode);
 
     public string Code => SourceCode;
-
-    public int Priority => _options.Priority;
 
     public async Task<PriceQuote> GetLatestQuoteAsync(string symbol, CancellationToken ct)
     {
@@ -32,14 +26,6 @@ public class MetalPriceApiSource(
         }
 
         using var response = await http.GetAsync("v1/latest?base=XAU&currencies=USD", ct);
-
-        if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.PaymentRequired)
-        {
-            // QuotaHandler translates these into QuotaExhaustedException and disposes the response,
-            // so this is unreachable with a correctly wired pipeline. It is an assertion that the
-            // handler is present, not a failover point.
-            throw new PriceSourceException(Code, $"Quota status {(int)response.StatusCode} reached the source unhandled — check the HTTP pipeline wiring.");
-        }
 
         if (!response.IsSuccessStatusCode)
             throw new PriceSourceException(Code, $"HTTP {(int)response.StatusCode} {response.ReasonPhrase}.");

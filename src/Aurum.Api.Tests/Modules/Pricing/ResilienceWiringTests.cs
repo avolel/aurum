@@ -282,8 +282,6 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     {
         public string Code => SourceCode;
 
-        public int Priority => 1;
-
         public Task<HttpResponseMessage> FetchAsync(CancellationToken ct) =>
             http.GetAsync("price", ct);
 

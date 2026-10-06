@@ -46,8 +46,4 @@ public static class PaginationHelper
 
         return (page, pageSize);
     }
-
-    public static PageResult<T> CreatePageResult<T>(
-        IReadOnlyList<T> items, int page, int pageSize, int totalCount) =>
-        new(items, page, pageSize, totalCount);
 }

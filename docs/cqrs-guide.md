@@ -357,7 +357,7 @@ public record GetPriceSourcesQuery(
 ```
 
 In the handler, use `PaginationHelper.GetEffectivePagination()` to get the page number and size, and
-`PaginationHelper.CreatePageResult()` to build the result. Both are in
+build the result with `new PageResult<T>(items, page, pageSize, totalCount)`. Both types are in
 `src/Aurum.App.SharedKernel/Common/Pagination.cs`.
 
 ### Exception: a controller calling an outside-system client directly

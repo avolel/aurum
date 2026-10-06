@@ -116,9 +116,9 @@ public class ShippedConfigurationTests
     {
         var options = BindSources(BuildConfiguration());
 
-        Assert.True(options.TryGetByCode(GoldApiIoSource.SourceCode, out _));
-        Assert.True(options.TryGetByCode(ApiNinjasSource.SourceCode, out _));
-        Assert.True(options.TryGetByCode(MetalPriceApiSource.SourceCode, out _));
+        Assert.NotNull(options.RequireByCode(GoldApiIoSource.SourceCode));
+        Assert.NotNull(options.RequireByCode(ApiNinjasSource.SourceCode));
+        Assert.NotNull(options.RequireByCode(MetalPriceApiSource.SourceCode));
     }
 
     /// <summary>

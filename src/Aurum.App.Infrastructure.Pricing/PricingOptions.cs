@@ -1,5 +1,4 @@
 using System.ComponentModel.DataAnnotations;
-using System.Diagnostics.CodeAnalysis;
 
 namespace Aurum.App.Infrastructure.Pricing;
 
@@ -12,7 +11,7 @@ namespace Aurum.App.Infrastructure.Pricing;
 /// arm. That arm is a fabricated configuration: it looks identical to a real one downstream, so a
 /// source with a 20-request tier gets accounted against whatever the fall-through guessed. There is
 /// no correct default for another provider's budget, so the lookup here has no default at all —
-/// <see cref="TryGetByCode"/> misses, and callers fail rather than invent.
+/// <see cref="RequireByCode"/> throws on a miss, and callers fail rather than invent.
 /// </para>
 /// <para>
 /// The map is keyed by a friendly config key (<c>GoldApiIo</c>), not by the source code, with the
@@ -68,24 +67,6 @@ public class PriceSourcesOptions
     /// all use. A linear scan is deliberate: the map holds a handful of entries, and caching an
     /// index in a mutable options object would go stale under <c>IOptionsMonitor</c> reloads.
     /// </summary>
-    public bool TryGetByCode(string sourceCode, [NotNullWhen(true)] out PriceSourceOptions? options)
-    {
-        foreach (var candidate in Sources.Values)
-        {
-            if (string.Equals(candidate.SourceCode, sourceCode, StringComparison.OrdinalIgnoreCase))
-            {
-                options = candidate;
-                return true;
-            }
-        }
-
-        options = null;
-        return false;
-    }
-
-    /// <summary>
-    /// <see cref="TryGetByCode"/> for the callers that cannot proceed without the configuration.
-    /// </summary>
     /// <remarks>
     /// Throwing is the point. There is no defensible default for another provider's budget or
     /// period: guessing high lets a source spend budget it does not have, and guessing the period
@@ -94,17 +75,12 @@ public class PriceSourcesOptions
     /// — <see cref="PriceSourcesOptionsValidator"/> has already run at boot — so it is a backstop
     /// for a source registered in code but absent from configuration.
     /// </remarks>
-    public PriceSourceOptions RequireByCode(string sourceCode)
-    {
-        if (TryGetByCode(sourceCode, out var options))
-        {
-            return options;
-        }
-
-        throw new InvalidOperationException(
+    public PriceSourceOptions RequireByCode(string sourceCode) =>
+        Sources.Values.FirstOrDefault(candidate =>
+            string.Equals(candidate.SourceCode, sourceCode, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException(
             $"No configuration for price source '{sourceCode}'. Add an entry under "
           + $"{SectionName} whose SourceCode is '{sourceCode}'.");
-    }
 }
 
 /// <summary>

@@ -38,14 +38,6 @@ public class PricePollingService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // PriceSourcesOptionsValidator refuses a configuration with no enabled source, so this is
-        // a backstop for a host that skipped validation rather than an expected state.
-        if (_enabled.Count == 0)
-        {
-            logger.LogWarning("Price polling disabled: no source is enabled.");
-            return;
-        }
-
         // The cadence-vs-budget guard that used to run here now runs in
         // PriceSourcesOptionsValidator, so an overspending configuration fails the process at boot
         // instead of after the host has reported healthy.
@@ -239,11 +231,6 @@ public class PricePollingService(
     private async Task ProjectAttemptsAsync(
         AurumDbContext db, IReadOnlyList<SourceAttempt> attempts, CancellationToken ct)
     {
-        if (attempts.Count == 0)
-        {
-            return;
-        }
-
         var codes = attempts.Select(a => a.SourceCode).ToList();
 
         // One tracked query for the whole poll rather than a FindAsync per attempt: the chain is

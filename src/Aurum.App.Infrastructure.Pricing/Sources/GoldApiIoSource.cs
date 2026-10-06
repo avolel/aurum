@@ -1,7 +1,5 @@
-using System.Net;
 using System.Text.Json.Serialization;
 using Aurum.App.SharedKernel.Constants;
-using Microsoft.Extensions.Options;
 
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
@@ -15,7 +13,6 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// </remarks>
 public class GoldApiIoSource(
     HttpClient http,
-    IOptions<PriceSourcesOptions> options,
     TimeProvider clock,
     ILogger<GoldApiIoSource> logger) : IPriceSource
 {
@@ -26,24 +23,13 @@ public class GoldApiIoSource(
     /// </summary>
     public const string SourceCode = "goldapi.io";
 
-    private readonly PriceSourceOptions _options = options.Value.RequireByCode(SourceCode);
-
     public string Code => SourceCode;
-
-    public int Priority => _options.Priority;
 
     public async Task<PriceQuote> GetLatestQuoteAsync(string symbol, CancellationToken ct)
     {
         var (metal, currency) = SplitSymbol(symbol);
 
         using var response = await http.GetAsync($"api/{metal}/{currency}", ct);
-
-        if (response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.PaymentRequired)
-        {
-            // The handler translates these into QuotaExhaustedException after recording the
-            // provider's correction; reaching here means the pipeline was misconfigured.
-            throw new PriceSourceException(Code, $"Quota status {(int)response.StatusCode} reached the source unhandled — check the HTTP pipeline wiring.");
-        }
 
         if (!response.IsSuccessStatusCode)
         {

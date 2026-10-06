@@ -153,18 +153,6 @@ public class SourceCircuitTests
     }
 
     [Fact]
-    public void A_failure_reason_is_truncated_to_the_column_width()
-    {
-        var (circuit, _) = Build(failureThreshold: 1);
-
-        circuit.RecordFailure(new string('x', 1000));
-
-        // price_sources.LastFailureReason is nvarchar(512). An unbounded provider message throws
-        // 22001 out of SaveChangesAsync and loses the tick fetched in the same unit of work.
-        Assert.Equal(512, circuit.Snapshot().LastFailureReason!.Length);
-    }
-
-    [Fact]
     public void A_fresh_store_has_every_circuit_closed()
     {
         var clock = new FakeTimeProvider(Start);

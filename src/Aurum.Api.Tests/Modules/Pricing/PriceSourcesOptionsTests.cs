@@ -79,7 +79,7 @@ public class PriceSourcesOptionsTests
             ["PriceSources:GoldApiIo:SourceCode"] = "goldapi.io",
         });
 
-        Assert.True(options.TryGetByCode("GoldAPI.IO", out _));
+        Assert.Equal("goldapi.io", options.RequireByCode("GoldAPI.IO").SourceCode);
     }
 
     /// <summary>

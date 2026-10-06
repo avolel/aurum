@@ -475,7 +475,7 @@ as `SourceCode`). Values come from `appsettings.json` and are overridden by envi
 using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLimit`), which is how
 `docker-compose.yml` and `.env` set them.
 
-- **Look sources up with `TryGetByCode` / `RequireByCode`, never with a `switch` on the code.** A
+- **Look sources up with `RequireByCode`, never with a `switch` on the code.** A
   switch needs a fall-through arm, and a fall-through arm is a fabricated configuration —
   indistinguishable downstream from a real one, so a source with a 20-request tier gets accounted
   against whatever the arm guessed. `RequireByCode` throws instead; there is no defensible default

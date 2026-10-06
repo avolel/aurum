@@ -10,9 +10,6 @@ public interface IPriceSource
     /// <summary>Stable code matching <see cref="Entities.PriceSource.Code"/> and the options key.</summary>
     string Code { get; }
 
-    /// <summary>Failover order (FR-1.3); lower is preferred.</summary>
-    int Priority { get; }
-
     /// <summary>
     /// Fetch the latest quote for <paramref name="symbol"/>.
     /// </summary>
