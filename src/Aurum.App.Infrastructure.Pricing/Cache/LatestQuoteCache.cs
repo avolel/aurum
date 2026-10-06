@@ -8,18 +8,8 @@ using Microsoft.Extensions.Options;
 namespace Aurum.App.Infrastructure.Pricing.Cache;
 
 /// <remarks>
-/// <para>A plain <see cref="ConcurrentDictionary{TKey,TValue}"/>, not <c>IMemoryCache</c> (D-16).
-/// <c>IMemoryCache</c> evicts on a timer, which is exactly wrong when polls can be hours apart: an
-/// evicted entry is indistinguishable from "never had a price", when the honest answer is "here is
-/// the price, and it is eight hours old". Freshness computed on read is the requirement; freshness
-/// enforced by eviction can only delete, and the age a person needs to see is what it
-/// destroys.</para>
-///
-/// <para>No lock. Each entry is an immutable record swapped in whole, so a reader holds a
-/// reference to a finished record and cannot observe a half-written one.</para>
-///
-/// <para>Singleton, alongside <see cref="SourceCircuitStore"/>. It cannot live on
-/// <see cref="FailoverPriceFeed"/>, which is scoped, so each scope would start empty.</para>
+/// A <see cref="ConcurrentDictionary{TKey,TValue}"/>, not <c>IMemoryCache</c>: eviction would
+/// make an old price look like no price (D-16). No lock: entries are immutable and swapped whole.
 /// </remarks>
 internal sealed class LatestQuoteCache(
     IServiceScopeFactory scopeFactory,
@@ -28,25 +18,20 @@ internal sealed class LatestQuoteCache(
     IOptions<PricePollingOptions> polling,
     ILogger<LatestQuoteCache> logger) : ILatestQuoteCache
 {
-    // IgnoreCase because PriceSourcesOptions.Sources and PriceFeedResult.UsedFallback already are.
-    // An ordinal key here would be the one link in the chain where "xauusd" misses "XAUUSD".
+    // IgnoreCase to match PriceSourcesOptions.Sources and PriceFeedResult.UsedFallback.
     private readonly ConcurrentDictionary<string, LatestQuote> _quotes =
         new(StringComparer.OrdinalIgnoreCase);
 
-    // Twice the interval by default: one missed poll is normal jitter and must not flag, two
-    // is a fault. Derived once here so the threshold cannot drift from the cadence it tracks.
+    // Twice the interval by default: one late poll is normal, two is a fault.
     private readonly TimeSpan _staleAfter = polling.Value.StaleAfter ?? polling.Value.PollInterval * 2;
 
     public void Record(PriceFeedResult result)
     {
-        // Projected here, in one place, so dropping Attempts (and the Exceptions they hold) cannot
-        // be forgotten by a second caller building its own LatestQuote.
+        // The one place Attempts (and their Exceptions) are dropped.
         var incoming = new LatestQuote(result.Quote, result.UsedFallback, result.AttemptedSources);
 
-        // The comparison lives inside AddOrUpdate's update delegate, not in a TryGetValue followed
-        // by an indexer write: that would reopen the check-then-set gap, and a concurrent older
-        // write could land after a newer one. The delegate may run more than once under
-        // contention, so it stays side-effect free and the log is decided afterwards by identity.
+        // Compare inside the delegate; TryGetValue then set would reopen the race. The delegate
+        // can run more than once, so it must stay side-effect free.
         var held = _quotes.AddOrUpdate(
             result.Quote.Symbol,
             incoming,
@@ -54,10 +39,7 @@ internal sealed class LatestQuoteCache(
 
         if (!ReferenceEquals(held, incoming))
         {
-            // Newer-only (D-16): a lagging fallback must not wind the displayed price backwards, and
-            // item 5's ring buffer applies the same rule, so accepting what it drops would put this
-            // price out of step with the chart beside it. A stuck provider therefore leaves Age
-            // climbing — that is the correct reading, not a bug.
+            // Newer only, same rule as the delta engine (D-16).
             logger.LogDebug(
                 "Dropped {Symbol} quote from {SourceCode} observed at {ObservedAt:o}: not newer than the held quote from {HeldSourceCode} observed at {HeldObservedAt:o}.",
                 result.Quote.Symbol,
@@ -75,35 +57,22 @@ internal sealed class LatestQuoteCache(
             return null;
         }
 
-        // From ObservedAt, not ReceivedAt. A provider that keeps answering 200 with a frozen
-        // ObservedAt is the failure this number exists to expose; measured from ReceivedAt it would
-        // look fresh forever. The injected clock, never the database's now(), same as the governor.
+        // From ObservedAt, or a frozen provider would look fresh forever (D-16).
         var age = clock.GetUtcNow() - held.Quote.ObservedAt;
 
         return new LatestQuoteSnapshot(held, age, IsStale: age > _staleAfter);
     }
 
     /// <remarks>
-    /// <para>Safe to repeat: every tick goes through <see cref="Record"/>, so a second warm-up — or
-    /// one racing the first poll — cannot replace a newer live quote with the stored one.</para>
-    ///
-    /// <para>A reloaded quote has two fields this process did not observe, and both are stated
-    /// rather than invented:</para>
-    /// <list type="bullet">
-    /// <item><c>AttemptedSources</c> is empty. Empty means "not observed by this process", not "no
-    /// source was called"; item 8 must not render it as a failed chain.</item>
-    /// <item><c>IsFallback</c> is derived by comparing the tick's source with the primary in the
-    /// <em>current</em> configuration, not remembered. Reordering sources across a restart can
-    /// therefore flip it on a price that has not changed.</item>
-    /// </list>
+    /// Goes through <see cref="Record"/>, so it never replaces a newer live quote. A reloaded quote
+    /// has empty <c>AttemptedSources</c> and an <c>IsFallback</c> judged by the current config (D-16).
     /// </remarks>
     public async Task EnsureWarmAsync(CancellationToken ct)
     {
         // PriceSourcesOptionsValidator guarantees at least one enabled source at boot.
         var primary = sources.Value.EnabledInFailoverOrder()[0].SourceCode;
 
-        // A scope per warm-up, never a held DbContext: this object lives for the whole process,
-        // and a captured context would be shared by every later caller (same reason as QuotaHandler).
+        // A scope per warm-up: this singleton must not hold a DbContext.
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AurumDbContext>();
 
@@ -121,17 +90,13 @@ internal sealed class LatestQuoteCache(
                 continue;
             }
 
-            // The constructor, not PriceQuote.Normalize: this tick already passed Normalize when it
-            // was fetched, and re-running the plausibility band on stored data could throw at boot
-            // over a band that has since been tightened.
+            // Not Normalize: a since-tightened band must not fail startup over stored data (D-16).
             var quote = new PriceQuote(
                 tick.Symbol, tick.ObservedAt, tick.ReceivedAt, tick.Bid, tick.Ask, tick.Mid, tick.SourceCode);
 
-            // No attempts: see the remarks. PriceFeedResult derives UsedFallback from the primary.
             Record(new PriceFeedResult(quote, primary, Attempts: []));
 
-            // Information, not Debug: until item 8 serves the price, this line is the only way to
-            // see that a restart picked up the last known price.
+            // Information: until item 8 this is the only sign a restart picked up a price.
             logger.LogInformation(
                 "Warmed {Symbol} from stored tick: {SourceCode}, observed {ObservedAt:o}, {Age} old.",
                 symbol, tick.SourceCode, tick.ObservedAt, clock.GetUtcNow() - tick.ObservedAt);

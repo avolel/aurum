@@ -3,9 +3,7 @@ using Aurum.App.SharedKernel.Entities;
 namespace Aurum.App.Infrastructure.Data.Entities.Macro;
 
 /// <summary>
-/// A macroeconomic time series (CPI, Fed Funds, 10Y, DXY, VIX …). Ingestion lands in
-/// Phase 2a; the schema exists now so the first migration is the only one that touches
-/// the base tables.
+/// A macroeconomic time series (CPI, Fed Funds, 10Y, DXY, VIX …). Loaded from Phase 2a.
 /// </summary>
 public class MacroSeries : AuditableEntity
 {

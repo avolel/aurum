@@ -3,8 +3,8 @@ using Aurum.App.SharedKernel.Entities;
 namespace Aurum.App.Infrastructure.Data.Entities.Pricing;
 
 /// <summary>
-/// Registry of upstream quote providers. <see cref="Priority"/> defines the Phase 1
-/// failover order (FR-1.3); lower wins.
+/// Registry of upstream quote providers. <see cref="Priority"/> and <see cref="IsEnabled"/> are
+/// descriptive only: configuration decides the failover order.
 /// </summary>
 public class PriceSource : AuditableEntity
 {

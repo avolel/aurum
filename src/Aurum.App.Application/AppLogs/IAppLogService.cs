@@ -17,16 +17,8 @@ public enum LogType
 /// to survive the process and be queryable — controllers, handlers and the MediatR behaviors.
 /// </summary>
 /// <remarks>
-/// <para>
-/// Non-blocking: every call enqueues onto <see cref="IAppLogQueue"/> and returns. The request
-/// thread never waits on a database write, which is the point — logging a 500 must not be able to
-/// turn into a second 500.
-/// </para>
-/// <para>
-/// <c>ILogger&lt;T&gt;</c> is still correct for anything whose audience is an operator reading
-/// stdout: the poller's tick lines, the startup budget coverage, the governor's denial message.
-/// The distinction is durability and queryability, not importance.
-/// </para>
+/// Non-blocking: calls enqueue onto <see cref="IAppLogQueue"/>, so logging a 500 cannot cause a
+/// second one. <c>ILogger&lt;T&gt;</c> is still right for stdout-only lines such as the poller's.
 /// </remarks>
 public interface IAppLogService<T>
 {

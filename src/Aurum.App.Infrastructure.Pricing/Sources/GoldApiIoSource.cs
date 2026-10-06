@@ -6,21 +6,12 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// <summary>
 /// GoldAPI.io free tier (§12's primary spot source).
 /// </summary>
-/// <remarks>
-/// This class does not touch quota accounting. That lives in the <see cref="Quota.QuotaHandler"/>
-/// on this client's HTTP pipeline, so that Phase 1's retries and failover cannot spend budget
-/// behind the governor's back.
-/// </remarks>
 public class GoldApiIoSource(
     HttpClient http,
     TimeProvider clock,
     ILogger<GoldApiIoSource> logger) : IPriceSource
 {
-    /// <summary>
-    /// The provider's natural key, matched against <c>PriceSourceOptions.SourceCode</c>. It lives
-    /// on the source rather than on an options class because it identifies this implementation,
-    /// not a configuration shape — options are now looked up by it, not selected by it.
-    /// </summary>
+    /// <summary>Matched against <c>PriceSourceOptions.SourceCode</c>.</summary>
     public const string SourceCode = "goldapi.io";
 
     public string Code => SourceCode;
@@ -53,9 +44,7 @@ public class GoldApiIoSource(
             throw new PriceSourceException(Code, "Response contained no positive price.");
         }
 
-        // GoldAPI reports `timestamp` as Unix seconds. A missing or zero value means we cannot
-        // trust the provider's own validity time, so fall back to receipt time and say so —
-        // silently backdating to the epoch would poison the delta engine.
+        // Unix seconds. If missing, use receipt time: the epoch would be a decades-old tick.
         DateTimeOffset observedAt;
         if (body.Timestamp is > 0)
         {

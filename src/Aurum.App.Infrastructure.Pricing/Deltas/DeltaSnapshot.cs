@@ -9,9 +9,8 @@ namespace Aurum.App.Infrastructure.Pricing.Deltas;
 /// nothing downstream may show it as 0.00% (D-17).
 /// </param>
 /// <param name="DroppedOutOfOrder">
-/// Live prices refused because they were not newer than the newest held one, since this process
-/// started. From outside, "the price stopped moving" and "the app is dropping every price" look the
-/// same; this counter is what tells them apart.
+/// Live prices refused as not newer, since startup. Tells "price stopped moving" from "every price
+/// is being dropped".
 /// </param>
 public sealed record DeltaSnapshot(
     string Symbol,

@@ -7,17 +7,8 @@ namespace Aurum.App.Application.Common.Behaviors;
 /// Runs every registered <see cref="IValidator{T}"/> for the request before the handler sees it.
 /// </summary>
 /// <remarks>
-/// <para>
-/// All validators run, and all their failures are aggregated into one
-/// <see cref="ValidationException"/>. Stopping at the first failure would make a caller fix one
-/// field per round trip.
-/// </para>
-/// <para>
-/// A request with no validator passes straight through. That is a deliberate hole and the reason
-/// "every command MUST have a validator" is a review rule rather than something the pipeline can
-/// enforce: MediatR has no way to distinguish "this command has nothing to validate" from
-/// "someone forgot the file".
-/// </para>
+/// All failures go into one <see cref="ValidationException"/>. A request with no validator passes
+/// through, which is why "every command has a validator" is a review rule.
 /// </remarks>
 public sealed class ValidationBehavior<TRequest, TResponse>(
     IEnumerable<IValidator<TRequest>> validators)

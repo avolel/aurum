@@ -8,7 +8,7 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// </summary>
 /// <param name="Symbol">e.g. <c>XAUUSD</c>.</param>
 /// <param name="ObservedAt">Provider-reported validity time, in UTC.</param>
-/// <param name="ReceivedAt">When we read the response. Drives the staleness we show the user.</param>
+/// <param name="ReceivedAt">When the app read the response.</param>
 /// <param name="Bid">Null where the provider does not quote two-sided.</param>
 /// <param name="Ask">Null where the provider does not quote two-sided.</param>
 /// <param name="Mid">Always populated — see <see cref="Normalize"/>.</param>
@@ -26,13 +26,8 @@ public sealed record PriceQuote(
     /// Per-symbol plausibility band for a mid, in the quote currency per troy ounce.
     /// </summary>
     /// <remarks>
-    /// This exists for one failure mode that has no other detector: a provider that quotes the
-    /// inverse — MetalpriceAPI's <c>rates.XAUUSD</c> is ounces per USD (~0.00023) alongside the
-    /// <c>rates.USD</c> we want (~4,349). <c>PriceTick.Mid</c> is <c>numeric(18,4)</c>, so an
-    /// inverted rate rounds to <c>0.0002</c> and persists without an exception; the delta engine
-    /// then reads a near-total crash off a healthy feed. Wide on purpose — it is an assertion
-    /// about units, not a market-movement guard, and a band narrow enough to be interesting would
-    /// take the feed down on a real spike.
+    /// Catches an inverted or wrongly scaled rate, which would otherwise round to 0.0002 and save
+    /// without error. Wide on purpose: it checks units, not market moves.
     /// </remarks>
     private static readonly Dictionary<string, (decimal Min, decimal Max)> PlausibleMid =
         new(StringComparer.OrdinalIgnoreCase)
@@ -42,9 +37,8 @@ public sealed record PriceQuote(
         };
 
     /// <summary>
-    /// Builds a quote, deriving the mid when the provider does not give one directly.
-    /// Prefers the provider's own mid: for some sources it is the traded last price rather
-    /// than the midpoint, and substituting our own would silently change what the chart means.
+    /// Builds a quote, deriving the mid only when the provider gives none. The provider's own mid
+    /// may be a last-traded price, and replacing it would change what the chart means.
     /// </summary>
     public static PriceQuote Normalize(
         string symbol,
@@ -61,9 +55,7 @@ public sealed record PriceQuote(
             ?? ask
             ?? throw new PriceSourceException(sourceCode, "Response contained no usable price (no mid, bid or ask).");
 
-        // An unknown symbol is not banded rather than rejected: the symbol gate belongs to each
-        // source, and inventing a band for a metal we have no reference price for would fail the
-        // chain over on a source that is working.
+        // Unknown symbols are not banded: each source owns its symbol check.
         if (PlausibleMid.TryGetValue(symbol, out var band) && (mid < band.Min || mid > band.Max))
         {
             throw new PriceSourceException(

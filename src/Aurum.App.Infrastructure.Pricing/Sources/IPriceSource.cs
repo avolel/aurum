@@ -1,9 +1,8 @@
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
 /// <summary>
-/// One upstream quote provider. Implementations normalize to <see cref="PriceQuote"/> and do
-/// no persistence, no caching and no retrying — Phase 1 layers the failover chain and circuit
-/// breaker on top of this interface, and quota accounting happens below it at the HTTP handler.
+/// One upstream quote provider. Returns a <see cref="PriceQuote"/>; no saving, caching or retrying.
+/// Failover sits above it, quota accounting below it in the HTTP pipeline.
 /// </summary>
 public interface IPriceSource
 {
@@ -14,8 +13,7 @@ public interface IPriceSource
     /// Fetch the latest quote for <paramref name="symbol"/>.
     /// </summary>
     /// <exception cref="QuotaExhaustedException">
-    /// The source's request budget for the current period is spent. Callers should move to the
-    /// next source rather than retrying — retrying cannot succeed until the period rolls.
+    /// The budget for this period is spent. Move to the next source; a retry cannot succeed.
     /// </exception>
     /// <exception cref="PriceSourceException">
     /// The provider was reachable but unusable (bad status, unparseable body, missing fields).

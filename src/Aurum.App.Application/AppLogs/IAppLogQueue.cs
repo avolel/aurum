@@ -19,24 +19,12 @@ public interface IAppLogQueue
 
 /// <inheritdoc />
 /// <remarks>
-/// <para>
-/// A bounded channel with <see cref="BoundedChannelFullMode.DropWrite"/>. Bounded because the
-/// failure this guards is a database that has gone away: an unbounded queue turns "logging is
-/// degraded" into an out-of-memory kill of a process that was otherwise serving traffic.
-/// </para>
-/// <para>
-/// Dropping the newest write rather than the oldest is deliberate. When the drain has stalled, the
-/// rows already queued are the ones nearest the cause; the flood arriving behind them is the
-/// symptom. Each drop is counted and reported to <c>ILogger</c>, because a silent drop would make
-/// the log lie by omission at exactly the moment someone is reading it.
-/// </para>
+/// Bounded, so a dead database cannot run the process out of memory. Drops the newest write: the
+/// rows already queued are nearest the cause. Drops are counted and reported, never silent.
 /// </remarks>
 public sealed class AppLogQueue(ILogger<AppLogQueue> logger) : IAppLogQueue
 {
-    /// <summary>
-    /// Roughly a minute of a busy endpoint. Large enough to absorb a database blip, small enough
-    /// that a sustained outage is bounded memory rather than a leak.
-    /// </summary>
+    /// <summary>Roughly a minute of a busy endpoint: enough to ride out a database blip.</summary>
     private const int Capacity = 10_000;
 
     private readonly Channel<AppLog> _channel = Channel.CreateBounded<AppLog>(
@@ -57,8 +45,7 @@ public sealed class AppLogQueue(ILogger<AppLogQueue> logger) : IAppLogQueue
 
         var dropped = Interlocked.Increment(ref _dropped);
 
-        // Powers of ten rather than every drop: the condition that causes one drop causes
-        // thousands, and a log line per drop is a second flood on top of the first.
+        // Log at powers of ten, not every drop, or the warnings become a flood too.
         if (IsPowerOfTen(dropped))
         {
             logger.LogWarning(

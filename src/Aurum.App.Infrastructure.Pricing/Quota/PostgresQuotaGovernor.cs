@@ -12,45 +12,13 @@ namespace Aurum.App.Infrastructure.Pricing.Quota;
 /// (source, accounting period), and the row itself is the bucket.
 /// </summary>
 /// <remarks>
-/// <para><b>Why acquire is raw SQL in an EF codebase.</b> Consuming a request is a
-/// read-modify-write on a contended counter. Loading the row, deciding in C#, and saving leaves a
-/// gap between the check and the increment — two callers both read 9 of 10 and both write 10, and
-/// nothing in the C# can close that gap because the gap is *between* the round trips. So the check
-/// and the increment are pushed into one statement (<see cref="AcquireSql"/>):
-/// <c>INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING</c>. Postgres takes a row lock before
-/// evaluating the <c>DO UPDATE</c> and re-reads the row under it, so a caller arriving mid-flight
-/// tests against the updated count rather than the snapshot its transaction started with. That
-/// re-read is the whole guarantee; EF's load-change-save model cannot express it.
-/// </para>
-/// <para>
-/// A returned row means the write happened, so the lease is granted and its remaining count comes
-/// straight out of <c>RETURNING</c>. No row means the condition failed. Three cases collapse into
-/// the one statement: a missing period row is the <c>INSERT</c> (creating the row *is* the first
-/// acquire), and both "budget spent" and "provider already rejected us" are the <c>WHERE</c>
-/// failing. Nothing computes <c>Granted</c> in C# — the database's answer is the decision, which is
-/// why the counter cannot drift from the lease.
-/// </para>
-///
-/// <para><b>Contract:</b></para>
-/// <list type="number">
-/// <item>Budget survives process restart — a fresh instance sees the used count, not zero.</item>
-/// <item>Concurrent acquires never oversubscribe: N racing callers against a budget of M grant
-/// exactly min(N, M). The unique index on (SourceCode, PeriodKey) is what makes a second competing
-/// row for the same period impossible, and therefore what makes <c>ON CONFLICT</c> fire.</item>
-/// <item>Period rollover needs no scheduled job. A new period means a new key, which means no row,
-/// which means the next acquire creates one. Spent rows are never reset — they stay as history.</item>
-/// <item><see cref="ReportProviderRejectionAsync"/> clamps remaining budget to zero for the rest of
-/// the period. It does so via <c>ProviderRejectedAt</c>, not by moving the counter — see the note on
-/// <see cref="QuotaStatus"/> before computing remaining budget as Limit minus Used. It is an upsert
-/// for the same reason acquire is: a request that straddles a period boundary is rejected against a
-/// period whose row does not exist yet, and an UPDATE would drop that clamp silently.</item>
-/// </list>
-///
-/// <para><b>Decisions, with reasoning, in <c>ops/decisions/decisions.md</c> (D-7):</b> no refunds on
-/// transport failure; denials logged at Debug because the poller already logs each exhaustion
-/// episode once, with the cause read back separately so the line can name it; the injected
-/// <see cref="TimeProvider"/> is the sole authority for every timestamp this class writes, so
-/// <c>now()</c> never appears in its SQL.</para>
+/// <para>Do not rewrite acquire in EF. Load, decide, save leaves a gap between check and increment.
+/// <see cref="AcquireSql"/> does both in one <c>INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING</c>:
+/// Postgres re-reads the row under a lock, which is the whole concurrency guarantee (D-7). The unique
+/// index on (SourceCode, PeriodKey) is what makes <c>ON CONFLICT</c> fire.</para>
+/// <para>A returned row is a grant; no row is a denial (spent, or provider rejected). A new period
+/// is just a new key, so rollover needs no job. Timestamps come from the injected clock, never
+/// <c>now()</c>.</para>
 /// </remarks>
 public class PostgresQuotaGovernor(
     AurumDbContext db,
@@ -70,11 +38,8 @@ public class PostgresQuotaGovernor(
        AND api_quota_windows."ProviderRejectedAt" IS NULL
     RETURNING "RequestLimit" - "RequestsUsed";
     """;
-    // An UPDATE cannot clamp a period that has no row yet, so this is an upsert too. RequestsUsed
-    // is 0 on insert because that is the honest count: nothing was ever charged to this period.
-    // The clamp lives in ProviderRejectedAt, never in the counter — see the QuotaStatus remarks.
-    // COALESCE keeps the first rejection's timestamp; when the provider first turned us away is
-    // evidence, and a later rejection in the same period must not overwrite it.
+    // An upsert, because the period may have no row yet (D-7). RequestsUsed stays the honest
+    // count; the clamp is ProviderRejectedAt. COALESCE keeps the first rejection's time.
     private const string ClampSql = """
     INSERT INTO api_quota_windows
         ("SourceCode", "PeriodKey", "PeriodStartsAt", "PeriodEndsAt",
@@ -100,11 +65,8 @@ public class PostgresQuotaGovernor(
         if (remaining is not null)
             return new QuotaLease(Granted: true, Remaining: remaining.Value, ResetsAt: periodEndsAt);
 
-        // The acquire statement collapses "budget spent" and "provider rejected" into the same
-        // null, so the cause has to be read back to log it. Deliberately outside that statement,
-        // and deliberately diagnostic only: a rejection could land, or the period roll, between
-        // the two queries. That makes the message occasionally stale, which is fine for a log
-        // line and wrong for anything that decides. Nothing below may branch on this.
+        // Read back only to log the cause. Outside the atomic statement, so it can be stale:
+        // nothing may branch on it (D-7).
         var status = await GetStatusAsync(sourceCode, ct);
         if (status.ProviderRejected)
         {
@@ -125,9 +87,7 @@ public class PostgresQuotaGovernor(
         DateTimeOffset now = clock.GetUtcNow();
         var (periodKey, periodStartsAt, periodEndsAt, requestLimit) = GetCurrentPeriod(sourceCode, now);
 
-        // ExecuteSqlRawAsync rather than TryConsumeAsync's hand-rolled command: that one only
-        // opens its own connection because it needs a scalar back, and this statement has no
-        // result worth reading — it has no WHERE, so it always affects exactly one row.
+        // No result to read back, so ExecuteSqlRawAsync is enough here.
         await db.Database.ExecuteSqlRawAsync(ClampSql, [
             new NpgsqlParameter("code",     sourceCode),
             new NpgsqlParameter("period",   periodKey),
@@ -164,13 +124,8 @@ public class PostgresQuotaGovernor(
     }
 
     /// <summary>
-    /// Resolves the accounting period and budget for a source from that source's own
-    /// configuration.
+    /// Resolves the accounting period and budget from the source's own configuration (D-9).
     /// </summary>
-    /// <remarks>
-    /// An unconfigured source throws rather than falling back to a default limit and period —
-    /// see <see cref="PriceSourcesOptions.RequireByCode"/> for why there is no defensible default.
-    /// </remarks>
     private (string PeriodKey, DateTimeOffset StartsAt, DateTimeOffset EndsAt, int RequestLimit) GetCurrentPeriod(
         string sourceCode,
         DateTimeOffset now)
@@ -191,8 +146,7 @@ public class PostgresQuotaGovernor(
         await using var command = connection.CreateCommand();
         command.CommandText = AcquireSql;
 
-        // If EF has a transaction open, a raw command must join it - otherwise it runs on the
-        // same connection but outside the transaction, silently breaking atomicity.
+        // Join EF's open transaction, or this runs outside it on the same connection.
         command.Transaction = db.Database.CurrentTransaction?.GetDbTransaction();
 
         command.Parameters.Add(new NpgsqlParameter("code", sourceCode));
@@ -202,13 +156,11 @@ public class PostgresQuotaGovernor(
         command.Parameters.Add(new NpgsqlParameter("limit", requestLimit));
         command.Parameters.Add(new NpgsqlParameter("now", now));
 
-        // EF ref-counts explicit opens, so this pairs safely with CloseConnectionAsync and is a
-        // no-op when EF already had the connection open.
+        // EF counts explicit opens, so this pairs safely with CloseConnectionAsync.
         await db.Database.OpenConnectionAsync(ct);
         try
         {
-            // ExecuteScalar returns the first column of the first row - or null when the
-            // statement produced no rows at all. That null *is* the denial signal.
+            // Null when no row came back: that is the denial.
             return await command.ExecuteScalarAsync(ct) as int?;
         }
         finally

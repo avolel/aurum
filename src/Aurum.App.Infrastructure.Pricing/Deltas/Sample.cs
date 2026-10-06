@@ -5,12 +5,8 @@ namespace Aurum.App.Infrastructure.Pricing.Deltas;
 /// source it came from.
 /// </summary>
 /// <remarks>
-/// <para>A struct so the ring buffer is one contiguous array with no per-entry allocation. Padded
-/// to 40 bytes (16 + 16 + 1, aligned to 8), so the default 8,640 entries are about 340 KB per
-/// symbol — not the 200 KB the original spec quoted.</para>
-///
-/// <para>No bid, ask or <c>ReceivedAt</c>. That is what keeps it small, and it is also why the
-/// latest-quote cache cannot be warmed from this buffer (D-17).</para>
+/// A struct so the buffer is one array with no per-entry allocation: 40 bytes padded, about 340 KB
+/// per symbol at the default. No bid, ask or <c>ReceivedAt</c>, to stay small (D-17).
 /// </remarks>
 /// <param name="SourceOrdinal">
 /// A per-process number for the source code, handed out the first time each code is seen. Only

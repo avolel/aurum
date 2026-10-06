@@ -1,14 +1,9 @@
 namespace Aurum.App.Infrastructure.Pricing.Quota;
 
 /// <summary>
-/// Durable request budget for a rate- or quota-limited upstream.
+/// Request budget for a quota-limited upstream. Must survive a restart and be safe under
+/// concurrent acquires; an in-memory counter can spend a month in an afternoon (D-7).
 /// </summary>
-/// <remarks>
-/// The property that matters: budget accounting must survive process restart. GoldAPI's free
-/// tier resets monthly, so an in-memory counter that resets with the container can spend a
-/// month of requests in an afternoon. Implementations must therefore be durable and safe
-/// against concurrent acquires from multiple callers.
-/// </remarks>
 public interface IQuotaGovernor
 {
     /// <summary>
@@ -16,9 +11,7 @@ public interface IQuotaGovernor
     /// creating the period's counter if this is the first call in it.
     /// </summary>
     /// <returns>
-    /// A granted lease if budget remained, otherwise a denied one carrying the reset time.
-    /// Never throws for the ordinary "out of budget" case — that is a normal control-flow
-    /// outcome the failover chain acts on.
+    /// A granted lease, or a denied one carrying the reset time. Running out does not throw.
     /// </returns>
     Task<QuotaLease> AcquireAsync(string sourceCode, CancellationToken ct);
 
@@ -26,9 +19,7 @@ public interface IQuotaGovernor
     /// Record that the provider itself rejected us for quota (HTTP 429/402).
     /// </summary>
     /// <remarks>
-    /// The provider is authoritative. Our local count can only ever be an under-count — a
-    /// request that left the process but was not recorded — so this must clamp the period's
-    /// remaining budget to zero rather than merely incrementing the counter.
+    /// The provider is authoritative, so this clamps the rest of the period to zero.
     /// </remarks>
     Task ReportProviderRejectionAsync(string sourceCode, CancellationToken ct);
 
@@ -47,9 +38,6 @@ public readonly record struct QuotaLease(bool Granted, int Remaining, DateTimeOf
 /// <param name="ProviderRejected">Whether the provider has rejected us for quota this period.</param>
 /// <remarks>
 /// <b>Remaining budget is not <c>Limit - Used</c>.</b> When <paramref name="ProviderRejected"/> is
-/// true the remaining budget is zero regardless of the counter: a rejection records that the
-/// provider's count disagrees with ours, and deliberately leaves <paramref name="Used"/> at what we
-/// actually observed. That gap is the only evidence we get that our accounting is drifting, so it is
-/// preserved rather than overwritten.
+/// true it is zero; <paramref name="Used"/> keeps the real count as evidence of drift (D-7).
 /// </remarks>
 public readonly record struct QuotaStatus(int Used, int Limit, DateTimeOffset ResetsAt, bool ProviderRejected);

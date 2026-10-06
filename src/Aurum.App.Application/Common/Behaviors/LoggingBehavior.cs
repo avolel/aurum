@@ -10,9 +10,7 @@ namespace Aurum.App.Application.Common.Behaviors;
 /// so it measures validation and the transaction as well as the handler.
 /// </summary>
 /// <remarks>
-/// It logs the failure and rethrows rather than translating: the controller's catch block owns the
-/// HTTP response, and a behavior that swallowed here would hand the controller a default value it
-/// would report as success.
+/// Logs and rethrows: the controller owns the response, and swallowing would look like success.
 /// </remarks>
 public sealed class LoggingBehavior<TRequest, TResponse>(
     IAppLogService<TRequest> appLog,
@@ -28,9 +26,7 @@ public sealed class LoggingBehavior<TRequest, TResponse>(
     {
         var action = typeof(TRequest).Name;
 
-        // Stopwatch, not TimeProvider: this measures elapsed duration, where a monotonic clock is
-        // the correct instrument. TimeProvider is the authority for timestamps we *persist*, and a
-        // wall clock that steps backwards would make a duration negative.
+        // Stopwatch, not TimeProvider: a duration needs a clock that never steps backwards.
         var started = Stopwatch.GetTimestamp();
 
         try

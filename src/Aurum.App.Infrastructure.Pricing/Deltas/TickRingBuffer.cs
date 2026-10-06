@@ -5,17 +5,10 @@ namespace Aurum.App.Infrastructure.Pricing.Deltas;
 /// overwrites the oldest entry.
 /// </summary>
 /// <remarks>
-/// <para>Not thread-safe. The delta engine holds one per symbol behind that symbol's lock; nothing
-/// else should touch it.</para>
-///
-/// <para>Strictly increasing <see cref="Sample.ObservedAt"/> is the invariant everything else rests
-/// on: it is what makes <see cref="LastIndexAtOrBefore"/> a binary search. So
-/// <see cref="TryAppend"/> refuses a sample at or before the newest and never re-sorts. A re-sorted
-/// buffer would be in order but would no longer be what the app actually observed (D-17).</para>
-///
-/// <para>Indexes are <em>logical</em>: 0 is the oldest held sample and <c>Count - 1</c> the newest,
-/// wherever they sit in the array. Logical position <c>i</c> is array slot
-/// <c>(start + i) % capacity</c>.</para>
+/// <para>Not thread-safe: the delta engine guards each one with its symbol's lock.</para>
+/// <para>Strictly increasing <see cref="Sample.ObservedAt"/> is what makes the binary search work, so
+/// out-of-order samples are refused, never re-sorted (D-17).</para>
+/// <para>Indexes are logical: 0 is the oldest held sample, array slot <c>(start + i) % capacity</c>.</para>
 /// </remarks>
 internal sealed class TickRingBuffer
 {
@@ -27,8 +20,7 @@ internal sealed class TickRingBuffer
 
     public TickRingBuffer(int capacity)
     {
-        // Two, not one: a buffer that can hold a single price can never bracket any window, so it
-        // would boot clean and answer "no answer" forever.
+        // A single price can never bracket a window.
         ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 2);
         _items = new Sample[capacity];
     }
@@ -42,8 +34,7 @@ internal sealed class TickRingBuffer
     {
         get
         {
-            // Checked against Count, not the array length: slots past Count hold default(Sample) or
-            // an overwritten value, and silently returning either would be a made-up price.
+            // Against Count, not the array: slots past it would be a made-up price.
             ArgumentOutOfRangeException.ThrowIfNegative(index);
             ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, _count);
             return _items[(_start + index) % _items.Length];
@@ -54,13 +45,11 @@ internal sealed class TickRingBuffer
     /// Appends <paramref name="sample"/> if it is strictly newer than the newest held sample.
     /// </summary>
     /// <returns>
-    /// <c>false</c> when the sample was dropped as out of order. Counting and logging the drop is the
-    /// caller's job, because warm-up appends through here too and must not count.
+    /// <c>false</c> when dropped as out of order. The caller counts drops; warm-up must not.
     /// </returns>
     public bool TryAppend(Sample sample)
     {
-        // At-or-before, not just before: an equal timestamp is a second price for an instant the
-        // buffer already holds, and keeping both would make "last at or before t" ambiguous.
+        // Equal times are refused too, or "last at or before t" would be ambiguous.
         if (_count > 0 && sample.ObservedAt <= this[_count - 1].ObservedAt)
         {
             return false;
@@ -86,10 +75,8 @@ internal sealed class TickRingBuffer
     /// when every held sample is newer (or the buffer is empty).
     /// </summary>
     /// <remarks>
-    /// Last at-or-before, never first-after. First-after silently shrinks the window: with samples
-    /// eight hours apart, a "one-hour move" would be measured from a price inside the hour and still
-    /// be labelled one hour. Returning the index rather than the sample lets the caller walk the
-    /// range from start to end for the sample count and volatility.
+    /// Never first-after, which would quietly shrink the window (D-17). Returns the index so the
+    /// caller can walk the range.
     /// </remarks>
     public int LastIndexAtOrBefore(DateTimeOffset time)
     {

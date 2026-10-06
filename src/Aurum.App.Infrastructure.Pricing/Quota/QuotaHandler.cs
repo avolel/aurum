@@ -6,19 +6,10 @@ namespace Aurum.App.Infrastructure.Pricing.Quota;
 /// Enforces a source's request budget at the HTTP boundary.
 /// </summary>
 /// <remarks>
-/// <para>
-/// Placement is the point. Phase 1 adds Polly retries and a failover chain above
-/// <see cref="Sources.IPriceSource"/>; a governor sitting at that level would let every retry
-/// and every failover attempt spend quota without being counted. As a DelegatingHandler this
-/// sees exactly the requests that actually leave the process — including retries — which is
-/// what the provider bills.
-/// </para>
-/// <para>
-/// It takes <see cref="IServiceScopeFactory"/> rather than <see cref="IQuotaGovernor"/> because
-/// IHttpClientFactory pools message handlers for minutes at a time. Injecting the governor
-/// directly would capture its scoped DbContext in a long-lived object — a DbContext shared
-/// across concurrent requests, which is not thread-safe.
-/// </para>
+/// <para>A handler, not a wrapper around <see cref="Sources.IPriceSource"/>, so it counts every
+/// request that leaves the process, retries included (D-7).</para>
+/// <para>Takes <see cref="IServiceScopeFactory"/>: handlers are pooled for minutes, and a captured
+/// governor would share one DbContext across concurrent requests.</para>
 /// </remarks>
 public class QuotaHandler(
     IServiceScopeFactory scopeFactory,

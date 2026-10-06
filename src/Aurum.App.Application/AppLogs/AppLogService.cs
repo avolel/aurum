@@ -9,9 +9,7 @@ public sealed class AppLogService<T>(
     TimeProvider clock) : IAppLogService<T>
 {
     /// <summary>
-    /// Matches <c>app_logs.details</c>. Truncated here rather than at SaveChanges: the drain
-    /// batches rows, so one oversized row would fail 22001 for the whole batch and lose the other
-    /// entries with it.
+    /// Matches <c>app_logs.details</c>. Cut here, or one long row fails its whole batch.
     /// </summary>
     private const int MaxDetailsLength = 4000;
 
@@ -48,9 +46,7 @@ public sealed class AppLogService<T>(
             entry.LogType = AppLogs.LogType.ActionLog.ToString();
             entry.Action = action;
 
-            // ToString() rather than Message: an InvalidOperationException wrapping a
-            // PostgresException says nothing useful without its inner exception, and the inner one
-            // is where the SQLSTATE lives.
+            // ToString(), not Message, to keep inner exceptions (where the SQLSTATE lives).
             entry.Details = Truncate(exception.ToString(), MaxDetailsLength);
             entry.ExceptionType = exception.GetType().FullName;
             entry.StackTrace = Truncate(exception.StackTrace, MaxStackTraceLength);
@@ -76,9 +72,7 @@ public sealed class AppLogService<T>(
             HttpMethod = current.HttpMethod,
             CorrelationId = current.CorrelationId,
 
-            // Stamped here, not by ApplyAuditFields. The drain writes this row seconds later and
-            // possibly out of order, so a timestamp taken at SaveChanges would record when the
-            // queue got around to it rather than when the thing happened.
+            // Stamped now, not at save: the drain writes it later.
             CreatedAt = now,
             UpdatedAt = now,
             Action = string.Empty,

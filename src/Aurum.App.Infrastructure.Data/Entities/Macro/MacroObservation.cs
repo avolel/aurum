@@ -14,8 +14,7 @@ public class MacroObservation : AuditableEntity
     public DateOnly ObservedOn { get; set; }
 
     /// <summary>
-    /// When the figure was published. Distinct from <see cref="ObservedOn"/> and the one that
-    /// matters for causation: a June CPI print moves the price on its release date, not in June.
+    /// When the figure was published, which is when it moves the price, not <see cref="ObservedOn"/>.
     /// </summary>
     public DateTimeOffset? ReleasedAt { get; set; }
 

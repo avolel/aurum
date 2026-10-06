@@ -6,8 +6,7 @@ public sealed class PaginationQuery
     public const int DefaultPageSize = 50;
 
     /// <summary>
-    /// Hard ceiling on a caller-supplied page size. <c>price_ticks</c> is a hypertable that grows
-    /// by one row per poll forever, so an unbounded page size is a request that reads the table.
+    /// Ceiling on page size, so a request cannot read a whole growing table like <c>price_ticks</c>.
     /// </summary>
     public const int MaxPageSize = 500;
 
@@ -31,10 +30,8 @@ public static class PaginationHelper
     /// Clamps a caller-supplied page request into the allowed range.
     /// </summary>
     /// <remarks>
-    /// Clamping rather than rejecting: a page size of 0 or a negative page number is almost always
-    /// an uninitialised client, and returning 400 for it turns a harmless default into a support
-    /// ticket. A page size <em>above</em> the ceiling is clamped too, because the ceiling is there
-    /// to protect the database, not to police the caller.
+    /// Clamps rather than rejects: bad values are usually an uninitialised client, and the ceiling
+    /// protects the database, not the caller.
     /// </remarks>
     public static (int Page, int PageSize) GetEffectivePagination(PaginationQuery? pagination)
     {

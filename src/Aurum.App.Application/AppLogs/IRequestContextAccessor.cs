@@ -23,11 +23,8 @@ public sealed record RequestContext(
 /// <c>IHttpContextAccessor</c>.
 /// </summary>
 /// <remarks>
-/// This interface exists for one reason: the layer table in <c>docs/best-practices-api.md</c> gives
-/// this project "Never Does: Direct HTTP/controller concerns", and <c>HttpContext</c> in a handler
-/// is precisely that. The implementation lives in <c>Aurum.Api</c>, where HTTP is the subject.
-/// The second benefit is that a background job — <c>PricePollingService</c>, the log drain — gets
-/// <see cref="RequestContext.None"/> rather than a null-reference from an absent HttpContext.
+/// This layer must not touch HTTP (<c>docs/best-practices-api.md</c>), so the implementation lives in
+/// <c>Aurum.Api</c>. Background jobs get <see cref="RequestContext.None"/>.
 /// </remarks>
 public interface IRequestContextAccessor
 {

@@ -8,17 +8,8 @@ namespace Aurum.App.Application.Common.Behaviors;
 /// Wraps commands in a database transaction. Queries pass straight through.
 /// </summary>
 /// <remarks>
-/// <para>
-/// The discrimination is on <see cref="ICommand{T}"/>, not on the HTTP verb or the type name, so a
-/// request that implements <c>IRequest&lt;T&gt;</c> directly gets no transaction and looks
-/// identical everywhere else. That is why the naming rule ("if it implements ICommand, call it
-/// *Command") is a merge blocker rather than a style preference.
-/// </para>
-/// <para>
-/// Command handlers must therefore not manage transactions themselves, and external HTTP calls
-/// belong before the writes in a handler rather than inside them — a provider timing out should
-/// not be holding a database transaction open.
-/// </para>
+/// Keyed on <see cref="ICommand{T}"/>: a command implementing <c>IRequest&lt;T&gt;</c> directly gets
+/// no transaction. Handlers must not open their own, and should make HTTP calls before writing.
 /// </remarks>
 public sealed class TransactionBehavior<TRequest, TResponse>(IUnitOfWork unitOfWork)
     : IPipelineBehavior<TRequest, TResponse>

@@ -10,17 +10,9 @@ namespace Aurum.App.Application.AppLogs;
 /// Drains <see cref="IAppLogQueue"/> into <c>app_logs</c> in batches.
 /// </summary>
 /// <remarks>
-/// <para>
-/// A scope per batch, not per row and not one for the process lifetime. Per row is a DbContext
-/// construction per log line; process-lifetime is a DbContext that accumulates tracked entities
-/// forever and never sees a schema change.
-/// </para>
-/// <para>
-/// A failed batch is dropped rather than retried. Retrying a batch that failed because the
-/// database is unreachable produces an infinite loop that holds the queue at capacity, so the
-/// log's own failure mode would start dropping the newest rows — the ones about the outage.
-/// The loss is reported on <c>ILogger</c>, which goes to stdout and does not need the database.
-/// </para>
+/// <para>A scope per batch: per row is wasteful, and one for the process tracks entities forever.</para>
+/// <para>A failed batch is dropped, not retried: retrying against a dead database would fill the
+/// queue and drop the rows about the outage. The loss goes to <c>ILogger</c> (stdout).</para>
 /// </remarks>
 public sealed class AppLogDrainService(
     IAppLogQueue queue,
@@ -47,11 +39,10 @@ public sealed class AppLogDrainService(
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Shutdown. Fall through and make one last attempt at whatever is in hand.
+            // Shutdown: fall through and flush what is in hand.
         }
 
-        // CancellationToken.None: the host's shutdown token is already cancelled by the time we
-        // get here, and passing it would cancel the write that exists to save these rows.
+        // The shutdown token is already cancelled and would cancel this last write.
         await FlushAsync(batch, CancellationToken.None);
     }
 

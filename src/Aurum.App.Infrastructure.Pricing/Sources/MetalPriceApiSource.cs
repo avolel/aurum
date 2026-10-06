@@ -13,13 +13,8 @@ public class MetalPriceApiSource(
 
     public async Task<PriceQuote> GetLatestQuoteAsync(string symbol, CancellationToken ct)
     {
-        // Before the request, not after: QuotaHandler charges a lease the moment anything leaves
-        // the process and never refunds it, so validating on the response would spend budget to
-        // learn something knowable up front.
-        //
-        // PriceSourceException rather than ArgumentException because the failover chain must be
-        // able to move to a source that does carry this metal. ArgumentException is reserved for
-        // a symbol that is structurally invalid, which no source can serve.
+        // Checked before the request so no lease is spent. PriceSourceException, not
+        // ArgumentException, so the chain can fail over to a source that carries this metal.
         if (!string.Equals(symbol, SupportedSymbol.Gold, StringComparison.OrdinalIgnoreCase))
         {
             throw new PriceSourceException(Code, $"Supports {SupportedSymbol.Gold} only; asked for '{symbol}'.");
@@ -42,19 +37,14 @@ public class MetalPriceApiSource(
             throw new PriceSourceException(Code, "Response body was not the expected JSON.", ex);
         }
 
-        // With `base=XAU` the requested currency is keyed by itself and carries USD per ounce
-        // (~4,349). The provider also ships a convenience key of base+currency — `XAUUSD` here —
-        // holding the inverse, ounces per USD (~0.00023). Reading that one rounds to 0.0002 in
-        // `numeric(18,4)` and never throws, which is why the band in PriceQuote.Normalize backs
-        // this up rather than trusting the key name alone.
+        // Read `USD` (USD per ounce). The `XAUUSD` key is the inverse, ounces per USD, and would
+        // round to 0.0002 without an error; PriceQuote.Normalize's band backs this up.
         if (body is not { Success: true, Rates: not null }
             || !body.Rates.TryGetValue("USD", out var mid)
             || mid <= 0)
             throw new PriceSourceException(Code, "Response contained no positive USD rate for XAU.");
 
-        // `timestamp` is Unix seconds. Missing or zero means the provider's own validity time is
-        // unusable; fall back to receipt time and say so, because backdating to the epoch would
-        // hand the delta engine a decades-old tick.
+        // Unix seconds. If missing, use receipt time: the epoch would be a decades-old tick.
         DateTimeOffset observedAt;
         if (body.Timestamp is > 0)
             observedAt = DateTimeOffset.FromUnixTimeSeconds(body.Timestamp.Value);
@@ -64,8 +54,7 @@ public class MetalPriceApiSource(
             logger.LogWarning("{Source} returned no usable timestamp; using receipt time for {Symbol}.", Code, symbol);
         }
 
-        // Bid and ask stay null: this provider genuinely does not quote two-sided. Normalize takes
-        // the provider's price as the mid directly.
+        // This provider does not quote bid and ask, so its price is the mid.
         return PriceQuote.Normalize(
             symbol,
             observedAt,

@@ -2,58 +2,28 @@ using System.ComponentModel.DataAnnotations;
 
 namespace Aurum.App.Infrastructure.Pricing;
 
-/// <summary>Bound from the <c>PriceSources</c> configuration section.</summary>
-/// <remarks>
-/// <para>
-/// The section binds to a map rather than to one property per provider. A property per provider
-/// means every consumer that needs "the options for source X" has to translate a runtime source
-/// code into a compile-time member, and the only way to write that is a switch with a fall-through
-/// arm. That arm is a fabricated configuration: it looks identical to a real one downstream, so a
-/// source with a 20-request tier gets accounted against whatever the fall-through guessed. There is
-/// no correct default for another provider's budget, so the lookup here has no default at all —
-/// <see cref="RequireByCode"/> throws on a miss, and callers fail rather than invent.
-/// </para>
-/// <para>
-/// The map is keyed by a friendly config key (<c>GoldApiIo</c>), not by the source code, with the
-/// code carried inside as <see cref="PriceSourceOptions.SourceCode"/>. Keying by the code directly
-/// would read better but puts a dot in every environment variable name
-/// (<c>PriceSources__goldapi.io__ApiKey</c>), which the dotenv parsers in the compose toolchain do
-/// not handle consistently. <see cref="PriceSourcesOptionsValidator"/> enforces that every entry
-/// declares a code and that no two entries share one, which is what the friendly key costs.
-/// </para>
-/// </remarks>
+/// <summary>
+/// Bound from the <c>PriceSources</c> configuration section: a map keyed by a friendly config key,
+/// with the provider's code inside each entry (D-9).
+/// </summary>
 public class PriceSourcesOptions
 {
     public const string SectionName = "PriceSources";
 
     /// <summary>
-    /// Configured sources, keyed by config key. Get-only and pre-populated because the binder
-    /// binds *into* this instance, which is what preserves the case-insensitive comparer —
-    /// configuration keys are case-insensitive, so a case-sensitive map would miss lookups that
-    /// the config system considers the same key.
+    /// Configured sources, keyed by config key. Get-only and pre-populated so the binder binds into
+    /// it and keeps the case-insensitive comparer, matching how configuration keys compare.
     /// </summary>
     public Dictionary<string, PriceSourceOptions> Sources { get; } =
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Enabled sources in failover order: the head is the primary, the rest are backups in the
-    /// order the chain will try them.
+    /// Enabled sources in failover order: the head is the primary, the rest are backups.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// One method with two callers, on purpose. <c>FailoverPriceFeed</c> decides which source
-    /// serves a poll and <c>PricePollingService</c>'s startup coverage log states which budget
-    /// funds the cadence; while those were two <c>OrderBy</c> chains over the same data in two
-    /// files they agreed only by coincidence, and the failure mode is a log that confidently
-    /// names a primary that is not the one being called.
-    /// </para>
-    /// <para>
-    /// The tie-break on <see cref="PriceSourceOptions.SourceCode"/> is not cosmetic.
-    /// <see cref="PriceSourcesOptionsValidator"/> refuses a tie for the <em>lowest</em> priority,
-    /// but ties further down are allowed, and without a deterministic second key which backup
-    /// runs first would fall out of DI registration order — the exact implicitness D-12 rejected
-    /// keyed DI to avoid. Ordinal because source codes are identifiers, not user text.
-    /// </para>
+    /// The one ordering both <c>FailoverPriceFeed</c> and the poller's coverage log use, so they
+    /// cannot name different primaries. The <c>SourceCode</c> tie-break keeps backup order from
+    /// depending on registration order (D-12).
     /// </remarks>
     public IReadOnlyList<PriceSourceOptions> EnabledInFailoverOrder() =>
         [.. Sources.Values
@@ -62,19 +32,9 @@ public class PriceSourcesOptions
             .ThenBy(source => source.SourceCode, StringComparer.Ordinal)];
 
     /// <summary>
-    /// Resolves a source's configuration by its natural key — the same string
-    /// <c>QuotaHandler</c>, <c>IPriceSource.Code</c> and <c>api_quota_windows.SourceCode</c>
-    /// all use. A linear scan is deliberate: the map holds a handful of entries, and caching an
-    /// index in a mutable options object would go stale under <c>IOptionsMonitor</c> reloads.
+    /// Resolves a source's configuration by its code. Throws on a miss: there is no safe default for
+    /// another provider's budget (D-9). A linear scan, because a cached index would go stale on reload.
     /// </summary>
-    /// <remarks>
-    /// Throwing is the point. There is no defensible default for another provider's budget or
-    /// period: guessing high lets a source spend budget it does not have, and guessing the period
-    /// kind rolls our counter on a different day from the provider's, so the ledger and the
-    /// account disagree with nothing in either to say so. Under normal wiring this is unreachable
-    /// — <see cref="PriceSourcesOptionsValidator"/> has already run at boot — so it is a backstop
-    /// for a source registered in code but absent from configuration.
-    /// </remarks>
     public PriceSourceOptions RequireByCode(string sourceCode) =>
         Sources.Values.FirstOrDefault(candidate =>
             string.Equals(candidate.SourceCode, sourceCode, StringComparison.OrdinalIgnoreCase))
@@ -84,20 +44,14 @@ public class PriceSourcesOptions
 }
 
 /// <summary>
-/// One upstream price provider's configuration.
+/// One upstream price provider's configuration. Its annotations are enforced by
+/// <see cref="PriceSourcesOptionsValidator"/>, not by <c>ValidateDataAnnotations()</c> (D-9).
 /// </summary>
-/// <remarks>
-/// The annotations here are enforced by <see cref="PriceSourcesOptionsValidator"/>, not by
-/// <c>ValidateDataAnnotations()</c>. That call validates the attributes on
-/// <see cref="PriceSourcesOptions"/>' own properties and does not descend into the objects behind
-/// them, so every attribute on this class went unenforced for as long as it was reached through a
-/// nested property.
-/// </remarks>
 public class PriceSourceOptions
 {
     /// <summary>
-    /// The provider's natural key, e.g. <c>goldapi.io</c>. This — not the config key above it —
-    /// is what the quota ledger, the source registry and the poller all match on.
+    /// The provider's code, e.g. <c>goldapi.io</c>. What the quota ledger and the source registry
+    /// match on, not the config key.
     /// </summary>
     [Required(AllowEmptyStrings = false, ErrorMessage = "SourceCode is required.")]
     public string SourceCode { get; set; } = string.Empty;
@@ -113,23 +67,20 @@ public class PriceSourceOptions
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Requests allowed per accounting period. GoldAPI's free tier is monthly; the default is
-    /// deliberately low so a misconfiguration under-polls rather than burning the month.
+    /// Requests allowed per period. Low by default so a misconfiguration under-polls.
     /// </summary>
     [Range(1, int.MaxValue)]
     public int MonthlyRequestLimit { get; set; } = 100;
 
     /// <summary>
-    /// How the provider's quota period rolls. Verify against the account page rather than the
-    /// docs — a wrong choice here is a silent one-in-twelve failure.
+    /// How the provider's quota period rolls. Check the account page, not the docs: a wrong choice
+    /// fails silently.
     /// </summary>
     public QuotaPeriodKind QuotaPeriod { get; set; } = QuotaPeriodKind.CalendarMonthUtc;
 
     /// <summary>
-    /// Required by <see cref="QuotaPeriodKind.RollingThirtyDays"/> and ignored otherwise: the
-    /// date the provider's rolling window counts from, typically signup.
-    /// <see cref="PriceSourcesOptionsValidator"/> rejects the combination at boot, because the
-    /// period resolver throws on every acquire without one.
+    /// The date a <see cref="QuotaPeriodKind.RollingThirtyDays"/> window counts from, usually signup.
+    /// Required for that kind and ignored otherwise (D-7).
     /// </summary>
     public DateTimeOffset? PeriodAnchor { get; set; }
 
@@ -137,28 +88,16 @@ public class PriceSourceOptions
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Ceiling on the whole retry sequence — every attempt plus every backoff delay. Must exceed
-    /// <see cref="RequestTimeout"/>, or the first attempt consumes the total budget and the retries
-    /// are cancelled before they open a socket; <see cref="PriceSourcesOptionsValidator"/> enforces
-    /// that, since the symptom is a retry policy that silently does nothing.
+    /// Ceiling on the whole retry sequence, backoff included. 40s because three 10s attempts at a 2s
+    /// base need 36s (D-15); <c>PriceSourcesOptionsValidator.MinimumTotalTimeout</c> checks it.
     /// </summary>
-    /// <remarks>
-    /// 40s rather than the obvious 3 × <see cref="RequestTimeout"/>: the backoff delays are part of
-    /// the sequence too, so three 10s attempts at a 2s base need 30s + 2s + 4s = 36s. The previous
-    /// 35s default was that arithmetic done without the backoff, and it left the last attempt
-    /// running on a truncated budget — <see cref="PriceFeedResilienceOptions.MaxAttempts"/> reading
-    /// as one number and behaving as another. Computed, not chosen: see
-    /// <c>PriceSourcesOptionsValidator.MinimumTotalTimeout</c>, which is what now rejects it.
-    /// </remarks>
     public TimeSpan TotalTimeout { get; set; } = TimeSpan.FromSeconds(40);
 }
 
 /// <summary>Bound from the <c>PricePolling</c> configuration section.</summary>
 /// <remarks>
-/// The poller runs one timer and asks the failover chain for one price per tick, so the cadence
-/// belongs to the feed rather than to any source. It cannot live under <c>PriceSources</c>: that
-/// section binds its children into the source map, so a scalar there becomes a source named
-/// "PollInterval" with no SourceCode.
+/// Not under <c>PriceSources</c>: that section binds its children into the source map, so a scalar
+/// there would become a source named "PollInterval".
 /// </remarks>
 public class PricePollingOptions
 {
@@ -168,24 +107,14 @@ public class PricePollingOptions
 
     /// <summary>
     /// Age beyond which the latest-quote cache flags a price as stale. Null means twice
-    /// <see cref="PollInterval"/>.
+    /// <see cref="PollInterval"/>, which is why it lives in this section (D-16).
     /// </summary>
-    /// <remarks>
-    /// In this section rather than its own because the default is derived from
-    /// <see cref="PollInterval"/>; a separate section would let the two drift with nothing reading
-    /// both.
-    /// </remarks>
     public TimeSpan? StaleAfter { get; set; }
 
     /// <summary>
-    /// <see cref="StaleAfter"/> is unset, or longer than one <see cref="PollInterval"/>.
+    /// <see cref="StaleAfter"/> is unset, or longer than one <see cref="PollInterval"/>. A method so the
+    /// test calls the rule the host runs.
     /// </summary>
-    /// <remarks>
-    /// A threshold at or below the interval flags every price stale as soon as it is one poll old,
-    /// so the flag is on most of the time and people learn to ignore it. A method rather than an
-    /// inline lambda in <c>Program.cs</c> so the test calls the rule the host runs instead of a
-    /// copy of it.
-    /// </remarks>
     internal static bool StaleAfterExceedsPollInterval(PricePollingOptions options) =>
         options.StaleAfter is not { } staleAfter || staleAfter > options.PollInterval;
 }
@@ -204,19 +133,15 @@ public class PriceFeedResilienceOptions
     public const string SectionName = "PriceFeed:Resilience";
 
     /// <summary>
-    /// Total HTTP requests one poll may spend, including the first. Named attempts rather than
-    /// retries because this is the number the quota guard multiplies by: every attempt re-enters
-    /// QuotaHandler and is charged its own lease (D-7), so attempts — not retries — are what the
-    /// provider bills.
+    /// Total HTTP requests one poll may spend, including the first. Attempts, not retries, because
+    /// each attempt is billed (D-15).
     /// </summary>
     [Range(1, 5)]
     public int MaxAttempts { get; set; } = 3;
 
     /// <summary>
-    /// First retry delay; each subsequent retry doubles it. Declared here rather than left to
-    /// Polly's default because the timeout validator has to reproduce the schedule to know
-    /// whether TotalTimeout can fit MaxAttempts, and a default it cannot see is one it cannot
-    /// be held to across a package upgrade.
+    /// First retry delay; each later retry doubles it. Explicit so the timeout validator models a
+    /// value it can see (D-15).
     /// </summary>
     public TimeSpan RetryBackoffBase { get; set; } = TimeSpan.FromSeconds(2);
 }

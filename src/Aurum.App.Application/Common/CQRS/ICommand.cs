@@ -3,9 +3,7 @@ using MediatR;
 namespace Aurum.App.Application.Common.CQRS;
 
 /// <summary>
-/// A request that mutates state. <c>TransactionBehavior</c> keys off this interface, so a command
-/// that implements <see cref="IRequest{TResponse}"/> directly runs outside a transaction and looks
-/// identical at the call site — which is the whole reason the marker exists.
+/// A request that changes state. <c>TransactionBehavior</c> wraps only requests marked with this.
 /// </summary>
 public interface ICommand<out TResponse> : IRequest<TResponse>;
 

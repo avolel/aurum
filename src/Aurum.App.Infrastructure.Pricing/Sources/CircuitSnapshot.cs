@@ -1,11 +1,11 @@
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
-// The shape. One lock acquisition, one consistent set of values.
+// Taken under one lock, so the values are consistent with each other.
 public sealed record CircuitSnapshot(
     string SourceCode,
     bool IsOpen,
     int ConsecutiveFailures,
-    // when the shutout ends; null when closed
+    // Null when closed.
     DateTimeOffset? OpenedUntil,
     DateTimeOffset? LastFailureAt,
     string? LastFailureReason

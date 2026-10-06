@@ -6,17 +6,14 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// Appends MetalpriceAPI's api_key query parameter.
 /// </summary>
 /// <remarks>
-/// The key lives here rather than in the source so that no exception or log line the source
-/// produces is capable of carrying it — a URI in a PriceSourceException message is the leak
-/// this placement makes structurally impossible rather than merely forbidden.
+/// Added here, not in the source, so nothing the source logs or throws can contain the key.
 /// </remarks>
 internal sealed class QueryKeyAuthHandler(string apiKey) : DelegatingHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var uri = request.RequestUri!;
-        // Idempotent by design: Polly retries reuse this HttpRequestMessage, so the handler runs
-        // again on a URI it already rewrote. Appending unconditionally duplicates the parameter.
+        // Retries reuse this request, so only add the key once.
         if (!QueryHelpers.ParseQuery(uri.Query).ContainsKey("api_key"))
         {
             request.RequestUri = new Uri(QueryHelpers.AddQueryString(uri.ToString(), "api_key", apiKey));

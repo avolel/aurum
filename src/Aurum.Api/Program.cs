@@ -19,10 +19,7 @@ using Polly;
 using Polly.Timeout;
 using Serilog;
 
-// Every service registration in the application lives in this file. There is no Add*Module
-// extension method and no ServiceCollectionExtensions per layer: D-5 recorded the folder-module
-// seam, and D-5 now records its reversal and what that costs (an InternalsVisibleTo to this
-// assembly, and a file that grows with every feature).
+// Every service registration in the application lives in this file (D-5).
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,10 +31,7 @@ builder.Host.UseSerilog((context, services, config) => config
 builder.Services.AddOpenApi();
 builder.Services.AddControllers();
 
-// The one authority for every timestamp the application writes — not just quota period
-// boundaries. AurumDbContext takes it as a required constructor parameter so no construction
-// site can fall back to wall clock; that fallback is what once let ApplyAuditFields and the
-// governor stamp two rows in the same table from two different clocks (D-7).
+// The only clock for every timestamp the app writes (D-7).
 builder.Services.AddSingleton(TimeProvider.System);
 
 var connectionString = builder.Configuration.GetConnectionString("Aurum");
@@ -51,18 +45,14 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 // ── CQRS ──────────────────────────────────────────────────────────────────────────────────────
 
-// Handlers and validators are discovered by scanning Aurum.App.Application. Both scans are
-// anchored on a type in that assembly rather than on Assembly.GetExecutingAssembly(), which here
-// would be Aurum.Api and would find nothing.
+// Anchored on a type in Aurum.App.Application; the executing assembly here is Aurum.Api.
 builder.Services.AddMediatR(cfg =>
     cfg.RegisterServicesFromAssemblyContaining<LoggingBehavior<IRequest<Unit>, Unit>>());
 
 builder.Services.AddValidatorsFromAssemblyContaining<ValidationBehavior<IRequest<Unit>, Unit>>();
 
-// Order is the pipeline: Logging wraps Validation wraps Transaction wraps the handler. Logging is
-// outermost so its duration covers validation and the commit, and so a ValidationException is
-// recorded rather than escaping unlogged. Transaction is innermost of the three so a validation
-// failure never opens a transaction.
+// Registration order is pipeline order. Logging outermost so a ValidationException is logged;
+// Transaction innermost so a validation failure never opens a transaction.
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(LoggingBehavior<,>));
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));
 builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBehavior<,>));
@@ -72,8 +62,7 @@ builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBe
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IRequestContextAccessor, HttpRequestContextAccessor>();
 
-// Singleton because it owns the channel: a scoped queue would be a fresh, empty channel per
-// request, so every enqueued row would be dropped on the floor when the scope ended.
+// Singleton because it owns the channel; a scoped queue would drop its rows when the scope ends.
 builder.Services.AddSingleton<IAppLogQueue, AppLogQueue>();
 builder.Services.AddScoped(typeof(IAppLogService<>), typeof(AppLogService<>));
 builder.Services.AddHostedService<AppLogDrainService>();
@@ -81,10 +70,7 @@ builder.Services.AddHostedService<AppLogDrainService>();
 // ── Pricing options ───────────────────────────────────────────────────────────────────────────
 
 builder.Services.AddOptions<PriceSourcesOptions>()
-    // Bound onto the dictionary rather than the options object so the section's children are the
-    // map's entries. Keeps the config paths operators already use (PriceSources:GoldApiIo:ApiKey,
-    // PriceSources__GoldApiIo__ApiKey) while making the lookup by source code a data lookup
-    // rather than a switch.
+    // Bound onto the dictionary so the section's children are the map's entries (D-9).
     .Configure<IConfiguration>((options, cfg) =>
         cfg.GetSection(PriceSourcesOptions.SectionName).Bind(options.Sources))
     .ValidateDataAnnotations()
@@ -101,9 +87,7 @@ builder.Services.AddOptions<PricePollingOptions>()
           + "at or below it, every price is flagged stale one poll after it arrives.")
     .ValidateOnStart();
 
-// The coverage rule needs PollInterval, so it reads PricePollingOptions as a dependency rather than
-// duplicating the cadence here: a buffer sized for one cadence is silently a few hours short at a
-// faster one, and the 1d window is the one that goes dark (D-17).
+// Reads PollInterval rather than duplicating it: the buffer must cover 1d at the real cadence (D-17).
 builder.Services.AddOptions<DeltaEngineOptions>()
     .BindConfiguration(DeltaEngineOptions.SectionName)
     .ValidateDataAnnotations()
@@ -122,31 +106,21 @@ builder.Services.AddOptions<PriceFeedCircuitOptions>()
     .BindConfiguration(PriceFeedCircuitOptions.SectionName)
     .ValidateOnStart();
 
-// ValidateDataAnnotations() does not descend into nested objects, so the [Required] on ApiKey and
-// the [Range] on MonthlyRequestLimit are enforced by this validator and nowhere else (D-9).
+// ValidateDataAnnotations() does not descend into the source map; this validator does (D-9).
 builder.Services.AddSingleton<IValidateOptions<PriceSourcesOptions>, PriceSourcesOptionsValidator>();
 builder.Services.AddSingleton<IValidateOptions<PriceFeedCircuitOptions>, PriceFeedCircuitOptionsValidator>();
 
 // ── Pricing services ──────────────────────────────────────────────────────────────────────────
 
-// Singleton: circuit state must outlive a poll, and this object holds only strings, ints and
-// timestamps plus the clock — nothing HTTP-bearing for IHttpClientFactory to recycle underneath
-// it, which is the constraint D-12 imposed on the sources themselves.
+// Singletons: each holds state that must outlive a poll, and none holds an HttpClient (D-12).
+// The cache and the delta engine reach the database through IServiceScopeFactory (D-16, D-17).
 builder.Services.AddSingleton<SourceCircuitStore>();
-
-// Singleton for the same reason: the newest price must outlive a poll and a request. So it must
-// reach the database through IServiceScopeFactory, never by holding a scoped DbContext (D-16).
 builder.Services.AddSingleton<ILatestQuoteCache, LatestQuoteCache>();
-
-// Singleton for the same reasons: the price history must outlive a poll, and it reaches the database
-// for its warm-up through IServiceScopeFactory (D-17).
 builder.Services.AddSingleton<IDeltaEngine, DeltaEngine>();
 
 builder.Services.AddScoped<IQuotaGovernor, PostgresQuotaGovernor>();
 
-// Scoped, not singleton: it holds IEnumerable<IPriceSource>, and those are typed clients. A
-// singleton feed would capture handlers the factory recycles — D-12's rejected alternative one
-// level up.
+// Scoped: it holds typed clients, whose handlers the factory recycles (D-12).
 builder.Services.AddScoped<IPriceFeed, FailoverPriceFeed>();
 
 // Each source's typed client, its resilience pipeline and its QuotaHandler.
@@ -165,8 +139,7 @@ builder.Services.AddHostedService<PricePollingService>();
 
 // ── Health ────────────────────────────────────────────────────────────────────────────────────
 
-// /health is liveness: is the process up. /health/ready gates traffic on dependencies —
-// tagged so the two endpoints cannot silently drift as checks are added.
+// /health is liveness; /health/ready checks dependencies, selected by the "ready" tag.
 builder.Services.AddHealthChecks()
     .AddNpgSql(connectionString, name: "postgres", tags: ["ready"]);
 
@@ -187,8 +160,7 @@ await MigrateAsync(app);
 
 app.Run();
 
-// Migrating at startup is right for a single instance and wrong the moment the API is scaled
-// out (concurrent migrations race). Phase 5's replica work is when this becomes a separate step.
+// Single-instance only: concurrent migrations race. Becomes a separate step with Phase 5's replicas.
 static async Task MigrateAsync(WebApplication app)
 {
     await using var scope = app.Services.CreateAsyncScope();
@@ -196,30 +168,14 @@ static async Task MigrateAsync(WebApplication app)
     await db.Database.MigrateAsync();
 }
 /// <summary>
-/// The entry point. Declared explicitly so the registration helper below is a member of it rather
-/// than a local function — a local function in top-level statements is unreachable from the test
-/// assembly, and the wiring order inside <see cref="AddPriceSource{T}"/> is the thing under test.
+/// Declared so <see cref="AddPriceSource{T}"/> is reachable from tests; a local function would not be.
 /// </summary>
 public partial class Program
 {
     /// <summary>
-    /// Registers a source's typed client with its resilience pipeline and QuotaHandler, then projects
-    /// it onto <see cref="IPriceSource"/> so the failover chain can resolve
-    /// <c>IEnumerable&lt;IPriceSource&gt;</c>.
+    /// Registers a source's typed client with its resilience pipeline and QuotaHandler, then exposes
+    /// it as <see cref="IPriceSource"/>. Auth is the only per-provider part (D-12).
     /// </summary>
-    /// <remarks>
-    /// A member of Program rather than an extension method in the pricing assembly, because every
-    /// registration in this application is in this file. It is not a local function for one reason:
-    /// the wiring order below is the subject of <c>ResilienceWiringTests</c>, and a local function
-    /// in top-level statements cannot be called from the test assembly.
-    ///
-    /// The handler is attached here rather than at each call site because a source registered
-    /// without it still compiles, still works, and spends its budget uncounted — the one wiring
-    /// mistake that produces no symptom until the provider starts rejecting requests.
-    ///
-    /// <paramref name="configureAuth"/> exists because auth is the only genuinely per-provider part:
-    /// GoldAPI uses x-access-token, API Ninjas X-Api-Key, and MetalpriceAPI a query parameter.
-    /// </remarks>
     internal static void AddPriceSource<T>(
         IServiceCollection services,
         string sourceCode,
@@ -233,21 +189,12 @@ public partial class Program
         {
             var options = GetOptions(sp);
             http.BaseAddress = options.BaseUrl;
-            // Infinite here so the ONLY cancellation comes from inside the pipeline, where the retry
-            // predicate can observe it. HttpClient.Timeout is a TOTAL budget applied outside every
-            // handler: it would cancel attempt three for the seconds attempts one and two spent, and
-            // surface as a bare TaskCanceledException that ShouldHandle never sees and the failover
-            // chain cannot attribute to a source (D-13). The real ceiling is TotalTimeout below.
+            // Off, so every timeout comes from inside the pipeline where retry can see it (D-13).
             http.Timeout = Timeout.InfiniteTimeSpan;
         });
 
-        // Registered before QuotaHandler so the retry loop sits *above* the governor: each attempt
-        // passes through the handler and is charged its own lease, because that is what the provider
-        // bills. Inverting the two would retry below the accounting and spend the budget uncounted —
-        // an under-count, the direction that costs a month rather than a poll (D-7).
-        //
-        // Split out of the fluent chain because AddResilienceHandler returns
-        // IHttpResiliencePipelineBuilder, not IHttpClientBuilder — nothing can be chained after it.
+        // Must stay above QuotaHandler so every retry attempt is charged its own lease (D-7, D-13).
+        // Not chained: AddResilienceHandler does not return IHttpClientBuilder.
         clientBuilder.AddResilienceHandler("price-source", (pipeline, context) =>
         {
             var options = GetOptions(context.ServiceProvider);
@@ -255,63 +202,33 @@ public partial class Program
             var resilience = context.ServiceProvider
                 .GetRequiredService<IOptions<PriceFeedResilienceOptions>>().Value;
 
-            // Outermost: the whole retry sequence can't run away forever.
+            // Outermost: caps the whole retry sequence.
             pipeline.AddTimeout(options.TotalTimeout);
 
             pipeline.AddRetry(new HttpRetryStrategyOptions
             {
-                // TimeoutRejectedException is what AddTimeout throws — a real, typed exception the
-                // predicate can see, unlike the TaskCanceledException http.Timeout produced.
-                //
-                // PriceSourceException is ABSENT rather than excluded, and its absence is not an
-                // oversight: every source parses the body above the whole handler chain, so a
-                // garbage-200 throws after this pipeline has already returned success. This predicate
-                // can never observe one. That blind spot is half of why the breaker is hand-rolled in
-                // FailoverPriceFeed (D-14).
-                //
-                // QuotaExhaustedException is absent for a different reason: QuotaHandler raises it
-                // below us, and another attempt cannot succeed until the period rolls while
-                // QuotaHandler charges for it either way. A failover signal, not a retry signal.
+                // PriceSourceException is thrown above this pipeline, so it can never be seen here
+                // (D-14). QuotaExhaustedException is a failover signal, not a retry signal.
                 ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
                     .Handle<TimeoutRejectedException>()
                     .Handle<HttpRequestException>()
 
-                    // A failing status is a RESULT, not an exception: HttpClient.GetAsync returns a
-                    // 500, it does not throw one. Without this clause the two Handle<T>() lines above
-                    // cover only transport-level failures, and a provider answering 503 all day was
-                    // never retried at all — the strategy read as configured and did nothing on the
-                    // most common failure it exists for. Caught by
-                    // ResilienceWiringTests.Each_retry_attempt_spends_its_own_lease.
-                    //
-                    // 429 and 402 deliberately absent: QuotaHandler converts those below this
-                    // pipeline, after clamping the period, so they arrive as QuotaExhaustedException
-                    // and are a failover signal rather than a retry signal.
+                    // A failing status is a result, not an exception; without this a 503 is never
+                    // retried. 429/402 arrive as QuotaExhaustedException via QuotaHandler.
                     .HandleResult(response =>
                         response.StatusCode is HttpStatusCode.RequestTimeout
                                             or >= HttpStatusCode.InternalServerError),
+                // Polly counts retries, the setting counts attempts. Convert here and nowhere else (D-15).
                 MaxRetryAttempts = resilience.MaxAttempts - 1,
                 BackoffType = DelayBackoffType.Exponential,
                 Delay = resilience.RetryBackoffBase,
 
-                // Explicitly off, and it has to be: HttpRetryStrategyOptions defaults UseJitter to
-                // TRUE, unlike Polly's base options. Jitter randomises each delay around the
-                // exponential — observed as far as 503ms against a 400ms nominal — so the sequence
-                // can run longer than any fixed model of it, and
-                // PriceSourcesOptionsValidator.MinimumTotalTimeout would under-estimate the ceiling
-                // a TotalTimeout needs. That under-estimate is the direction that truncates the
-                // last attempt after QuotaHandler has already charged its lease (D-15).
-                //
-                // Jitter exists to decorrelate many clients retrying in lockstep. There is one
-                // poller, single-instance by construction, issuing one request at a time — no herd
-                // to disperse, so it buys nothing here and costs a computable timeout ceiling.
-                // Backoff_schedule_matches_what_MinimumTotalTimeout_models is what catches a
-                // re-enable; it found this default rather than being written after it was known.
+                // Must stay false: this options type defaults it to true, and jitter breaks the
+                // schedule MinimumTotalTimeout models (D-15).
                 UseJitter = false,
             });
 
-            // Innermost: a fresh budget for EACH attempt, because it's inside the retry loop. This
-            // sits ABOVE QuotaHandler, so a timed-out attempt has already spent its lease — correct
-            // under D-7's no-refunds rule, and the reason a low timeout is a budget decision.
+            // Innermost: a fresh budget per attempt. A timed-out attempt has still spent its lease (D-7).
             pipeline.AddTimeout(options.RequestTimeout);
         });
 
@@ -322,8 +239,7 @@ public partial class Program
 
         configureAuth(clientBuilder, GetOptions);
 
-        // Transient, matching the typed client's own lifetime. Resolving IEnumerable<IPriceSource>
-        // then yields every registered source; the chain orders them by Priority.
+        // Transient, matching the typed client's own lifetime.
         services.AddTransient<IPriceSource>(sp => sp.GetRequiredService<T>());
         services.AddSingleton(new RegisteredPriceSource(sourceCode));
     }

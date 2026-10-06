@@ -7,19 +7,9 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// Tries the configured sources in priority order and returns the first quote anyone produces.
 /// </summary>
 /// <remarks>
-/// <para>
-/// A separate interface from <see cref="IPriceSource"/> rather than a composite implementation of
-/// it: a composite would be resolved into the same <c>IEnumerable&lt;IPriceSource&gt;</c> it
-/// consumes and find itself in its own chain, and <see cref="PriceFeedResult"/> carries statements
-/// about a chain that mean nothing on a single provider.
-/// </para>
-/// <para>
-/// There is deliberately <b>no retry here.</b> Retries live in the Polly pipeline below
-/// <see cref="IPriceSource"/>, registered in <c>Program.cs</c>, so by the time an exception reaches
-/// this loop the source has already exhausted its attempts and charged a lease for each one.
-/// Adding a retry at this level would multiply the request budget by a factor the boot-time cadence
-/// guard knows nothing about.
-/// </para>
+/// <para>Not an <see cref="IPriceSource"/> itself, or it would resolve into its own chain.</para>
+/// <para><b>No retry here.</b> Retries are in the pipeline below each source; one here would
+/// multiply spend past what the startup budget check counts (D-15).</para>
 /// </remarks>
 internal sealed class FailoverPriceFeed(
     IEnumerable<IPriceSource> sources,
@@ -28,9 +18,8 @@ internal sealed class FailoverPriceFeed(
     ILogger<FailoverPriceFeed> logger) : IPriceFeed
 {
     /// <summary>
-    /// <c>price_sources.LastFailureReason</c> is <c>nvarchar(512)</c>. Truncating where the string
-    /// is built rather than where it is saved: an unbounded provider message throws 22001 out of
-    /// SaveChangesAsync, which loses the tick that was fetched in the same unit of work.
+    /// <c>price_sources.LastFailureReason</c> is 512 characters. Cut here, where the string is built:
+    /// an over-long message fails SaveChangesAsync and loses the tick saved with it.
     /// </summary>
     private const int MaxFailureReasonLength = 512;
 
@@ -39,10 +28,7 @@ internal sealed class FailoverPriceFeed(
         var chain = BuildChain();
         var attempts = new List<SourceAttempt>(chain.Count);
 
-        // No enabled, configured, registered source. PriceSourcesOptionsValidator refuses this at
-        // boot, so it is a backstop rather than an expected state — but it must not be reported as
-        // "every source is out of quota", which is what an empty AllQuotaExhausted would say if it
-        // did not guard on Count.
+        // Reachable: an enabled entry whose code was never registered passes the validator.
         if (chain.Count == 0)
         {
             throw new AllSourcesFailedException(symbol, attempts);
@@ -56,9 +42,7 @@ internal sealed class FailoverPriceFeed(
 
             if (circuit.IsOpen())
             {
-                // No call, so no new evidence about this source. The attempt is recorded so the
-                // operator projection can tell "skipped" from "never in the chain", but it is
-                // excluded from AttemptedSources and it never overwrites LastFailureReason.
+                // Recorded so "skipped" differs from "not in the chain", but it is not a call.
                 attempts.Add(new SourceAttempt(source.Code, SourceAttemptOutcome.SkippedCircuitOpen));
                 continue;
             }
@@ -72,9 +56,7 @@ internal sealed class FailoverPriceFeed(
             }
             catch (QuotaExhaustedException ex)
             {
-                // Healthy and broke. Not a circuit fault: opening on this would keep the source
-                // out of the chain after its period rolls and its budget is fresh, and the
-                // expire-to-closed machine has no probe to leak, so quota simply does not touch it.
+                // Healthy and out of budget: not a circuit fault (D-14).
                 attempts.Add(new SourceAttempt(
                     source.Code,
                     SourceAttemptOutcome.QuotaExhausted,
@@ -84,8 +66,7 @@ internal sealed class FailoverPriceFeed(
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Shutdown is not three failing providers. Rethrowing unwrapped keeps the poller's
-                // own cancellation clause the thing that handles it.
+                // Shutdown, not a failing provider. The poller handles it.
                 throw;
             }
             catch (Exception ex) when (ex is PriceSourceException
@@ -93,28 +74,18 @@ internal sealed class FailoverPriceFeed(
                                           or TimeoutRejectedException
                                           or OperationCanceledException)
             {
-                // PriceSourceException lands here and nowhere else: the Polly predicate above
-                // IPriceSource cannot observe it, because every source parses the body after the
-                // pipeline has already judged the HTTP outcome successful. This loop is the only
-                // place a provider returning 200s full of junk is counted as a fault, and that is
-                // the argument D-14 rests on.
-                //
-                // A bare OperationCanceledException with ct not cancelled is a per-attempt timeout
-                // that escaped as cancellation rather than TimeoutRejectedException — a fault
-                // against this source, not a shutdown.
+                // The only place a 200 full of junk counts as a fault (D-14). A cancellation
+                // without ct cancelled is a timeout, so a fault too.
                 attempts.Add(RecordFault(circuit, source.Code, ex));
             }
             catch (ArgumentException)
             {
-                // An invalid symbol. No source can serve it, so failing over is pointless work
-                // that spends a lease per provider to reach the same answer.
+                // An invalid symbol. No source can serve it, so failing over would only spend leases.
                 throw;
             }
             catch (Exception ex)
             {
-                // A defect in one source must not take down a chain whose whole purpose is
-                // availability. Logged with its type name because an unexpected type here is a
-                // bug report, not an operational event.
+                // A bug in one source must not take down the chain; the type name marks it as a bug.
                 logger.LogError(ex,
                     "{Source} threw an unexpected {ExceptionType}; treating it as a fault.",
                     source.Code, ex.GetType().Name);
@@ -137,11 +108,7 @@ internal sealed class FailoverPriceFeed(
     /// implementation.
     /// </summary>
     /// <remarks>
-    /// Driven from configuration rather than from the resolved services, so a source that is
-    /// registered in code but absent from or disabled in the file is simply not in the chain. That
-    /// is the bug this class fixes: <c>PricePollingService</c> used to select straight off
-    /// <c>IEnumerable&lt;IPriceSource&gt;</c>, which has no Enabled to filter on, so setting
-    /// <c>Enabled: false</c> shortened the startup log and changed nothing about selection.
+    /// Driven from configuration, so a disabled or unconfigured source is not in the chain.
     /// </remarks>
     private List<IPriceSource> BuildChain()
     {

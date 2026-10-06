@@ -13,9 +13,7 @@ namespace Aurum.App.Infrastructure.Pricing.Jobs;
 /// Polls the failover chain on a schedule and persists canonical ticks.
 /// </summary>
 /// <remarks>
-/// Singleton by construction: Phase 1's delta engine keeps in-memory ring buffers and assumes
-/// exactly one poller in the deployment. If the API is ever scaled out, this service must be
-/// hosted separately rather than replicated.
+/// Assumes exactly one poller. If the API scales out, host this separately rather than replicate it.
 /// </remarks>
 public class PricePollingService(
     IServiceScopeFactory scopeFactory,
@@ -27,27 +25,18 @@ public class PricePollingService(
     ILogger<PricePollingService> logger) : BackgroundService
 {
     /// <summary>
-    /// Enabled sources in failover order, so the head is the primary. A statement about
-    /// <em>budgets</em>, for the coverage log below — the chain that actually runs is built by
-    /// <see cref="FailoverPriceFeed"/>. Both come from
-    /// <see cref="PriceSourcesOptions.EnabledInFailoverOrder"/>, which is what makes this log
-    /// describe the chain rather than a plausible-looking parallel ordering.
+    /// Enabled sources in failover order, for the coverage log. Same ordering
+    /// <see cref="FailoverPriceFeed"/> uses.
     /// </summary>
     private readonly IReadOnlyList<PriceSourceOptions> _enabled =
         options.Value.EnabledInFailoverOrder();
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        // The cadence-vs-budget guard that used to run here now runs in
-        // PriceSourcesOptionsValidator, so an overspending configuration fails the process at boot
-        // instead of after the host has reported healthy.
         LogBudgetCoverage(polling.Value.PollInterval);
 
-        // Awaited here rather than run as its own hosted service: hosted services start in
-        // registration order, which is a rule nobody re-reads before adding one, and getting it
-        // wrong shows up as an empty /v1/price/live that looks like a normal fresh start (D-16).
-        // Two reads, not one: a Sample has no bid, ask or ReceivedAt, so the cache cannot be warmed
-        // from the delta history without making every buffered entry larger (D-17).
+        // Awaited here, not a hosted service of its own, so start order cannot break it (D-16).
+        // Two reads, because a Sample cannot rebuild a quote (D-17).
         if (!await TryWarmAsync(cache.EnsureWarmAsync, "Latest-quote cache", stoppingToken)
             || !await TryWarmAsync(deltas.EnsureWarmAsync, "Price-move history", stoppingToken))
         {
@@ -56,8 +45,7 @@ public class PricePollingService(
 
         using var timer = new PeriodicTimer(polling.Value.PollInterval, clock);
 
-        // Poll once immediately so a fresh container has a price before the first interval
-        // elapses, then settle into the cadence.
+        // Poll once immediately, then on the cadence.
         do
         {
             try
@@ -67,11 +55,7 @@ public class PricePollingService(
             catch (AllSourcesFailedException ex)
                 when (ex.AllQuotaExhausted && ex.EarliestResetsAt is { } resetsAt)
             {
-                // Every source is out of budget, so there is nothing to retry until the earliest
-                // period rolls. EARLIEST, not the one that failed last: sleeping to the latest
-                // reset idles funded providers for up to a month. A bare QuotaExhaustedException
-                // can no longer reach here at all — the feed records each one and moves on, which
-                // is the whole point of item 3.
+                // Every source is out of budget. Sleep to the EARLIEST reset, or funded sources sit idle.
                 var wait = resetsAt - clock.GetUtcNow();
                 logger.LogError(
                     "Every source is out of quota; pausing polling for {Wait} until {ResetsAt:O}.",
@@ -84,9 +68,7 @@ public class PricePollingService(
             }
             catch (AllSourcesFailedException ex)
             {
-                // Faults, open circuits, or a mix of those with quota. All of them clear before a
-                // quota period rolls, so stay on the cadence rather than sleeping. Deleting this
-                // clause silently promotes every total outage to the sleep above.
+                // Faults or open circuits clear in minutes, so stay on the cadence.
                 logger.LogError(ex, "Every source failed this poll; will retry on the next interval.");
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -105,10 +87,7 @@ public class PricePollingService(
     /// Runs one warm-up. Returns false only when the host is stopping.
     /// </summary>
     /// <remarks>
-    /// Best-effort, each in its own try so one failing does not skip the other. An unhandled
-    /// exception here would end ExecuteAsync and, by default, stop the host — taking the poller
-    /// down over a convenience. The first successful poll starts filling both anyway; until then
-    /// there is no price, and every window says no answer, as on a fresh database.
+    /// Best effort: an unhandled exception would stop the host over a convenience (D-16, D-17).
     /// </remarks>
     private async Task<bool> TryWarmAsync(
         Func<CancellationToken, Task> warm, string what, CancellationToken stoppingToken)
@@ -133,11 +112,7 @@ public class PricePollingService(
     /// Reports, once per start, how long each backup's budget lasts if it has to serve every poll.
     /// </summary>
     /// <remarks>
-    /// Backups are exempt from the boot-time cadence check: they are called only while the sources
-    /// above them are down, and holding every source to the full period would peg the feed's
-    /// cadence to the smallest budget in the file (D-10). This log is the only place the cost of
-    /// that exemption is visible, so it belongs here rather than in the validator — which has no
-    /// logger and re-runs on every options rebuild.
+    /// The only place the cost of exempting backups from the startup check is visible (D-10).
     /// </remarks>
     private void LogBudgetCoverage(TimeSpan pollInterval)
     {
@@ -151,8 +126,7 @@ public class PricePollingService(
 
         foreach (var backup in _enabled.Skip(1))
         {
-            // Coverage assumes the worst case the exemption allows: everything above this source
-            // is down, so it serves every poll until its budget is spent.
+            // Worst case: everything above it is down.
             var coverage = pollInterval * backup.MonthlyRequestLimit;
             logger.LogInformation(
                 "Backup {Source}: {Limit} requests = {Days:F1} days of full outage coverage.",
@@ -173,19 +147,13 @@ public class PricePollingService(
         }
         catch (AllSourcesFailedException ex)
         {
-            // Project before rethrowing. Circuit state is authoritative but in-memory, so
-            // price_sources is the only place an operator can see why the feed is dark — and a
-            // total outage is exactly when they go looking.
+            // Save before rethrowing: price_sources is where an operator sees why the feed is dark.
             await ProjectAttemptsAsync(db, ex.Attempts, ct);
             await db.SaveChangesAsync(ct);
             throw;
         }
 
-        // Memory first, then the database, then (item 7) connected clients. The cache and the
-        // delta history are not the record of truth, but a database hiccup must not hide a price
-        // the app successfully fetched. A failed poll never reaches here: the
-        // AllSourcesFailedException path above projects onto price_sources and rethrows, and the
-        // held quote's growing Age says the rest.
+        // Memory before the database, so a failed save cannot hide a fetched price (D-16).
         cache.Record(result);
         deltas.Record(result.Quote);
 
@@ -208,33 +176,19 @@ public class PricePollingService(
     }
 
     /// <summary>
-    /// Writes one poll's per-source outcomes onto <c>price_sources</c>, the operator-facing
-    /// projection of what the chain just observed.
+    /// Writes one poll's per-source outcomes onto <c>price_sources</c> for operators.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// <b>Success no longer clears <c>LastFailureReason</c>.</b> It used to, while leaving
-    /// <c>LastFailureAt</c> set, which produced rows asserting a failure at a timestamp with no
-    /// reason for it. Both now persist as the record of the last failure; a reader tells current
-    /// from historical by comparing <c>LastFailureAt</c> against <c>LastSuccessAt</c>.
-    /// </para>
-    /// <para>
-    /// <see cref="SourceAttemptOutcome.SkippedCircuitOpen"/> writes nothing at all. The source was
-    /// not called, so it produced no new evidence, and stamping "circuit open" over the reason
-    /// would erase the fault that opened the circuit — the one thing the operator needs.
-    /// </para>
-    /// <para>
-    /// This never writes <c>PriceSource.IsEnabled</c>. Configuration is authoritative for whether
-    /// a source is in the chain; the column is descriptive and currently has no reader.
-    /// </para>
+    /// Success leaves the last failure in place; compare <c>LastFailureAt</c> with
+    /// <c>LastSuccessAt</c> to tell current from past. A skipped source writes nothing, so the fault
+    /// that opened its circuit is kept. <c>IsEnabled</c> is never written: configuration decides.
     /// </remarks>
     private async Task ProjectAttemptsAsync(
         AurumDbContext db, IReadOnlyList<SourceAttempt> attempts, CancellationToken ct)
     {
         var codes = attempts.Select(a => a.SourceCode).ToList();
 
-        // One tracked query for the whole poll rather than a FindAsync per attempt: the chain is
-        // short, but this runs on every tick forever.
+        // One query per poll, not one per attempt.
         var registrations = await db.PriceSources
             .Where(source => codes.Contains(source.Code))
             .ToDictionaryAsync(source => source.Code, ct);
@@ -243,8 +197,7 @@ public class PricePollingService(
         {
             if (!registrations.TryGetValue(attempt.SourceCode, out var registration))
             {
-                // Registered in code and configured, but absent from the seed. Not worth failing
-                // the poll over — the tick is already in the change tracker.
+                // Missing from the seed. Not worth failing the poll over.
                 continue;
             }
 

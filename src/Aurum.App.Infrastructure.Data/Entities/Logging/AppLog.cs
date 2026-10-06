@@ -6,10 +6,8 @@ namespace Aurum.App.Infrastructure.Data.Entities.Logging;
 /// One durable application-log row. Written by the drain, never by a request thread.
 /// </summary>
 /// <remarks>
-/// Deliberately not a Timescale hypertable, unlike <c>price_ticks</c>. Its access pattern is
-/// "find the rows for this correlation id" rather than "scan a time range", and a hypertable would
-/// force the partitioning column into the primary key for no read that benefits from it. If this
-/// table outgrows retention it gets a partial index and a delete job, not a conversion.
+/// Not a hypertable: it is read by correlation id, not time range. If it grows too large, add a
+/// delete job, not a conversion.
 /// </remarks>
 public class AppLog : AuditableEntity
 {

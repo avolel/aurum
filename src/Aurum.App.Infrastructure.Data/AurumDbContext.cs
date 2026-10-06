@@ -42,8 +42,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
             e.Property(x => x.Symbol).HasMaxLength(16).IsRequired();
             e.Property(x => x.SourceCode).HasMaxLength(64).IsRequired();
 
-            // 18,4 covers spot metals with room for JPY-denominated pairs later without
-            // hitting the float rounding that makes deltas non-reproducible.
+            // Exact decimals, so deltas are reproducible. Room for JPY pairs later.
             e.Property(x => x.Bid).HasPrecision(18, 4);
             e.Property(x => x.Ask).HasPrecision(18, 4);
             e.Property(x => x.Mid).HasPrecision(18, 4);
@@ -63,8 +62,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
             e.Property(x => x.SourceCode).HasMaxLength(64).IsRequired();
             e.Property(x => x.PeriodKey).HasMaxLength(64).IsRequired();
 
-            // The correctness guarantee the governor leans on: at most one live counter
-            // per source per period, so a concurrent acquire cannot create a second bucket.
+            // One counter per source per period; the governor's ON CONFLICT depends on it.
             e.HasIndex(x => new { x.SourceCode, x.PeriodKey }).IsUnique();
         });
 
@@ -85,8 +83,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
             e.Property(x => x.CorrelationId).HasMaxLength(64);
             e.Property(x => x.Source).HasMaxLength(128);
 
-            // The two reads this table has: "what happened around then" and "everything from this
-            // one request". Nothing scans it by user or by action, so neither gets an index.
+            // The two reads: by time, and by request. Nothing reads by user or action.
             e.HasIndex(x => x.CreatedAt).IsDescending();
             e.HasIndex(x => x.CorrelationId);
         });

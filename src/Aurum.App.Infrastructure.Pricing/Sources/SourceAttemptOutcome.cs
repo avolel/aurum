@@ -5,7 +5,7 @@ public enum SourceAttemptOutcome
     Success,
     /// <summary>Unusable, transport failure or timeout. A circuit fault.</summary>
     Faulted,
-    /// <summary>Denied or rejected. Not a fault — the source is healthy and broke.</summary>
+    /// <summary>Denied or rejected. Not a fault: the source is healthy but out of budget.</summary>
     QuotaExhausted,
     /// <summary>Not called; the circuit was open. Produced no new evidence.</summary>
     SkippedCircuitOpen

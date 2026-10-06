@@ -21,17 +21,13 @@ public sealed class UnitOfWork(AurumDbContext db) : IUnitOfWork
     public async Task<T> ExecuteInTransactionAsync<T>(
         Func<CancellationToken, Task<T>> work, CancellationToken ct = default)
     {
-        // Joining an existing transaction rather than nesting. Npgsql does not support nested
-        // transactions, so a handler that dispatches a second command through MediatR would throw
-        // here — and the correct semantics are that the outer transaction owns the commit anyway.
+        // Join, don't nest: Npgsql has no nested transactions, and the outer one owns the commit.
         if (db.Database.CurrentTransaction is not null)
         {
             return await work(ct);
         }
 
-        // The execution strategy owns the retry loop, and a transaction opened outside it cannot
-        // be retried — EF throws telling you so. Everything, including BeginTransaction, goes
-        // inside the delegate.
+        // EF requires the transaction to open inside the execution strategy's retry delegate.
         var strategy = db.Database.CreateExecutionStrategy();
 
         return await strategy.ExecuteAsync(async token =>

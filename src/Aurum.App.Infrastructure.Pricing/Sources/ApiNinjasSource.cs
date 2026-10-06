@@ -6,14 +6,10 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// API Ninjas' gold endpoint (§12's secondary source).
 /// </summary>
 /// <remarks>
-/// <para>Unlike GoldAPI this provider is <b>gold-only</b>: /v1/goldprice takes no instrument
-/// parameter, so the <c>symbol</c> argument has nowhere to go. Without the guard below, a request
-/// for XAGUSD returns gold's price labelled as silver — a well-formed row in price_ticks that
-/// nothing downstream can distinguish from a real one.</para>
-/// <para>The free tier serves a 15-minute-delayed futures price and forbids commercial use
-/// (BRD §12), so this source must be paid for or replaced before Phase 5 billing.</para>
-/// <para>Quota accounting lives in <see cref="Quota.QuotaHandler"/> on this client's pipeline,
-/// not here.</para>
+/// <para><b>Gold only</b>: /v1/goldprice takes no symbol, so without the guard below XAGUSD would
+/// get gold's price labelled as silver.</para>
+/// <para>The free tier is a 15-minute-delayed futures price and forbids commercial use (BRD §12):
+/// pay for or replace it before Phase 5 billing.</para>
 /// </remarks>
 public class ApiNinjasSource(
     HttpClient http,
@@ -26,13 +22,8 @@ public class ApiNinjasSource(
 
     public async Task<PriceQuote> GetLatestQuoteAsync(string symbol, CancellationToken ct)
     {
-        // Before the request, not after: QuotaHandler charges a lease the moment anything leaves
-        // the process and never refunds it, so validating on the response would spend budget to
-        // learn something knowable up front.
-        //
-        // PriceSourceException rather than ArgumentException because the failover chain must be
-        // able to move to a source that does carry this metal. ArgumentException is reserved for
-        // a symbol that is structurally invalid, which no source can serve.
+        // Checked before the request so no lease is spent. PriceSourceException, not
+        // ArgumentException, so the chain can fail over to a source that carries this metal.
         if (!string.Equals(symbol, SupportedSymbol.Gold, StringComparison.OrdinalIgnoreCase))
         {
             throw new PriceSourceException(Code, $"Supports {SupportedSymbol.Gold} only; asked for '{symbol}'.");
@@ -60,9 +51,7 @@ public class ApiNinjasSource(
             throw new PriceSourceException(Code, "Response contained no positive price.");
         }
 
-        // `updated` is Unix seconds. Missing or zero means the provider's own validity time is
-        // unusable; fall back to receipt time and say so, because backdating to the epoch would
-        // hand the delta engine a decades-old tick.
+        // Unix seconds. If missing, use receipt time: the epoch would be a decades-old tick.
         DateTimeOffset observedAt;
         if (body.Updated is > 0)
             observedAt = DateTimeOffset.FromUnixTimeSeconds(body.Updated.Value);
@@ -72,8 +61,7 @@ public class ApiNinjasSource(
             logger.LogWarning("{Source} returned no usable timestamp; using receipt time for {Symbol}.", Code, symbol);
         }
 
-        // Bid and ask stay null: this provider genuinely does not quote two-sided. Normalize takes
-        // the provider's price as the mid directly.
+        // This provider does not quote bid and ask, so its price is the mid.
         return PriceQuote.Normalize(
             symbol,
             observedAt,

@@ -7,9 +7,7 @@ namespace Aurum.App.Infrastructure.Pricing.Cache;
 /// a database read (D-16).
 /// </summary>
 /// <remarks>
-/// Public, with both records, although only <c>Program.cs</c> names the implementation. Item 8
-/// has to decide whether Application references this project or redeclares the interface, and
-/// making these internal would take the first option away before that decision is made.
+/// Public so item 8 can still choose to reference this project from Application.
 /// </remarks>
 public interface ILatestQuoteCache
 {
@@ -20,16 +18,13 @@ public interface ILatestQuoteCache
     void Record(PriceFeedResult result);
 
     /// <summary>
-    /// The held quote with its age as of now, or null if this process has no price for
-    /// <paramref name="symbol"/>. Null, not an empty snapshot: "no price" and "a price of zero"
-    /// must not look alike.
+    /// The held quote with its age as of now, or null if there is no price for
+    /// <paramref name="symbol"/>. Null so "no price" never looks like "a price of zero".
     /// </summary>
     LatestQuoteSnapshot? Get(string symbol);
 
     /// <summary>
-    /// Loads the newest stored tick per supported symbol. Safe to call more than once, and
-    /// awaited by the poller before its first poll so a restart does not serve nothing for a
-    /// whole interval.
+    /// Loads the newest stored tick per supported symbol. Safe to call more than once.
     /// </summary>
     Task EnsureWarmAsync(CancellationToken ct);
 }

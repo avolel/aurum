@@ -4,9 +4,7 @@ namespace Aurum.App.SharedKernel.Common;
 /// The single response envelope for every controller action.
 /// </summary>
 /// <remarks>
-/// The rule this type exists to enforce is "never return an anonymous type". An anonymous type has
-/// no compile-time contract, so renaming a property is a silent breaking change for every consumer
-/// — and the frontend DTOs that mirror these shapes have no way to notice.
+/// Never return an anonymous type instead: renaming its property silently breaks every consumer.
 /// </remarks>
 public sealed class ApiResponse<T>
 {
