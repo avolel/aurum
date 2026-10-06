@@ -35,7 +35,7 @@ internal sealed class SourceCircuitStore
             StringComparer.Ordinal);
     }
 
-    // Indexer, not GetOrAdd: the key set is fixed at boot by PricingModule's registrations, so an
+    // Indexer, not GetOrAdd: the key set is fixed at boot by Program.cs's registrations, so an
     // unknown code is a wiring bug. Creating a circuit for it would hide that bug behind a source
     // that reports healthy forever — the same failure as a switch fall-through fabricating config.
     internal SourceCircuit For(string sourceCode) => _circuits[sourceCode];

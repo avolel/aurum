@@ -56,7 +56,7 @@ public class MetalPriceApiSource(
         // unusable; fall back to receipt time and say so, because backdating to the epoch would
         // hand the delta engine a decades-old tick.
         DateTimeOffset observedAt;
-        if (body.Timestamp is not null && body.Timestamp.Value > 0)
+        if (body.Timestamp is > 0)
             observedAt = DateTimeOffset.FromUnixTimeSeconds(body.Timestamp.Value);
         else
         {

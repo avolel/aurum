@@ -21,35 +21,21 @@ namespace Aurum.App.Infrastructure.Pricing.Cache;
 /// <para>Singleton, alongside <see cref="SourceCircuitStore"/>. It cannot live on
 /// <see cref="FailoverPriceFeed"/>, which is scoped, so each scope would start empty.</para>
 /// </remarks>
-internal sealed class LatestQuoteCache : ILatestQuoteCache
+internal sealed class LatestQuoteCache(
+    IServiceScopeFactory scopeFactory,
+    IOptions<PriceSourcesOptions> sources,
+    TimeProvider clock,
+    IOptions<PricePollingOptions> polling,
+    ILogger<LatestQuoteCache> logger) : ILatestQuoteCache
 {
     // IgnoreCase because PriceSourcesOptions.Sources and PriceFeedResult.UsedFallback already are.
     // An ordinal key here would be the one link in the chain where "xauusd" misses "XAUUSD".
     private readonly ConcurrentDictionary<string, LatestQuote> _quotes =
         new(StringComparer.OrdinalIgnoreCase);
 
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IOptions<PriceSourcesOptions> _sources;
-    private readonly TimeProvider _clock;
-    private readonly ILogger<LatestQuoteCache> _logger;
-    private readonly TimeSpan _staleAfter;
-
-    public LatestQuoteCache(
-        IServiceScopeFactory scopeFactory,
-        IOptions<PriceSourcesOptions> sources,
-        TimeProvider clock,
-        IOptions<PricePollingOptions> polling,
-        ILogger<LatestQuoteCache> logger)
-    {
-        _scopeFactory = scopeFactory;
-        _sources = sources;
-        _clock = clock;
-        _logger = logger;
-
-        // Twice the interval by default: one missed poll is normal jitter and must not flag, two
-        // is a fault. Derived once here so the threshold cannot drift from the cadence it tracks.
-        _staleAfter = polling.Value.StaleAfter ?? polling.Value.PollInterval * 2;
-    }
+    // Twice the interval by default: one missed poll is normal jitter and must not flag, two
+    // is a fault. Derived once here so the threshold cannot drift from the cadence it tracks.
+    private readonly TimeSpan _staleAfter = polling.Value.StaleAfter ?? polling.Value.PollInterval * 2;
 
     public void Record(PriceFeedResult result)
     {
@@ -72,7 +58,7 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
             // item 5's ring buffer applies the same rule, so accepting what it drops would put this
             // price out of step with the chart beside it. A stuck provider therefore leaves Age
             // climbing — that is the correct reading, not a bug.
-            _logger.LogDebug(
+            logger.LogDebug(
                 "Dropped {Symbol} quote from {SourceCode} observed at {ObservedAt:o}: not newer than the held quote from {HeldSourceCode} observed at {HeldObservedAt:o}.",
                 result.Quote.Symbol,
                 result.Quote.SourceCode,
@@ -92,7 +78,7 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
         // From ObservedAt, not ReceivedAt. A provider that keeps answering 200 with a frozen
         // ObservedAt is the failure this number exists to expose; measured from ReceivedAt it would
         // look fresh forever. The injected clock, never the database's now(), same as the governor.
-        var age = _clock.GetUtcNow() - held.Quote.ObservedAt;
+        var age = clock.GetUtcNow() - held.Quote.ObservedAt;
 
         return new LatestQuoteSnapshot(held, age, IsStale: age > _staleAfter);
     }
@@ -114,11 +100,11 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
     public async Task EnsureWarmAsync(CancellationToken ct)
     {
         // PriceSourcesOptionsValidator guarantees at least one enabled source at boot.
-        var primary = _sources.Value.EnabledInFailoverOrder()[0].SourceCode;
+        var primary = sources.Value.EnabledInFailoverOrder()[0].SourceCode;
 
         // A scope per warm-up, never a held DbContext: this object lives for the whole process,
         // and a captured context would be shared by every later caller (same reason as QuotaHandler).
-        using var scope = _scopeFactory.CreateScope();
+        using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AurumDbContext>();
 
         foreach (var symbol in SupportedSymbol.All)
@@ -131,7 +117,7 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
 
             if (tick is null)
             {
-                _logger.LogInformation("No stored {Symbol} tick to warm the latest-quote cache from.", symbol);
+                logger.LogInformation("No stored {Symbol} tick to warm the latest-quote cache from.", symbol);
                 continue;
             }
 
@@ -146,9 +132,9 @@ internal sealed class LatestQuoteCache : ILatestQuoteCache
 
             // Information, not Debug: until item 8 serves the price, this line is the only way to
             // see that a restart picked up the last known price.
-            _logger.LogInformation(
+            logger.LogInformation(
                 "Warmed {Symbol} from stored tick: {SourceCode}, observed {ObservedAt:o}, {Age} old.",
-                symbol, tick.SourceCode, tick.ObservedAt, _clock.GetUtcNow() - tick.ObservedAt);
+                symbol, tick.SourceCode, tick.ObservedAt, clock.GetUtcNow() - tick.ObservedAt);
         }
     }
 }

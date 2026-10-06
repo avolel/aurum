@@ -193,7 +193,7 @@ internal class PriceSourcesOptionsValidator(
             return;
         }
 
-        // PricingModule's .Validate lambda rejects a non-positive interval and names the key an
+        // Program.cs's .Validate lambda rejects a non-positive interval and names the key an
         // operator actually edits, so a zero here is already reported elsewhere.
         if (pollInterval > TimeSpan.Zero && source.TotalTimeout >= pollInterval)
         {
@@ -216,7 +216,7 @@ internal class PriceSourcesOptionsValidator(
     private static void ValidatePollBudget(
         string path, PriceSourceOptions source, TimeSpan pollInterval, int maxAttempts, List<string> failures)
     {
-        // PricingModule's .Validate lambda rejects a non-positive interval before this runs,
+        // Program.cs's .Validate lambda rejects a non-positive interval before this runs,
         // and it names the key an operator actually edits (PricePolling:PollInterval).
         if (source.MonthlyRequestLimit < 1)
         {

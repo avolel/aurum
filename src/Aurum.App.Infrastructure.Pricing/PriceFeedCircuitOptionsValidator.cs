@@ -16,7 +16,7 @@ internal class PriceFeedCircuitOptionsValidator(IOptions<PricePollingOptions> po
         if (options.BreakDuration <= TimeSpan.Zero)
             failures.Add($"{path}:{nameof(options.BreakDuration)} must be a positive time span");
 
-        // PricingModule's PollInterval lambda already reports a non-positive cadence
+        // Program.cs's PollInterval lambda already reports a non-positive cadence
         // against the key an operator edits — same guard as ValidateTimeouts uses.
         var pollInterval = polling.Value.PollInterval;
         if (pollInterval > TimeSpan.Zero && options.BreakDuration <= pollInterval)
