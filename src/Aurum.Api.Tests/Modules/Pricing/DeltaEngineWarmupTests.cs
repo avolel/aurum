@@ -1,5 +1,4 @@
 using Aurum.Api.Tests.Infrastructure;
-using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
@@ -27,19 +26,7 @@ public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
 
     private static CancellationToken Ct => CancellationToken.None;
 
-    /// <summary>
-    /// The real time, truncated to the minute, not a fixed date like the in-memory tests use.
-    /// </summary>
-    /// <remarks>
-    /// <c>price_ticks</c> has TimescaleDB's 30-day retention policy, and its background job measures
-    /// "30 days" against the database server's real clock, not the fake one. A fixed date more than
-    /// 30 days ago gets its rows dropped whenever that job happens to run between the seed and the
-    /// warm-up read, so the warm-up finds nothing and the test fails on some runs only.
-    /// </remarks>
-    private static readonly DateTimeOffset Now = TruncateToMinute(DateTimeOffset.UtcNow);
-
-    private static DateTimeOffset TruncateToMinute(DateTimeOffset time) =>
-        new(time.Ticks - (time.Ticks % TimeSpan.TicksPerMinute), TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = PostgresFixture.RecentMinute;
 
     public async Task InitializeAsync()
     {
@@ -65,25 +52,6 @@ public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
         return (engine, scopes);
     }
 
-    private async Task SeedAsync(params (TimeSpan Ago, decimal Mid)[] ticks)
-    {
-        await using var db = fixture.CreateDbContext();
-
-        foreach (var (ago, mid) in ticks)
-        {
-            db.PriceTicks.Add(new PriceTick
-            {
-                Symbol = SupportedSymbol.Gold,
-                ObservedAt = Now - ago,
-                ReceivedAt = Now - ago,
-                Mid = mid,
-                SourceCode = GoldApi,
-            });
-        }
-
-        await db.SaveChangesAsync(Ct);
-    }
-
     /// <summary>
     /// The 1d window's starting price is the last one at or before "now minus one day", which here
     /// is 25 hours old. A warm-up that read only <c>ObservedAt &gt;= now - 1 day</c>, as the spec
@@ -93,11 +61,11 @@ public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task Warm_up_reaches_back_far_enough_for_the_one_day_start()
     {
-        await SeedAsync(
-            (TimeSpan.FromHours(40), 3_000m),
-            (TimeSpan.FromHours(25), 4_000m),
-            (TimeSpan.FromHours(12), 4_020m),
-            (TimeSpan.FromMinutes(1), 4_040m));
+        await fixture.SeedTicksAsync(
+            (SupportedSymbol.Gold, Now.AddHours(-40), 3_000m, GoldApi),
+            (SupportedSymbol.Gold, Now.AddHours(-25), 4_000m, GoldApi),
+            (SupportedSymbol.Gold, Now.AddHours(-12), 4_020m, GoldApi),
+            (SupportedSymbol.Gold, Now.AddMinutes(-1), 4_040m, GoldApi));
 
         var (engine, _) = Build();
         await engine.EnsureWarmAsync(Ct);
@@ -115,7 +83,9 @@ public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task Warm_up_twice_does_not_count_drops()
     {
-        await SeedAsync((TimeSpan.FromHours(2), 4_000m), (TimeSpan.FromHours(1), 4_010m));
+        await fixture.SeedTicksAsync(
+            (SupportedSymbol.Gold, Now.AddHours(-2), 4_000m, GoldApi),
+            (SupportedSymbol.Gold, Now.AddHours(-1), 4_010m, GoldApi));
 
         var (engine, scopes) = Build();
         await engine.EnsureWarmAsync(Ct);

@@ -1,5 +1,4 @@
 using Aurum.Api.Tests.Infrastructure;
-using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
@@ -60,32 +59,13 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
         return (cache, clock);
     }
 
-    private async Task SeedAsync(params (string Symbol, DateTimeOffset ObservedAt, decimal Mid, string SourceCode)[] ticks)
-    {
-        await using var db = fixture.CreateDbContext();
-
-        foreach (var (symbol, observedAt, mid, sourceCode) in ticks)
-        {
-            db.PriceTicks.Add(new PriceTick
-            {
-                Symbol = symbol,
-                ObservedAt = observedAt,
-                ReceivedAt = observedAt,
-                Mid = mid,
-                SourceCode = sourceCode,
-            });
-        }
-
-        await db.SaveChangesAsync(Ct);
-    }
-
     [Fact]
     public async Task Warmup_seeds_the_newest_tick_per_symbol()
     {
         // Inserted out of order, so a warm-up that took the first or last row inserted would pick
         // the wrong one. Silver's only tick is older than every gold tick, so a query that forgot
         // the symbol filter would hand gold's newest to silver.
-        await SeedAsync(
+        await fixture.SeedTicksAsync(
             (SupportedSymbol.Gold, Now.AddHours(-3), 4_001m, GoldApi),
             (SupportedSymbol.Gold, Now.AddHours(-1), 4_003m, GoldApi),
             (SupportedSymbol.Gold, Now.AddHours(-2), 4_002m, GoldApi),
@@ -107,7 +87,7 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task Warmup_is_idempotent()
     {
-        await SeedAsync((SupportedSymbol.Gold, Now.AddHours(-1), 4_000m, GoldApi));
+        await fixture.SeedTicksAsync((SupportedSymbol.Gold, Now.AddHours(-1), 4_000m, GoldApi));
 
         var (cache, _) = Build(primary: GoldApi);
         await cache.EnsureWarmAsync(Ct);
@@ -141,7 +121,7 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
     [InlineData(ApiNinjas, false)]  // same tick, primary reordered across the "restart": not one
     public async Task Warmup_derives_IsFallback_from_the_configured_primary(string primary, bool isFallback)
     {
-        await SeedAsync((SupportedSymbol.Gold, Now.AddMinutes(-10), 4_000m, ApiNinjas));
+        await fixture.SeedTicksAsync((SupportedSymbol.Gold, Now.AddMinutes(-10), 4_000m, ApiNinjas));
 
         var (cache, _) = Build(primary);
         await cache.EnsureWarmAsync(Ct);

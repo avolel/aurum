@@ -46,7 +46,7 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task Transport_failure_still_spends_the_lease()
     {
-        using var client = NewClient(new StubHandler(_ => throw new HttpRequestException("connection reset")));
+        using var client = NewClient(new CountingHandler(_ => throw new HttpRequestException("connection reset")));
 
         await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAsync("https://example.invalid/price", Ct));
 
@@ -61,7 +61,7 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
     public async Task Provider_rejection_surfaces_as_QuotaExhausted()
     {
         var content = new DisposalTrackingContent();
-        using var client = NewClient(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        using var client = NewClient(new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests)
         {
             Content = content,
         }));
@@ -106,12 +106,6 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
         var row = await db.ApiQuotaWindows.AsNoTracking()
             .SingleOrDefaultAsync(w => w.SourceCode == SourceCode, Ct);
         return row?.RequestsUsed ?? 0;
-    }
-
-    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => Task.FromResult(respond(request));
     }
 
     /// <summary>Content that records whether the handler disposed the response it discarded.</summary>

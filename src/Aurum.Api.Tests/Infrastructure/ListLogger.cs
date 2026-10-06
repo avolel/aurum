@@ -3,12 +3,8 @@ using Microsoft.Extensions.Logging;
 namespace Aurum.Api.Tests.Infrastructure;
 
 /// <summary>
-/// An <see cref="ILogger{T}"/> that keeps every entry so a test can assert on what was said.
+/// An <see cref="ILogger{T}"/> that keeps every entry, for tests where the log line is the deliverable.
 /// </summary>
-/// <remarks>
-/// Used where the log line is the deliverable rather than a side effect — the governor's denial
-/// message has to name the actual cause, and nothing else observes that.
-/// </remarks>
 public sealed class ListLogger<T> : ILogger<T>
 {
     private readonly List<(LogLevel Level, string Message)> _entries = [];
@@ -23,8 +19,7 @@ public sealed class ListLogger<T> : ILogger<T>
         Func<TState, Exception?, string> formatter)
         => _entries.Add((logLevel, formatter(state, exception)));
 
-    // Every level is enabled: a test that filters by level would silently stop observing the
-    // Debug-level denials this exists to check.
+    // Every level, so the Debug-level governor denials are captured.
     public bool IsEnabled(LogLevel logLevel) => true;
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;

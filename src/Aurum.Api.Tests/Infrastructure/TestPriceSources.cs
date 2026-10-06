@@ -4,14 +4,9 @@ using Microsoft.Extensions.Options;
 namespace Aurum.Api.Tests.Infrastructure;
 
 /// <summary>
-/// Builds the options a governor needs for a test's synthetic source code.
+/// Builds source options for a test. An unconfigured source throws, so the limit a test asserts
+/// against is always one it configured.
 /// </summary>
-/// <remarks>
-/// The governor used to fall back to a hardcoded 100-request calendar-month budget for any source
-/// it had no options for, so these tests ran on an invented configuration without saying so. Now an
-/// unconfigured source throws, and a test that cares about a limit has to state it — which is the
-/// point: the limit a test asserts against is the limit it configured.
-/// </remarks>
 internal static class TestPriceSources
 {
     public static IOptions<PriceSourcesOptions> For(
@@ -45,10 +40,7 @@ internal static class TestPriceSources
 
         foreach (var (sourceCode, priority, enabled) in entries)
         {
-            // Keyed by the source code rather than a friendly key. Production keys these by
-            // GoldApiIo-style config keys, but nothing in the chain reads the map key — the
-            // ordering and the lookups both go through SourceCode, which is the property under
-            // test here.
+            // Keyed by source code, not a config key: the chain never reads the map key.
             options.Sources[sourceCode] = new PriceSourceOptions
             {
                 SourceCode = sourceCode,

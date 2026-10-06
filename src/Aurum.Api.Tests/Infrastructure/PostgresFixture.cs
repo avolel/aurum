@@ -1,4 +1,5 @@
 using Aurum.App.Infrastructure.Data;
+using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using DotNet.Testcontainers.Builders;
 using Microsoft.EntityFrameworkCore;
 using Testcontainers.PostgreSql;
@@ -6,13 +7,9 @@ using Testcontainers.PostgreSql;
 namespace Aurum.Api.Tests.Infrastructure;
 
 /// <summary>
-/// A real Postgres with TimescaleDB and pgvector, migrated once per test collection.
+/// The same TimescaleDB image compose runs, migrated once per test collection. Not an in-memory
+/// provider: hypertables and vector columns would not be tested at all.
 /// </summary>
-/// <remarks>
-/// Deliberately not an in-memory or SQLite provider: hypertables and vector columns behave
-/// differently enough from vanilla Postgres that a mock would validate nothing. This is the
-/// same image compose runs, so a schema change that breaks Timescale breaks the tests too.
-/// </remarks>
 public class PostgresFixture : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("timescale/timescaledb-ha:pg17")
@@ -25,6 +22,19 @@ public class PostgresFixture : IAsyncLifetime
         .Build();
 
     public string ConnectionString => _container.GetConnectionString();
+
+    /// <summary>
+    /// The real time, cut to the whole minute. Stored ticks must be dated near it: the 30-day
+    /// retention job on <c>price_ticks</c> runs on the server's real clock and drops older rows mid-test.
+    /// </summary>
+    public static DateTimeOffset RecentMinute
+    {
+        get
+        {
+            var now = DateTimeOffset.UtcNow;
+            return new(now.Ticks - (now.Ticks % TimeSpan.TicksPerMinute), TimeSpan.Zero);
+        }
+    }
 
     public async Task InitializeAsync()
     {
@@ -49,6 +59,27 @@ public class PostgresFixture : IAsyncLifetime
             .Options;
 
         return new AurumDbContext(options, clock ?? TimeProvider.System);
+    }
+
+    /// <summary>Stores ticks with <c>ReceivedAt</c> equal to <c>ObservedAt</c>. Source codes must be seeded ones.</summary>
+    public async Task SeedTicksAsync(
+        params (string Symbol, DateTimeOffset ObservedAt, decimal Mid, string SourceCode)[] ticks)
+    {
+        await using var db = CreateDbContext();
+
+        foreach (var (symbol, observedAt, mid, sourceCode) in ticks)
+        {
+            db.PriceTicks.Add(new PriceTick
+            {
+                Symbol = symbol,
+                ObservedAt = observedAt,
+                ReceivedAt = observedAt,
+                Mid = mid,
+                SourceCode = sourceCode,
+            });
+        }
+
+        await db.SaveChangesAsync();
     }
 
     private async Task ExecuteAsync(string sql)

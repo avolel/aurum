@@ -1,7 +1,9 @@
+using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace Aurum.Api.Tests.Modules.Pricing;
@@ -37,9 +39,12 @@ public class ShippedConfigurationTests
     [Fact]
     public void Shipped_appsettings_passes_validation()
     {
-        var result = ValidateShipped();
+        using var host = PricingOptionsHost.Build(
+            BuildConfiguration(),
+            GoldApiIoSource.SourceCode, ApiNinjasSource.SourceCode, MetalPriceApiSource.SourceCode);
 
-        Assert.False(result.Failed, result.FailureMessage);
+        // Throws the boot failure, with its message, if the shipped file does not validate.
+        _ = host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value;
     }
 
     /// <summary>
@@ -53,7 +58,8 @@ public class ShippedConfigurationTests
         var config = BuildConfiguration();
         var options = BindSources(config);
         var polling = config.GetSection(PricePollingOptions.SectionName).Get<PricePollingOptions>()!;
-        var resilience = Resilience(config).Value;
+        using var host = PricingOptionsHost.Build(config);
+        var resilience = host.GetRequiredService<IOptions<PriceFeedResilienceOptions>>().Value;
 
         var primary = options.Sources.Values
             .Where(source => source.Enabled)
@@ -90,7 +96,8 @@ public class ShippedConfigurationTests
     {
         var config = BuildConfiguration();
         var options = BindSources(config);
-        var resilience = Resilience(config).Value;
+        using var host = PricingOptionsHost.Build(config);
+        var resilience = host.GetRequiredService<IOptions<PriceFeedResilienceOptions>>().Value;
 
         foreach (var source in options.Sources.Values.Where(source => source.Enabled))
         {
@@ -139,33 +146,6 @@ public class ShippedConfigurationTests
             $"MaxSamplesPerSymbol {deltas.MaxSamplesPerSymbol} is below the "
           + $"{deltas.RequiredSamples(polling.PollInterval)} needed at PollInterval {polling.PollInterval}.");
     }
-
-    private static ValidateOptionsResult ValidateShipped()
-    {
-        var config = BuildConfiguration();
-        var options = BindSources(config);
-        var polling = config.GetSection(PricePollingOptions.SectionName).Get<PricePollingOptions>()!;
-
-        var registered = options.Sources.Values
-            .Select(source => new RegisteredPriceSource(source.SourceCode));
-
-        return new PriceSourcesOptionsValidator(registered, Options.Create(polling), Resilience(config))
-            .Validate(Options.DefaultName, options);
-    }
-
-    /// <summary>
-    /// The shipped resilience knobs, falling back to the production defaults.
-    /// </summary>
-    /// <remarks>
-    /// The fallback keeps this honest if the section is ever removed from the file:
-    /// <c>Get&lt;T&gt;()</c> returns null for an absent section, and a null bound into the
-    /// validator would give it a <c>MaxAttempts</c> of zero — which its own guard skips the budget
-    /// check for, so the shipped file would pass the cadence rule by not being measured against it.
-    /// </remarks>
-    private static IOptions<PriceFeedResilienceOptions> Resilience(IConfiguration config) =>
-        Options.Create(
-            config.GetSection(PriceFeedResilienceOptions.SectionName).Get<PriceFeedResilienceOptions>()
-            ?? new PriceFeedResilienceOptions());
 
     /// <summary>
     /// The shipped file, then the credentials an operator supplies through <c>.env</c>. Layer order

@@ -1,3 +1,4 @@
+using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Microsoft.Extensions.Configuration;
@@ -531,34 +532,15 @@ public class PriceSourcesOptionsTests
         return options;
     }
 
+    /// <summary>Resolving the options throws the host's boot failure if validation fails.</summary>
     private static PriceSourcesOptions ValidatedOptions(
         Dictionary<string, string?> values, params string[] registeredCodes)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(WithPolling(values)).Build();
-        var polling = config.GetSection(PricePollingOptions.SectionName).Get<PricePollingOptions>()!;
+        using var host = PricingOptionsHost.Build(config, registeredCodes);
 
-        var options = Bind(values);
-        var registered = registeredCodes.Select(code => new RegisteredPriceSource(code));
-        var result = new PriceSourcesOptionsValidator(registered, Options.Create(polling), Resilience(config))
-            .Validate(Options.DefaultName, options);
-
-        Assert.False(result.Failed, result.FailureMessage);
-        return options;
+        return host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value;
     }
-
-    /// <summary>
-    /// The resilience knobs from configuration, falling back to the production defaults.
-    /// </summary>
-    /// <remarks>
-    /// The fallback is load-bearing: <c>Get&lt;T&gt;()</c> returns null for a section that is
-    /// absent, and most tests here never set one. Binding null would hand the validator a
-    /// <c>MaxAttempts</c> of zero — which its own guard treats as "another validator owns this
-    /// message" and skips the budget check for, so every test would pass the rule vacuously.
-    /// </remarks>
-    private static IOptions<PriceFeedResilienceOptions> Resilience(IConfiguration config) =>
-        Options.Create(
-            config.GetSection(PriceFeedResilienceOptions.SectionName).Get<PriceFeedResilienceOptions>()
-            ?? new PriceFeedResilienceOptions());
 
     /// <summary>
     /// Runs validation the way the host does — through ValidateOnStart — so a failure here proves
@@ -572,32 +554,9 @@ public class PriceSourcesOptionsTests
         Dictionary<string, string?> values, params string[] registeredCodes)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(WithPolling(values)).Build();
-
-        var services = new ServiceCollection();
-
-        services.AddOptions<PricePollingOptions>()
-            .BindConfiguration(PricePollingOptions.SectionName);
-
-        // Mirrors Program.cs. BindConfiguration binds onto a fresh instance, so an absent section
-        // leaves the production defaults in place rather than nulling them the way Get<T>() would.
-        services.AddOptions<PriceFeedResilienceOptions>()
-            .BindConfiguration(PriceFeedResilienceOptions.SectionName);
-
-        foreach (var code in registeredCodes)
-        {
-            services.AddSingleton(new RegisteredPriceSource(code));
-        }
-
-        services.AddOptions<PriceSourcesOptions>()
-            .Configure<IConfiguration>((options, cfg) =>
-                cfg.GetSection(PriceSourcesOptions.SectionName).Bind(options.Sources))
-            .ValidateDataAnnotations();
-        services.AddSingleton<IConfiguration>(config);
-        services.AddSingleton<IValidateOptions<PriceSourcesOptions>, PriceSourcesOptionsValidator>();
-
-        using var provider = services.BuildServiceProvider();
+        using var host = PricingOptionsHost.Build(config, registeredCodes);
 
         return Assert.Throws<OptionsValidationException>(
-            () => provider.GetRequiredService<IOptions<PriceSourcesOptions>>().Value);
+            () => host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value);
     }
 }
