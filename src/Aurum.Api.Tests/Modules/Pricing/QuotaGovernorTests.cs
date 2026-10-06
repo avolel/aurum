@@ -13,16 +13,13 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 /// The contract <see cref="PostgresQuotaGovernor"/> has to satisfy.
 /// </summary>
 /// <remarks>
-/// The first test is the one that matters. GoldAPI's free tier resets monthly, so a counter
-/// that resets with the process can spend the whole month in an afternoon, and it will do it
-/// quietly: every individual request looks fine.
+/// The first test is the one that matters: a counter that resets with the process can quietly
+/// spend a month's budget in an afternoon.
 /// </remarks>
 [Collection(PostgresCollection.Name)]
 public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
 {
     private const string SourceCode = "test-source";
-    // xunit v2 has no per-test cancellation token. Not worth a framework migration for this;
-    // revisit if a governor test ever hangs long enough to matter.
     private static CancellationToken Ct => CancellationToken.None;
     private readonly FakeTimeProvider _clock = new(new DateTimeOffset(2026, 7, 15, 12, 0, 0, TimeSpan.Zero));
     private readonly IOptions<PriceSourcesOptions> _sources = TestPriceSources.For(SourceCode);
@@ -30,7 +27,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     public async Task InitializeAsync()
     {
         // Each test starts from an empty ledger; the fixture's database is shared.
-        await using var db = fixture.CreateDbContext();
+        await using var db = fixture.CreateDbContext(_clock);
         await db.ApiQuotaWindows.Where(w => w.SourceCode == SourceCode).ExecuteDeleteAsync();
     }
 
@@ -40,9 +37,8 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         => new PostgresQuotaGovernor(db, _clock, NullLogger<PostgresQuotaGovernor>.Instance, _sources);
 
     /// <summary>
-    /// The governor's first contract clause: budget survives a process restart, so a fresh
-    /// instance sees the used count rather than zero. A second governor over a fresh DbContext
-    /// stands in for the restarted process.
+    /// Budget survives a process restart. A second governor over a fresh DbContext stands in for
+    /// the restarted process.
     /// </summary>
     [Fact]
     public async Task Budget_survives_a_restart()
@@ -50,7 +46,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         const int limit = 5;
         await SeedWindowAsync(limit);
 
-        await using (var db = fixture.CreateDbContext())
+        await using (var db = fixture.CreateDbContext(_clock))
         {
             var governor = NewGovernor(db);
             for (var i = 0; i < 3; i++)
@@ -60,7 +56,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         }
 
         // Restart: new DbContext, new governor, same database.
-        await using (var db = fixture.CreateDbContext())
+        await using (var db = fixture.CreateDbContext(_clock))
         {
             var governor = NewGovernor(db);
             var status = await governor.GetStatusAsync(SourceCode, Ct);
@@ -74,7 +70,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     public async Task Acquire_is_denied_once_the_budget_is_spent()
     {
         await SeedWindowAsync(requestLimit: 2);
-        await using var db = fixture.CreateDbContext();
+        await using var db = fixture.CreateDbContext(_clock);
         var governor = NewGovernor(db);
 
         Assert.True((await governor.AcquireAsync(SourceCode, Ct)).Granted);
@@ -88,8 +84,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
 
     /// <summary>
     /// N racing callers against a budget of M must grant exactly min(N, M). Each gets its own
-    /// DbContext because a DbContext is not thread-safe — the concurrency being tested is
-    /// between database transactions, which is where the guarantee has to live.
+    /// DbContext: the concurrency under test is between database transactions.
     /// </summary>
     [Fact]
     public async Task Concurrent_acquires_never_oversubscribe()
@@ -100,7 +95,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
 
         var results = await Task.WhenAll(Enumerable.Range(0, callers).Select(async _ =>
         {
-            await using var db = fixture.CreateDbContext();
+            await using var db = fixture.CreateDbContext(_clock);
             return await NewGovernor(db).AcquireAsync(SourceCode, Ct);
         }));
 
@@ -111,7 +106,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task First_acquire_in_a_period_creates_the_window()
     {
-        await using var db = fixture.CreateDbContext();
+        await using var db = fixture.CreateDbContext(_clock);
         var governor = NewGovernor(db);
 
         var lease = await governor.AcquireAsync(SourceCode, Ct);
@@ -128,7 +123,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     public async Task Budget_returns_when_the_period_rolls()
     {
         await SeedWindowAsync(requestLimit: 1);
-        await using var db = fixture.CreateDbContext();
+        await using var db = fixture.CreateDbContext(_clock);
         var governor = NewGovernor(db);
 
         Assert.True((await governor.AcquireAsync(SourceCode, Ct)).Granted);
@@ -140,14 +135,14 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     /// <summary>
-    /// The provider is authoritative. Our count can only ever under-count, so a 429 must zero
-    /// out the rest of the period rather than just bumping the counter by one.
+    /// The provider is authoritative, so a 429 zeroes the rest of the period rather than bumping
+    /// the counter by one.
     /// </summary>
     [Fact]
     public async Task Provider_rejection_clamps_the_remaining_budget()
     {
         await SeedWindowAsync(requestLimit: 100);
-        await using var db = fixture.CreateDbContext();
+        await using var db = fixture.CreateDbContext(_clock);
         var governor = NewGovernor(db);
 
         Assert.True((await governor.AcquireAsync(SourceCode, Ct)).Granted);
@@ -162,12 +157,8 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     /// change a row that is not there, so the clamp used to vanish silently.
     /// </summary>
     /// <remarks>
-    /// Reachable when a request straddles a period boundary: the acquire counts against the old
-    /// period, the response lands in the new one, and the rejection is written against a period
-    /// key nothing has touched. The seeded-window case is already covered by
-    /// <see cref="Provider_rejection_clamps_the_remaining_budget"/>; this one deliberately seeds
-    /// nothing. <c>Used == 0</c> is the honest count — no request was ever charged to this
-    /// period — and a row reading "0 used, rejected" is the loudest drift signal the ledger has.
+    /// Reachable when a request straddles a period boundary. <c>Used == 0</c> is the honest count,
+    /// and "0 used, rejected" is the loudest drift signal the ledger has.
     /// </remarks>
     [Fact]
     public async Task Rejection_before_any_acquire_creates_a_clamped_window()
@@ -184,10 +175,8 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     /// <summary>
-    /// D-7's "known wart", now fixed: the acquire statement cannot tell a spent budget from a
-    /// provider rejection, so the denial log asserted the first regardless. The two need
-    /// different operator responses — one waits out the period, the other means our count is
-    /// drifting from the provider's — so the line has to name the cause it actually found.
+    /// A spent budget and a provider rejection need different operator responses, so the denial
+    /// log has to name the cause it found (D-7).
     /// </summary>
     [Fact]
     public async Task Denial_after_provider_rejection_names_the_provider()
@@ -206,8 +195,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     /// <summary>
-    /// The other half of the pair: a spent budget must not be reported as a provider rejection.
-    /// Without this, a denial branch that always said "rejected" would pass the test above.
+    /// The other half of the pair: without it, a denial that always said "rejected" would pass.
     /// </summary>
     [Fact]
     public async Task Denial_on_a_spent_budget_does_not_blame_the_provider()
@@ -230,10 +218,8 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     /// for anything this table records.
     /// </summary>
     /// <remarks>
-    /// The governor's raw SQL already binds every timestamp from the clock, but rows written
-    /// through EF get their audit stamps from <c>AurumDbContext.ApplyAuditFields</c>. While that
-    /// reads <c>DateTimeOffset.UtcNow</c>, two rows in the same table carry timestamps from two
-    /// different clocks — invisible in production, a month apart under a fake one.
+    /// Rows written through EF get their stamps from <c>ApplyAuditFields</c>, not the governor's
+    /// SQL, so this is what catches that path falling back to wall clock.
     /// </remarks>
     [Fact]
     public async Task Audit_timestamps_come_from_the_injected_clock()

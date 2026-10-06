@@ -9,14 +9,12 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 /// The breaker's state machine. No container, no HTTP, sub-second.
 /// </summary>
 /// <remarks>
-/// Every one of these is only writable because the circuit measures time by comparing two
-/// <c>TimeProvider</c> reads rather than by holding a timer. That is half of D-14's argument
-/// against Polly's breaker, whose break duration runs on the wall clock: the assertion in
-/// <see cref="Circuit_closes_exactly_at_the_break_duration"/> has no equivalent there.
+/// Writable without a container because the circuit compares two <c>TimeProvider</c> reads
+/// rather than holding a timer: half of D-14's case against Polly's breaker.
 /// </remarks>
 public class SourceCircuitTests
 {
-    private const string SourceCode = "goldapi.io";
+    private const string SourceCode = GoldApiIoSource.SourceCode;
 
     private static readonly DateTimeOffset Start = new(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
@@ -157,7 +155,7 @@ public class SourceCircuitTests
     {
         var clock = new FakeTimeProvider(Start);
         var store = new SourceCircuitStore(
-            [new RegisteredPriceSource("goldapi.io"), new RegisteredPriceSource("api-ninjas")],
+            [new RegisteredPriceSource(GoldApiIoSource.SourceCode), new RegisteredPriceSource(ApiNinjasSource.SourceCode)],
             clock,
             Options.Create(new PriceFeedCircuitOptions()));
 
@@ -177,7 +175,7 @@ public class SourceCircuitTests
     public void An_unregistered_source_code_is_a_wiring_bug_not_a_new_circuit()
     {
         var store = new SourceCircuitStore(
-            [new RegisteredPriceSource("goldapi.io")],
+            [new RegisteredPriceSource(GoldApiIoSource.SourceCode)],
             new FakeTimeProvider(Start),
             Options.Create(new PriceFeedCircuitOptions()));
 

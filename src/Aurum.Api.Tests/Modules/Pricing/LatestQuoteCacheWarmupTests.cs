@@ -1,4 +1,5 @@
 using Aurum.Api.Tests.Infrastructure;
+using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
@@ -7,7 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
-using Aurum.App.Infrastructure.Pricing;
 
 namespace Aurum.Api.Tests.Modules.Pricing;
 
@@ -21,8 +21,8 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 [Collection(PostgresCollection.Name)]
 public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifetime
 {
-    private const string GoldApi = "goldapi.io";
-    private const string ApiNinjas = "api-ninjas";
+    private const string GoldApi = GoldApiIoSource.SourceCode;
+    private const string ApiNinjas = ApiNinjasSource.SourceCode;
 
     private static CancellationToken Ct => CancellationToken.None;
 
@@ -31,23 +31,21 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
     public async Task InitializeAsync()
     {
         // Every tick, not only this class's: warm-up reads the newest row per symbol whatever its
-        // source, so a row left by another class would be what it found. The collection runs its
-        // classes one at a time and each cleans up on entry, so this cannot pull rows from under
-        // a running test.
+        // source. Safe because the collection runs one class at a time.
         await using var db = fixture.CreateDbContext();
         await db.PriceTicks.ExecuteDeleteAsync(Ct);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private (LatestQuoteCache Cache, FakeTimeProvider Clock) Build(string primary)
+    private LatestQuoteCache Build(string primary)
     {
         var clock = new FakeTimeProvider(Now);
 
         var services = new ServiceCollection();
         services.AddScoped(_ => fixture.CreateDbContext(clock));
 
-        var cache = new LatestQuoteCache(
+        return new LatestQuoteCache(
             services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             TestPriceSources.ForChain(
                 (primary, 1, true),
@@ -55,23 +53,20 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
             clock,
             Options.Create(new PricePollingOptions { PollInterval = TimeSpan.FromMinutes(15) }),
             NullLogger<LatestQuoteCache>.Instance);
-
-        return (cache, clock);
     }
 
     [Fact]
     public async Task Warmup_seeds_the_newest_tick_per_symbol()
     {
-        // Inserted out of order, so a warm-up that took the first or last row inserted would pick
-        // the wrong one. Silver's only tick is older than every gold tick, so a query that forgot
-        // the symbol filter would hand gold's newest to silver.
+        // Out of order, so first- or last-inserted is wrong. Silver's only tick is older than every
+        // gold tick, so a query without the symbol filter would hand gold's newest to silver.
         await fixture.SeedTicksAsync(
             (SupportedSymbol.Gold, Now.AddHours(-3), 4_001m, GoldApi),
             (SupportedSymbol.Gold, Now.AddHours(-1), 4_003m, GoldApi),
             (SupportedSymbol.Gold, Now.AddHours(-2), 4_002m, GoldApi),
             (SupportedSymbol.Silver, Now.AddHours(-5), 50m, GoldApi));
 
-        var (cache, _) = Build(primary: GoldApi);
+        var cache = Build(primary: GoldApi);
         await cache.EnsureWarmAsync(Ct);
 
         var gold = cache.Get(SupportedSymbol.Gold);
@@ -89,7 +84,7 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
     {
         await fixture.SeedTicksAsync((SupportedSymbol.Gold, Now.AddHours(-1), 4_000m, GoldApi));
 
-        var (cache, _) = Build(primary: GoldApi);
+        var cache = Build(primary: GoldApi);
         await cache.EnsureWarmAsync(Ct);
 
         // A live poll lands between two warm-ups.
@@ -107,7 +102,7 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
     [Fact]
     public async Task Warmup_with_no_ticks_leaves_the_cache_empty()
     {
-        var (cache, _) = Build(primary: GoldApi);
+        var cache = Build(primary: GoldApi);
 
         await cache.EnsureWarmAsync(Ct);
 
@@ -123,13 +118,12 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
     {
         await fixture.SeedTicksAsync((SupportedSymbol.Gold, Now.AddMinutes(-10), 4_000m, ApiNinjas));
 
-        var (cache, _) = Build(primary);
+        var cache = Build(primary);
         await cache.EnsureWarmAsync(Ct);
 
         var held = cache.Get(SupportedSymbol.Gold)!.Value;
 
-        // Same stored row both times; only the configuration differs. That the flag follows the
-        // configuration, not the row, is the behaviour D-16 says to expect.
+        // Same stored row both times: the flag follows the configuration, not the row (D-16).
         Assert.Equal(isFallback, held.IsFallback);
 
         // Not observed by this process, so not invented.

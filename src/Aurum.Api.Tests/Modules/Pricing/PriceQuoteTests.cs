@@ -18,7 +18,7 @@ public class PriceQuoteTests
     private static readonly DateTimeOffset At = new(2026, 9, 18, 12, 0, 0, TimeSpan.Zero);
 
     private static PriceQuote Normalize(decimal? providerMid, string symbol = SupportedSymbol.Gold) =>
-        PriceQuote.Normalize(symbol, At, At, bid: null, ask: null, providerMid, "metalprice-api");
+        PriceQuote.Normalize(symbol, At, At, bid: null, ask: null, providerMid, MetalPriceApiSource.SourceCode);
 
     [Fact]
     public void A_real_gold_price_passes_the_band()
@@ -33,7 +33,7 @@ public class PriceQuoteTests
     {
         var ex = Assert.Throws<PriceSourceException>(() => Normalize(0.0002299343m));
 
-        Assert.Equal("metalprice-api", ex.SourceCode);
+        Assert.Equal(MetalPriceApiSource.SourceCode, ex.SourceCode);
         Assert.Contains("plausible band", ex.Message);
     }
 
@@ -43,7 +43,7 @@ public class PriceQuoteTests
         // The band has to sit after the bid/ask fallback, not only on the providerMid path —
         // a provider that inverts its mid inverts its two-sided quote as well.
         var ex = Assert.Throws<PriceSourceException>(() => PriceQuote.Normalize(
-            SupportedSymbol.Gold, At, At, bid: 0.00022m, ask: 0.00024m, providerMid: null, "metalprice-api"));
+            SupportedSymbol.Gold, At, At, bid: 0.00022m, ask: 0.00024m, providerMid: null, MetalPriceApiSource.SourceCode));
 
         Assert.Contains("plausible band", ex.Message);
     }

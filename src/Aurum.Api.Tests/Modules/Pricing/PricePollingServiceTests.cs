@@ -42,8 +42,8 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
     private static readonly DateTimeOffset Start = PostgresFixture.RecentMinute;
     private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(5);
 
-    private const string Primary = "api-ninjas";
-    private const string Secondary = "goldapi.io";
+    private const string Primary = ApiNinjasSource.SourceCode;
+    private const string Secondary = GoldApiIoSource.SourceCode;
 
     public async Task InitializeAsync()
     {
@@ -102,10 +102,8 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
     /// </summary>
     /// <remarks>
     /// <see cref="ScriptedPriceFeed.WaitForCallAsync"/> completes when the feed is <em>entered</em>,
-    /// and the poller writes the tick and the projection after it returns. Asserting straight after
-    /// that wait races the save — which is what the first draft of these tests did, and it failed
-    /// about as often as it passed. This polls the real clock because it is waiting on a thread-pool
-    /// hop and a round trip, neither of which the fake clock drives.
+    /// before the save, so asserting straight after it races. Polls on the real clock, which is
+    /// what drives the thread-pool hop and the round trip.
     /// </remarks>
     private async Task WaitUntilAsync(Func<AurumDbContext, Task<bool>> condition, string because)
     {
@@ -450,8 +448,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
     /// </summary>
     /// <remarks>
     /// If <c>Record</c> moved below the save, the throw would skip it and the wait would time out.
-    /// That is the whole discriminating power of this test, and it was checked by making exactly
-    /// that move.
+    /// Mutation-checked by making exactly that move.
     /// </remarks>
     [Fact]
     public async Task A_poll_writes_the_cache_before_it_persists()

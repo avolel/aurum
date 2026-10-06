@@ -19,8 +19,8 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 /// </remarks>
 public class DeltaEngineTests
 {
-    private const string Primary = "api-ninjas";
-    private const string Backup = "goldapi.io";
+    private const string Primary = ApiNinjasSource.SourceCode;
+    private const string Backup = GoldApiIoSource.SourceCode;
 
     private static readonly DateTimeOffset Now = new(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
 

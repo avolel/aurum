@@ -11,14 +11,12 @@ using Microsoft.Extensions.Time.Testing;
 namespace Aurum.Api.Tests.Modules.Pricing;
 
 /// <summary>
-/// What the HTTP boundary owes the ledger. These pin two decisions from D-7 that are currently
-/// enforced by nothing but the shape of the code.
+/// What the HTTP boundary owes the ledger: two D-7 decisions enforced by nothing but the shape of
+/// the code.
 /// </summary>
 /// <remarks>
-/// The handler is exercised through a real <see cref="HttpClient"/> rather than by calling
-/// SendAsync directly: HttpClient does its own exception handling on the way out, and a test that
-/// bypasses it would not prove that <see cref="QuotaExhaustedException"/> actually reaches
-/// PricePollingService's catch clause.
+/// Driven through a real <see cref="HttpClient"/>, which does its own exception handling, to prove
+/// <see cref="QuotaExhaustedException"/> actually reaches the poller's catch clause.
 /// </remarks>
 [Collection(PostgresCollection.Name)]
 public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
@@ -40,8 +38,7 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
     /// transit stays spent. An over-count costs one poll; an under-count can cost the month.
     /// </summary>
     /// <remarks>
-    /// This is the executable form of a decision otherwise enforced by the absence of a catch
-    /// block. Phase 1 adds Polly above this layer — if that work grows a refund, this goes red.
+    /// The executable form of a decision otherwise enforced by the absence of a catch block.
     /// </remarks>
     [Fact]
     public async Task Transport_failure_still_spends_the_lease()
@@ -55,7 +52,7 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
 
     /// <summary>
     /// A provider 429 clamps the rest of the period and surfaces as the exception the poller
-    /// sleeps on. Covers the branch that turns the provider's opinion into ours.
+    /// sleeps on.
     /// </summary>
     [Fact]
     public async Task Provider_rejection_surfaces_as_QuotaExhausted()
@@ -87,8 +84,8 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
 
         var provider = services.BuildServiceProvider();
 
-        // Mirrors PricingModule's wiring: the handler resolves the governor per request from a
-        // scope factory, because IHttpClientFactory pools handlers far longer than a DbContext lives.
+        // As in Program.AddPriceSource: a scope per request, because IHttpClientFactory pools
+        // handlers far longer than a DbContext lives.
         var handler = new QuotaHandler(
             provider.GetRequiredService<IServiceScopeFactory>(),
             SourceCode,

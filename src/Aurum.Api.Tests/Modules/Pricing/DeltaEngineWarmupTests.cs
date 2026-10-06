@@ -15,14 +15,12 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 /// </summary>
 /// <remarks>
 /// Apart from <c>DeltaEngineTests</c> so that class stays off Postgres. Same setup as
-/// <c>LatestQuoteCacheWarmupTests</c>: seeded source codes, because <c>price_ticks.SourceCode</c>
-/// has a foreign key to <c>price_sources</c>, and every tick deleted on entry, because warm-up
-/// reads every recent row per symbol whatever its source.
+/// <c>LatestQuoteCacheWarmupTests</c>: seeded source codes and every tick deleted on entry.
 /// </remarks>
 [Collection(PostgresCollection.Name)]
 public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
 {
-    private const string GoldApi = "goldapi.io";
+    private const string GoldApi = GoldApiIoSource.SourceCode;
 
     private static CancellationToken Ct => CancellationToken.None;
 
@@ -53,10 +51,9 @@ public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     /// <summary>
-    /// The 1d window's starting price is the last one at or before "now minus one day", which here
-    /// is 25 hours old. A warm-up that read only <c>ObservedAt &gt;= now - 1 day</c>, as the spec
-    /// first said, would skip it, and the 1d window would say no answer for a day after every
-    /// restart. The 40-hour tick is outside the 36-hour lookback and must not be the start.
+    /// The 1d start is the last price at or before "now minus one day", here 25 hours old, so a
+    /// one-day lookback would leave the window dark for a day after every restart. The 40-hour
+    /// tick is outside the 36-hour lookback and must not be the start.
     /// </summary>
     [Fact]
     public async Task Warm_up_reaches_back_far_enough_for_the_one_day_start()

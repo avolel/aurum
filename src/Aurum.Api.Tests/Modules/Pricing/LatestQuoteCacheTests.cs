@@ -15,14 +15,13 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 /// The latest-quote cache in memory. No container, no HTTP, sub-second.
 /// </summary>
 /// <remarks>
-/// Writable without a container for the same reason as <c>SourceCircuitTests</c>: freshness is
-/// the difference of two <see cref="TimeProvider"/> reads, not a timer or an eviction, so moving a
-/// fake clock is the whole setup. Warm-up needs Postgres and lives in its own class.
+/// No container: age is the difference of two <see cref="TimeProvider"/> reads, so moving a fake
+/// clock is the whole setup. Warm-up needs Postgres and lives in its own class.
 /// </remarks>
 public class LatestQuoteCacheTests
 {
-    private const string Primary = "goldapi.io";
-    private const string Backup = "metalpriceapi.com";
+    private const string Primary = GoldApiIoSource.SourceCode;
+    private const string Backup = MetalPriceApiSource.SourceCode;
 
     private static readonly DateTimeOffset Start = new(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan PollInterval = TimeSpan.FromMinutes(15);
@@ -208,16 +207,9 @@ public class LatestQuoteCacheTests
     /// entry must be that round's newest, with every field from that one record.
     /// </summary>
     /// <remarks>
-    /// <para>Rounds, checked one at a time, rather than one long run checked at the end. A first
-    /// version did the latter and passed five runs out of five against a deliberate
-    /// <c>TryGetValue</c>-then-indexer implementation: only the last few writes decide the final
-    /// state, and by then most writers have finished, so there was nothing left to race. Here each
-    /// round is a fresh collision and each one is judged.</para>
-    ///
-    /// <para>Dedicated threads, not <c>Task.Run</c>: every writer blocks on the barrier, and the
-    /// thread pool injects threads beyond its minimum slowly, so pool tasks would arrive at the
-    /// barrier staggered rather than together. Each index is encoded in ObservedAt, Mid and the
-    /// source code so a mixed entry disagrees with itself.</para>
+    /// Rounds checked one at a time: a single long run passed every time against a broken
+    /// check-then-set, because only the last few writes decide the final state. Dedicated threads,
+    /// not <c>Task.Run</c>: pool threads arrive at the barrier staggered.
     /// </remarks>
     [Fact]
     public void Concurrent_records_leave_a_consistent_entry()

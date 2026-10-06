@@ -2,6 +2,7 @@ using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -12,11 +13,14 @@ public class FailoverPriceFeedTests
 {
     private static readonly DateTimeOffset Start = new(2026, 6, 1, 0, 0, 0, TimeSpan.Zero);
 
-    private const string Primary = "api-ninjas";
-    private const string Secondary = "goldapi.io";
-    private const string Tertiary = "metalpriceapi.com";
+    private const string Primary = ApiNinjasSource.SourceCode;
+    private const string Secondary = GoldApiIoSource.SourceCode;
+    private const string Tertiary = MetalPriceApiSource.SourceCode;
 
-    private static (FailoverPriceFeed Feed, SourceCircuitStore Circuits, FakeTimeProvider Clock) Build(
+    private static IOptions<PriceSourcesOptions> TwoSources =>
+        TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true));
+
+    private static (FailoverPriceFeed Feed, SourceCircuitStore Circuits) Build(
         IOptions<PriceSourcesOptions> options,
         IEnumerable<IPriceSource> sources,
         PriceFeedCircuitOptions? circuitOptions = null)
@@ -29,9 +33,9 @@ public class FailoverPriceFeedTests
             Options.Create(circuitOptions ?? new PriceFeedCircuitOptions()));
 
         var feed = new FailoverPriceFeed(
-            sources, options, circuits, new ListLogger<FailoverPriceFeed>());
+            sources, options, circuits, NullLogger<FailoverPriceFeed>.Instance);
 
-        return (feed, circuits, clock);
+        return (feed, circuits);
     }
 
     [Fact]
@@ -40,8 +44,8 @@ public class FailoverPriceFeedTests
         var primary = ScriptedPriceSource.Succeeding(Primary);
         var backup = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, _, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, _) = Build(
+            TwoSources,
             [primary, backup]);
 
         var result = await feed.GetLatestQuoteAsync(SupportedSymbol.Gold, CancellationToken.None);
@@ -57,8 +61,8 @@ public class FailoverPriceFeedTests
         var primary = ScriptedPriceSource.Faulting(Primary, "HTTP 503 Service Unavailable.");
         var backup = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, _, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, _) = Build(
+            TwoSources,
             [primary, backup]);
 
         var result = await feed.GetLatestQuoteAsync(SupportedSymbol.Gold, CancellationToken.None);
@@ -80,8 +84,8 @@ public class FailoverPriceFeedTests
         var primary = ScriptedPriceSource.OutOfQuota(Primary, resetsAt);
         var backup = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, circuits, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, circuits) = Build(
+            TwoSources,
             [primary, backup],
             new PriceFeedCircuitOptions { FailureThreshold = 1 });
 
@@ -104,8 +108,8 @@ public class FailoverPriceFeedTests
         var primary = ScriptedPriceSource.Faulting(Primary);
         var backup = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, circuits, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, circuits) = Build(
+            TwoSources,
             [primary, backup],
             new PriceFeedCircuitOptions { FailureThreshold = 1 });
 
@@ -132,7 +136,7 @@ public class FailoverPriceFeedTests
         var disabled = ScriptedPriceSource.Succeeding(Primary);
         var enabled = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, _, _) = Build(
+        var (feed, _) = Build(
             TestPriceSources.ForChain((Primary, 1, false), (Secondary, 2, true)),
             [disabled, enabled]);
 
@@ -163,7 +167,7 @@ public class FailoverPriceFeedTests
             ScriptedPriceSource.Faulting(Primary),
         };
 
-        var (feed, _, _) = Build(options, sources);
+        var (feed, _) = Build(options, sources);
 
         var thrown = await Assert.ThrowsAsync<AllSourcesFailedException>(
             () => feed.GetLatestQuoteAsync(SupportedSymbol.Gold, CancellationToken.None));
@@ -192,7 +196,7 @@ public class FailoverPriceFeedTests
             first.Value.EnabledInFailoverOrder().Select(s => s.SourceCode),
             second.Value.EnabledInFailoverOrder().Select(s => s.SourceCode));
 
-        // Ordinal on the source code: "goldapi.io" before "metalpriceapi.com".
+        // Ordinal on the source code: "goldapi.io" before "metalprice-api".
         Assert.Equal(
             [Primary, Secondary, Tertiary],
             first.Value.EnabledInFailoverOrder().Select(s => s.SourceCode));
@@ -204,8 +208,8 @@ public class FailoverPriceFeedTests
         var soon = Start.AddHours(1);
         var later = Start.AddDays(30);
 
-        var (feed, _, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, _) = Build(
+            TwoSources,
             [
                 ScriptedPriceSource.OutOfQuota(Primary, later),
                 ScriptedPriceSource.OutOfQuota(Secondary, soon),
@@ -224,8 +228,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task One_fault_among_the_quota_failures_is_not_AllQuotaExhausted()
     {
-        var (feed, _, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, _) = Build(
+            TwoSources,
             [
                 ScriptedPriceSource.OutOfQuota(Primary, Start.AddDays(20)),
                 ScriptedPriceSource.Faulting(Secondary),
@@ -242,8 +246,8 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task An_open_circuit_among_the_quota_failures_is_not_AllQuotaExhausted()
     {
-        var (feed, circuits, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, circuits) = Build(
+            TwoSources,
             [
                 ScriptedPriceSource.Faulting(Primary),
                 ScriptedPriceSource.OutOfQuota(Secondary, Start.AddDays(20)),
@@ -268,8 +272,8 @@ public class FailoverPriceFeedTests
             Primary, () => new ArgumentException("Expected a 6-character symbol like XAUUSD."));
         var backup = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, circuits, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, circuits) = Build(
+            TwoSources,
             [primary, backup],
             new PriceFeedCircuitOptions { FailureThreshold = 1 });
 
@@ -289,8 +293,8 @@ public class FailoverPriceFeedTests
             Primary, () => new InvalidOperationException("a defect in one source"));
         var backup = ScriptedPriceSource.Succeeding(Secondary);
 
-        var (feed, circuits, _) = Build(
-            TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true)),
+        var (feed, circuits) = Build(
+            TwoSources,
             [primary, backup],
             new PriceFeedCircuitOptions { FailureThreshold = 1 });
 
@@ -307,7 +311,7 @@ public class FailoverPriceFeedTests
         var configured = ScriptedPriceSource.Succeeding(Secondary);
         var unconfigured = ScriptedPriceSource.Succeeding("never-configured");
 
-        var (feed, _, _) = Build(
+        var (feed, _) = Build(
             TestPriceSources.ForChain((Secondary, 2, true)),
             [unconfigured, configured]);
 
@@ -322,7 +326,7 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task No_enabled_source_is_a_total_failure_but_not_a_quota_failure()
     {
-        var (feed, _, _) = Build(
+        var (feed, _) = Build(
             TestPriceSources.ForChain((Primary, 1, false)),
             [ScriptedPriceSource.Succeeding(Primary)]);
 
@@ -340,7 +344,7 @@ public class FailoverPriceFeedTests
     [Fact]
     public async Task A_failure_reason_is_truncated_to_the_column_width()
     {
-        var (feed, circuits, _) = Build(
+        var (feed, circuits) = Build(
             TestPriceSources.ForChain((Primary, 1, true)),
             [ScriptedPriceSource.Faulting(Primary, new string('x', 1000))]);
 

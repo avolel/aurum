@@ -17,19 +17,9 @@ namespace Aurum.Api.Tests.Modules.Pricing;
 /// That the retry loop sits <em>above</em> the quota governor, against a real Postgres ledger.
 /// </summary>
 /// <remarks>
-/// <para>
-/// These call <see cref="Program.AddPriceSource{T}"/>, the production registration, on purpose. The
-/// thing under test is the order of two lines inside that method; hand-composing
-/// <c>new ResilienceHandler { InnerHandler = new QuotaHandler { … } }</c> re-declares that order in
-/// the test and then asserts only that the test agrees with itself. <c>QuotaHandlerTests</c>' own
-/// hand-composed rig is right for <em>that</em> class, where the handler is the whole subject; here
-/// the wiring is.
-/// </para>
-/// <para>
-/// A swap of those two lines makes retries free in our ledger and billed by the provider — an
-/// under-count, which is the direction that costs a month rather than a poll (D-7). Nothing else in
-/// the codebase would notice.
-/// </para>
+/// Calls <see cref="Program.AddPriceSource{T}"/>, the production registration, because the subject
+/// is the order of two lines inside it; a hand-composed chain would only agree with itself. A swap
+/// makes retries free in the ledger and billed by the provider (D-7), and nothing else would notice.
 /// </remarks>
 [Collection(PostgresCollection.Name)]
 public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
@@ -38,16 +28,9 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     private static CancellationToken Ct => CancellationToken.None;
 
     /// <summary>
-    /// The real clock, unlike every other test in this folder.
+    /// The real clock, unlike every other test in this folder: Polly takes the container's
+    /// <see cref="TimeProvider"/>, and a fake one would make the backoff hang rather than fail.
     /// </summary>
-    /// <remarks>
-    /// <c>AddResilienceHandler</c> resolves <see cref="TimeProvider"/> from the container and hands
-    /// it to Polly's strategies, so registering a <c>FakeTimeProvider</c> here makes the retry
-    /// backoff wait on a clock that nothing advances — the test hangs rather than failing. These
-    /// tests assert call counts and ledger rows, neither of which needs a controlled clock, so they
-    /// pay a real exponential backoff instead. Anything asserting on a quota *period* belongs in
-    /// QuotaGovernorTests, which has the fake clock and no pipeline.
-    /// </remarks>
     private readonly TimeProvider _clock = TimeProvider.System;
 
     public async Task InitializeAsync()
@@ -63,11 +46,7 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     /// path, with <paramref name="transport"/> standing in for the network.
     /// </summary>
     /// <param name="backoffBase">
-    /// Polly's first retry delay. These tests pay it in real seconds (see <see cref="_clock"/>), and
-    /// the production default of 2s makes a three-attempt test sleep for six — so the tests that
-    /// only count calls and ledger rows run at 1ms, and the one test that is *about* the schedule
-    /// sets a value it can measure. A test asserting a count must not also be asserting that Polly
-    /// waits, or it pays for a guarantee it never checks.
+    /// Paid in real time, so 1ms unless the test is about the schedule.
     /// </param>
     private ServiceProvider BuildProvider(
         CountingHandler transport,
@@ -88,16 +67,14 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
         {
             o.RetryBackoffBase = backoffBase ?? TimeSpan.FromMilliseconds(1);
 
-            // Left at the production default unless a test names one, so the attempt count these
-            // tests assert stays the shipped attempt count.
+            // Left at the production default unless a test names one.
             if (maxAttempts is { } attempts)
             {
                 o.MaxAttempts = attempts;
             }
         });
 
-        // A real governor over the fixture's database. The whole point is that the lease count is
-        // the one a provider would have billed, so an in-memory stand-in would test nothing.
+        // A real governor: the lease count must be the one a provider would have billed.
         services.AddScoped(_ => fixture.CreateDbContext(_clock));
         services.AddScoped<IQuotaGovernor, PostgresQuotaGovernor>();
 
@@ -193,33 +170,8 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     /// <see cref="PriceSourcesOptionsValidator.MinimumTotalTimeout"/> models.
     /// </summary>
     /// <remarks>
-    /// <para>That formula is a reconstruction of Polly's exponential schedule from outside Polly,
-    /// and the validator refuses a <c>TotalTimeout</c> below it. If the real schedule is ever
-    /// <em>longer</em> than modelled — jitter switched on, <c>BackoffType</c> changed, a package
-    /// upgrade moving a default — the formula under-estimates, the validator approves a
-    /// <c>TotalTimeout</c> that truncates the last attempt, and that attempt spends its lease
-    /// without being able to finish. Nothing else in the codebase compares the two.</para>
-    ///
-    /// <para>The transport answers instantly, so each attempt contributes nothing and the elapsed
-    /// span is the backoff alone — which is why the expected value is the formula evaluated at a
-    /// <em>zero</em> request timeout. That isolates the half of the formula that models Polly from
-    /// the half that is plain multiplication.</para>
-    ///
-    /// <para><b>The upper bounds are the load-bearing assertions.</b> A schedule shorter than
-    /// modelled only makes the validator stricter than it needs to be, which costs a few seconds of
-    /// ceiling; a schedule longer than modelled is the silent overspend. The lower bounds are there
-    /// to catch the backoff being skipped altogether, which would make the whole comparison
-    /// vacuous.</para>
-    ///
-    /// <para>This is the Polly half only. The arithmetic half is
-    /// <c>PriceSourcesOptionsTests.MinimumTotalTimeout_sums_an_exponential_schedule</c>, which needs
-    /// no clock, so when this fails and that passes, the retry pipeline moved and the formula did
-    /// not.</para>
-    ///
-    /// <para>Rows cost their backoff sum in real time, about 1.6s together. Each base is large
-    /// enough that the governor's Postgres round-trip between attempts is small beside the signal: a
-    /// 20ms base would sit inside the noise, and the production 2s would make this the slowest test
-    /// in the suite.</para>
+    /// A real schedule longer than modelled (jitter on, a changed default) lets the validator approve
+    /// a TotalTimeout that truncates the last attempt; the upper bounds are what catch it (D-15).
     /// </remarks>
     [Theory]
     [InlineData(200, 3)]  // the original case: two delays, ~600ms
