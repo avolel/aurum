@@ -315,7 +315,8 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
 - [x] **Reload at startup** from the newest price per symbol in the database. Otherwise a restart
       leaves `/v1/price/live` empty for up to a full check interval. The saved price has its own
       startup read (`EnsureWarmAsync`) for now, and the poller waits for it before its first check.
-      Item 5 merges the two startup reads later.
+      Item 5 was meant to merge the two startup reads. It didn't: the price history doesn't keep the
+      bid, ask or received time, so the saved price can't be rebuilt from it (D-17).
       - A reloaded price has an empty list of services tried, because this run of the app didn't see
         them. Whether it came from a backup is worked out from the current settings.
       - If the reload fails, the poller logs it and starts checking anyway, instead of stopping the
@@ -334,7 +335,7 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
 
 ---
 
-## 5. How much did the price move · 2 to 3 days · the most important piece · FR-1.4 · needed by 6
+## 5. How much did the price move · DONE · the most important piece · FR-1.4 · needed by 6
 
 **The rule, word for word in the notes on the class:**
 
@@ -347,56 +348,71 @@ With hours between prices, the 1-minute, 5-minute and 15-minute windows hold one
 "latest minus the oldest in the window" gives 0.00%. That isn't "the price didn't move". It's "there's
 no data". Mixing the two up is the purest form of the risk in §14, "delayed data misleading users".
 
-- [ ] **One ring buffer per symbol**, meaning a fixed-size list that overwrites its oldest entry when
+- [x] **One ring buffer per symbol**, meaning a fixed-size list that overwrites its oldest entry when
       full. Size it for the longest window (1 day) and serve all six windows from it, finding prices by
       binary search (repeatedly halving the range, which works because the list is in time order). Not
       one buffer per window: that stores each price six times, keeps six cut-off points in step, and
       hands back the *oldest price still inside the window*, which is the wrong starting price.
-- [ ] Each entry is a small fixed value holding the time, the middle price and a number for which
+- [x] Each entry is a small fixed value holding the time, the middle price and a number for which
       service it came from:
       `readonly struct Sample { DateTimeOffset ObservedAt; decimal Mid; byte SourceOrdinal; }`, kept in
       an array with a start position and a count. The size limit comes from a setting
-      (`MaxSamplesPerSymbol`, default 8,640: 24 hours at one price every 10 seconds, about 200 KB per
-      symbol). The size is limited by design, not by hoping.
-- [ ] **The starting price is the last one at or before the window start**, not the first one after
+      (`MaxSamplesPerSymbol`, default 8,640: 24 hours at one price every 10 seconds). The size is
+      limited by design, not by hoping.
+      - Each entry takes 40 bytes once padded, so 8,640 is about 340 KB per symbol, not the 200 KB first
+        written here.
+      - 8,640 at 10 seconds is exactly one day, which overwrites the very price the 1-day window
+        starts from. The app now refuses to start unless the list holds one day plus the 1-day
+        window's slack at the current check interval: 145 entries at 15 minutes.
+- [x] **The starting price is the last one at or before the window start**, not the first one after
       it. Find the last price at or before "now minus the window". Using the first one after would
       quietly *shrink* the window: with prices 8 hours apart, a "1 hour move" would really be measured
       over 8 hours and still be labelled 1 hour. That's mislabelling instead of declining to answer.
-- [ ] No answer when:
+- [x] No answer when:
       - the gap between the window start and the starting price is bigger than the allowed slack
         (`Tolerance(W)`, default half the window);
       - there are fewer than two prices;
       - every price is newer than the window start.
-- [ ] **Prices that arrive out of order: drop them, never re-sort.** Being in time order *is* what
+- [x] **Prices that arrive out of order: drop them, never re-sort.** Being in time order *is* what
       makes binary search work. Drop any price whose time is at or before the last one, log it at debug
       level, and **add one to a counter people can see**. From the outside, "the price stopped moving"
       and "the app is dropping every price" look the same. Re-sorting would give a list that's in order
       but isn't what really happened.
-- [ ] **Different services quoting slightly different prices: the most likely cause of false alarms.**
+- [x] **Different services quoting slightly different prices: the most likely cause of false alarms.**
       Services disagree on the price of gold by a few dollars. So switching to a backup between checks
       looks like the price moved by exactly that amount. At a threshold of 0.25% in 5 minutes, that
       invents a big move that Phase 2 will then confidently explain. Each price records which service
       it came from, and a window whose starting and latest prices came from different services is
       flagged `CrossSource`. **Write in D-17 that this reduces the problem but doesn't fix it.** The fix
       is a correction per service, which needs data I don't have yet.
-- [ ] **Measuring how jumpy the price is (volatility) from three prices means nothing.** Require at
+- [x] **Measuring how jumpy the price is (volatility) from three prices means nothing.** Require at
       least `MinSamplesForVolatility` prices (default 5), or report `Volatility = null`. Then the
       classifier's volatility rule simply *doesn't apply*, instead of giving a nonsense answer.
-- [ ] Reloading at startup reads
-      `WHERE Symbol = @s AND ObservedAt >= now - LongestWindow ORDER BY ObservedAt DESC LIMIT @capacity`,
+- [x] Reloading at startup reads
+      `WHERE Symbol = @s AND ObservedAt >= now - Lookback ORDER BY ObservedAt DESC LIMIT @capacity`,
       newest first, then flips the order in memory. Newest first matches the existing index on
       `(Symbol ASC, ObservedAt DESC)`, so the database can use it.
-- [ ] Startup loading is a method, **`EnsureWarmAsync(ct)`, safe to call more than once**. The timer
-      waits for it before its first check, and so do the endpoints on their first read. Not a separate
+      - `Lookback` is one day plus the 1-day window's slack (36 hours), not one day. The 1-day starting
+        price is older than "now minus one day", so a one-day read skipped it and left the 1-day
+        window empty for a day after every restart.
+- [x] Startup loading is a method, **`EnsureWarmAsync(ct)`, safe to call more than once**. The timer
+      waits for it before its first check, and so do the endpoints on their first read.
+      - Unlike the saved price's reload, a second run isn't harmless here, so every caller waits on
+        one shared load. A failed load lets the next caller try again. Not a separate
       background service: "background services start in the order they're set up" is a rule nobody
       re-reads before adding a new one, and breaking it shows up as an empty first result that looks
       like a normal fresh start.
-- [ ] `DeltaEngine` is created once for the whole app, and gets a way to create a fresh database
+- [x] `DeltaEngine` is created once for the whole app, and gets a way to create a fresh database
       connection for the startup read (`IServiceScopeFactory`). Same reasoning as `QuotaHandler`:
       something that lives for the whole app must not hold on to a database connection meant for one
       unit of work.
-- [ ] Tests: `Window_with_no_bracketing_sample_is_null_not_zero`, `Out_of_order_sample_is_dropped`.
-- [ ] **D-17 written up**: the "no answer, not zero" rule, and the limits of the different-services
+- [x] Tests: `Window_with_no_bracketing_sample_is_null_not_zero`, `Out_of_order_sample_is_dropped`.
+      - 34 tests without Docker (the list, the calculator and its setting), 3 against a real database
+        for the startup reload, and 1 new poller test. 151 tests pass in total on 2026-10-06.
+      - I broke six rules on purpose to check the tests notice: "first price after" instead of "last
+        before", no freshness check on the newest price, a one-day reload, no shared reload, a failed
+        reload kept, and the poller not recording. Each one turned at least one named test red.
+- [x] **D-17 written up**: the "no answer, not zero" rule, and the limits of the different-services
       flag.
 
 ---

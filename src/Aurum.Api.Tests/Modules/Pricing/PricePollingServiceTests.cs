@@ -3,6 +3,7 @@ using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
+using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
@@ -61,7 +62,8 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
     public Task DisposeAsync() => Task.CompletedTask;
 
-    private (PricePollingService Poller, FakeTimeProvider Clock, LatestQuoteCache Cache) Build(IPriceFeed feed)
+    private (PricePollingService Poller, FakeTimeProvider Clock, LatestQuoteCache Cache, DeltaEngine Deltas) Build(
+        IPriceFeed feed)
     {
         var clock = new FakeTimeProvider(Start);
 
@@ -80,10 +82,13 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         // the poller has written to it, and a stub would assert the poller called a method.
         var cache = new LatestQuoteCache(scopes, sources, clock, polling, NullLogger<LatestQuoteCache>.Instance);
 
-        var poller = new PricePollingService(
-            scopes, sources, clock, polling, cache, NullLogger<PricePollingService>.Instance);
+        var deltas = new DeltaEngine(
+            scopes, Options.Create(new DeltaEngineOptions()), clock, NullLogger<DeltaEngine>.Instance);
 
-        return (poller, clock, cache);
+        var poller = new PricePollingService(
+            scopes, sources, clock, polling, cache, deltas, NullLogger<PricePollingService>.Instance);
+
+        return (poller, clock, cache, deltas);
     }
 
     private static PriceFeedResult Quote(string sourceCode, IReadOnlyList<SourceAttempt> attempts) =>
@@ -163,7 +168,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                 new SourceAttempt(Secondary, SourceAttemptOutcome.QuotaExhausted, "spent", null, soon),
             ]));
 
-        var (poller, clock, _) = Build(feed);
+        var (poller, clock, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -201,7 +206,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SourceAttempt(Secondary, SourceAttemptOutcome.Success),
         ]));
 
-        var (poller, clock, _) = Build(feed);
+        var (poller, clock, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -232,7 +237,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                 new SourceAttempt(Secondary, SourceAttemptOutcome.QuotaExhausted, "spent", null, Start.AddDays(30)),
             ]));
 
-        var (poller, clock, _) = Build(feed);
+        var (poller, clock, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -258,7 +263,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                 new SourceAttempt(Secondary, SourceAttemptOutcome.Faulted, "HTTP 500.", new HttpRequestException()),
             ]));
 
-        var (poller, clock, _) = Build(feed);
+        var (poller, clock, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -284,7 +289,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SourceAttempt(Secondary, SourceAttemptOutcome.Success),
         ]));
 
-        var (poller, _, _) = Build(feed);
+        var (poller, _, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -327,7 +332,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         var feed = new ScriptedPriceFeed(_ => Quote(Secondary,
             [new SourceAttempt(Secondary, SourceAttemptOutcome.Success)]));
 
-        var (poller, _, _) = Build(feed);
+        var (poller, _, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -370,7 +375,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SourceAttempt(Secondary, SourceAttemptOutcome.Success),
         ]));
 
-        var (poller, _, _) = Build(feed);
+        var (poller, _, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -406,7 +411,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                     new HttpRequestException()),
             ]));
 
-        var (poller, _, _) = Build(feed);
+        var (poller, _, _, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -456,7 +461,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         var feed = new ScriptedPriceFeed(_ => Quote(Unseeded,
             [new SourceAttempt(Unseeded, SourceAttemptOutcome.Success)]));
 
-        var (poller, _, cache) = Build(feed);
+        var (poller, _, cache, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         LatestQuoteSnapshot cached;
@@ -489,7 +494,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
                     new SourceAttempt(Secondary, SourceAttemptOutcome.Faulted, "HTTP 500.", new HttpRequestException()),
                 ]));
 
-        var (poller, clock, cache) = Build(feed);
+        var (poller, clock, cache, _) = Build(feed);
         await poller.StartAsync(Ct);
 
         try
@@ -518,5 +523,36 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Equal(Start, held.Value.Quote.ObservedAt);
         Assert.Equal([Primary], held.Value.AttemptedSources);
         Assert.Equal(PollInterval, held.Age);
+    }
+
+    [Fact]
+    public async Task A_poll_records_into_the_delta_engine()
+    {
+        var feed = new ScriptedPriceFeed(_ => Quote(Primary,
+            [new SourceAttempt(Primary, SourceAttemptOutcome.Success)]));
+
+        var (poller, _, cache, deltas) = Build(feed);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            await feed.WaitForCallAsync(1).WaitAsync(CallTimeout, Ct);
+
+            // Recorded on the line after the cache, so once the cache holds the quote the engine
+            // has been offered it too.
+            await WaitForCachedAsync(cache, SupportedSymbol.Gold);
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        var snapshot = deltas.GetSnapshot(SupportedSymbol.Gold);
+
+        // The database holds no ticks (InitializeAsync), so warm-up created no history: a snapshot
+        // here exists only because the poll recorded. One price, so every window says no answer.
+        Assert.NotNull(snapshot);
+        Assert.Equal(0, snapshot.DroppedOutOfOrder);
+        Assert.All(snapshot.Windows.Values, Assert.Null);
     }
 }

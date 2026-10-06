@@ -1,4 +1,5 @@
 using Aurum.App.Infrastructure.Pricing;
+using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
@@ -118,6 +119,25 @@ public class ShippedConfigurationTests
         Assert.True(options.TryGetByCode(GoldApiIoSource.SourceCode, out _));
         Assert.True(options.TryGetByCode(ApiNinjasSource.SourceCode, out _));
         Assert.True(options.TryGetByCode(MetalPriceApiSource.SourceCode, out _));
+    }
+
+    /// <summary>
+    /// The shipped buffer must hold one day plus slack at the shipped cadence, or the 1d window
+    /// never has a starting price. Same gap as the cadence guard above: the unit tests check the
+    /// rule, this checks the file.
+    /// </summary>
+    [Fact]
+    public void Shipped_delta_buffer_covers_the_one_day_window()
+    {
+        var config = BuildConfiguration();
+        var polling = config.GetSection(PricePollingOptions.SectionName).Get<PricePollingOptions>()!;
+        var deltas = config.GetSection(DeltaEngineOptions.SectionName).Get<DeltaEngineOptions>()
+            ?? new DeltaEngineOptions();
+
+        Assert.True(
+            DeltaEngineOptions.BufferCoversLongestWindow(deltas, polling.PollInterval),
+            $"MaxSamplesPerSymbol {deltas.MaxSamplesPerSymbol} is below the "
+          + $"{deltas.RequiredSamples(polling.PollInterval)} needed at PollInterval {polling.PollInterval}.");
     }
 
     private static ValidateOptionsResult ValidateShipped()

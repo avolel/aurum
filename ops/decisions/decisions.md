@@ -1212,3 +1212,134 @@ Turned down: **letting a failed reload stop the app.** It would make a database 
 impossible to miss. But the app already moves its database to the latest version at startup, so the
 database was reachable a moment earlier. A failure here is far more likely to be brief than permanent,
 and the first check fixes it. The error is logged either way.
+
+## D-17 — A price move is worked out from two real prices, or it is "no answer"
+
+**DECIDED:**
+
+- `DeltaEngine` keeps a short price history in memory, one list per symbol, and works out how much
+  the price moved over six windows: 1 minute, 5 minutes, 15 minutes, 1 hour, 4 hours and 1 day
+  (FR-1.4). Item 6's classifier, which decides whether a move is big enough to report, reads it.
+- A move over a window is worked out from two real prices spaced close enough to that window's
+  length. If the app doesn't have two such prices, the answer is **no answer** (null). The app never
+  makes up a starting price: no filling with zero, no guessing between two prices, no reusing an
+  older price. Anything that shows the result must show "no answer" as unknown, never as 0.00%.
+- The starting price is the **last price at or before** "now minus the window". The newest price
+  is the end.
+- "Now" is the app's clock (`TimeProvider`). The newest price must also be recent: within the
+  window's slack of now.
+- A price that arrives at or before the newest one held is dropped and counted. The list is never
+  re-sorted.
+
+All of this was built and tested on 2026-10-06.
+
+**Why "no answer" instead of zero.** With the shipped 15-minute poll interval, the 1-minute and
+5-minute windows usually hold only one price. "Newest minus oldest in the window" then gives
+0.00%. That doesn't mean the price stood still. It means the app has no data for that window.
+Showing the two the same way is the purest form of the "delayed data misleading users" risk in §14.
+So with the shipped settings, the 1-minute and 5-minute windows will almost always say "no answer",
+and that is correct.
+
+**The slack.** Each window allows some slack, `Tolerance(W)`, set by `DeltaEngine:ToleranceFraction`
+(default 0.5, so half the window). A window has no answer when:
+
+- no held price is at or before the window start (every price is newer);
+- the starting price is more than the slack before the window start;
+- the newest price is more than the slack older than now;
+- there is only one price to work with.
+
+A gap of exactly the slack still counts. The setting is capped at 1. Above that, a "1-hour move"
+could start more than two hours back and still be labelled one hour.
+
+**Why the last price before the window start, not the first one after it.** The first one after
+quietly shrinks the window. With prices 8 hours apart, a "1-hour move" would really start from a
+price inside the hour and still be labelled one hour. That is mislabelling. Declining to answer is
+the honest choice. `Starting_price_is_the_last_at_or_before_the_window_start` pins this. I switched
+the engine to "first after" to check that the test notices, and 13 tests failed, that one included.
+
+**Why "now" is the app's clock.** The alternative was to measure each window back from the newest
+price's own time. That answers more often. But it labels an hour that ended 8 hours ago as "the 1-hour
+move". It also lets a backup service whose prices are 15 minutes behind keep producing 5-minute moves.
+That is the same "delayed data misleading users" risk the rule exists to prevent. So the newest price
+also has to be within the slack of now. `Stale_newest_price_is_null` pins this. I removed the
+check to confirm the test fails without it, and it did.
+
+**One list per symbol, not one per window.** The list is a ring buffer, meaning a fixed-size list
+that overwrites its oldest entry when full. It is sized for the longest window (1 day) and serves all
+six by binary search, which repeatedly halves the range and works because the list is in time order.
+One list per window would store each price six times and keep six cut-off points in step. It would
+also hand back the oldest price still *inside* the window, which is the wrong starting price.
+
+**Prices that arrive out of order are dropped, never re-sorted.** Time order is what makes the binary
+search work. A price at or before the newest held one, including one with the exact same time, is
+dropped, logged at debug level, and added to `DeltaSnapshot.DroppedOutOfOrder`. That counter matters
+because from outside, "the price stopped moving" and "the app is dropping every price" look the same.
+Re-sorting would give a list that's in order but isn't what the app actually saw. This matches the
+latest-price rule in D-16, so the latest price and the moves beside it can't disagree.
+
+**Different services quote slightly different prices.** This is the most likely cause of false
+alarms. Services disagree on the price of gold by a few dollars. Switching to a backup between two
+checks looks like the price moved by exactly that gap. At a threshold of 0.25% in 5 minutes, that
+invents a big move that Phase 2 would then confidently explain. Each stored price carries a small
+number for the service it came from (`SourceOrdinal`). A window whose starting and newest prices came
+from different services is flagged `CrossSource`. **This reduces the problem but doesn't fix it.**
+The flag only says the move *might* include the gap between two services. It doesn't say how big that
+gap is, and prices in between are not checked. The real fix is a correction per service, which needs
+data on how far each service sits from the others. I don't have that yet. Item 6 decides what a
+flagged window is worth (`CrossSourceMagnitudeMultiplier`).
+
+**Volatility needs at least five prices.** Volatility here is how much the price jumps around: the
+sample standard deviation of the percent change between each pair of neighbouring prices in the
+window. From three prices that number means nothing. Below `DeltaEngine:MinSamplesForVolatility`
+(default 5, never below 3) it is null, so the classifier's volatility rule simply doesn't apply. It
+is a `double`, because the `decimal` type has no square root. It is rough when prices are spaced
+unevenly: it measures step-to-step changes and doesn't adjust for how long each step took.
+
+**Two problems in the original spec, fixed before building.**
+
+1. **The startup read cut off the 1-day starting price.** The spec read back only prices with
+   `ObservedAt >= now - 1 day`. But the 1-day starting price is the last one at or before
+   "now minus 1 day", which is older than that cut-off. After every restart, the 1-day window would
+   have said "no answer" for a full day. The warm-up now reads back one day plus the 1-day window's
+   slack: 36 hours at the default. `Warm_up_reaches_back_far_enough_for_the_one_day_start` pins this.
+   I cut the lookback back to one day to check, and that test failed.
+2. **The buffer size had the same problem, and the memory figure was wrong.** The spec's 8,640
+   prices at one every 10 seconds is exactly 24 hours, so the price being overwritten is the one the
+   1-day window needs. The app now refuses to start unless `DeltaEngine:MaxSamplesPerSymbol` holds
+   one day plus the slack at the current `PricePolling:PollInterval`. At 15 minutes that is 145
+   prices. At 10 seconds it would be 12,961, so the spec's own example would now be refused. Each
+   stored price takes 40 bytes once the computer pads it out (16 for the time, 16 for the price, 1
+   for the service number). So 8,640 of them is about 340 KB per symbol, not the 200 KB the spec
+   said.
+
+**Startup loading runs once, shared.** `EnsureWarmAsync` reloads the recent saved prices for each
+symbol, the same way `LatestQuoteCache` does (D-16). The poller waits for it before its first check.
+One difference: running it twice is not harmless here. Every reloaded price would be older than the
+newest live one, so a second run would add nothing. So the load sits behind a lock and a "done" flag:
+the first caller loads, and every later caller waits for the lock, sees the flag and skips. If the
+load fails, the flag stays unset and the next caller can try again. A retry can't
+fill in history behind live prices that arrived in the meantime, because the list never re-sorts.
+Reloaded prices skip the drop counter: a stored price that overlaps a live one is not a fault. If the
+load fails, the poller logs it and starts checking anyway, as in D-16. Each of the two startup loads
+has its own error handling, so one failing doesn't skip the other.
+
+**The two startup reads stay separate.** D-16 hoped the latest-price reload and this one could later
+be merged by deleting one. They can't, cheaply. A stored entry here has no bid, ask or received time,
+so the latest price can't be rebuilt from it without making every one of the up to 8,640 entries
+bigger.
+
+Turned down: **one buffer per window.** See above: six copies of every price, and the wrong starting
+price.
+
+Turned down: **the first price after the window start.** It answers more often, by quietly measuring
+a shorter window than the label says.
+
+Turned down: **measuring from the newest price's time instead of the app's clock.** It labels old
+moves as current ones.
+
+Turned down: **re-sorting late prices into place.** It keeps the list in order but makes it something
+the app never actually observed, and it hides a service that keeps sending old prices.
+
+Turned down: **making the six windows a setting.** They are a requirement that item 6's thresholds
+are written against. A setting would let a deployment measure a different "1 hour" from the one those
+thresholds were chosen for.

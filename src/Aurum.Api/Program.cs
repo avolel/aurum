@@ -6,6 +6,7 @@ using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Repositories;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
+using Aurum.App.Infrastructure.Pricing.Deltas;
 using FluentValidation;
 using MediatR;
 using Aurum.App.Infrastructure.Pricing.Jobs;
@@ -100,6 +101,18 @@ builder.Services.AddOptions<PricePollingOptions>()
           + "at or below it, every price is flagged stale one poll after it arrives.")
     .ValidateOnStart();
 
+// The coverage rule needs PollInterval, so it reads PricePollingOptions as a dependency rather than
+// duplicating the cadence here: a buffer sized for one cadence is silently a few hours short at a
+// faster one, and the 1d window is the one that goes dark (D-17).
+builder.Services.AddOptions<DeltaEngineOptions>()
+    .BindConfiguration(DeltaEngineOptions.SectionName)
+    .ValidateDataAnnotations()
+    .Validate<IOptions<PricePollingOptions>>(
+        (o, polling) => DeltaEngineOptions.BufferCoversLongestWindow(o, polling.Value.PollInterval),
+        $"{DeltaEngineOptions.SectionName}:MaxSamplesPerSymbol must hold one day plus the 1d window's "
+          + "tolerance at PricePolling:PollInterval; below that the 1d window never has a starting price.")
+    .ValidateOnStart();
+
 builder.Services.AddOptions<PriceFeedResilienceOptions>()
     .BindConfiguration(PriceFeedResilienceOptions.SectionName)
     .ValidateDataAnnotations()
@@ -124,6 +137,10 @@ builder.Services.AddSingleton<SourceCircuitStore>();
 // Singleton for the same reason: the newest price must outlive a poll and a request. So it must
 // reach the database through IServiceScopeFactory, never by holding a scoped DbContext (D-16).
 builder.Services.AddSingleton<ILatestQuoteCache, LatestQuoteCache>();
+
+// Singleton for the same reasons: the price history must outlive a poll, and it reaches the database
+// for its warm-up through IServiceScopeFactory (D-17).
+builder.Services.AddSingleton<IDeltaEngine, DeltaEngine>();
 
 builder.Services.AddScoped<IQuotaGovernor, PostgresQuotaGovernor>();
 

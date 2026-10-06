@@ -1,6 +1,7 @@
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
+using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
@@ -22,6 +23,7 @@ public class PricePollingService(
     TimeProvider clock,
     IOptions<PricePollingOptions> polling,
     ILatestQuoteCache cache,
+    IDeltaEngine deltas,
     ILogger<PricePollingService> logger) : BackgroundService
 {
     /// <summary>
@@ -52,22 +54,12 @@ public class PricePollingService(
         // Awaited here rather than run as its own hosted service: hosted services start in
         // registration order, which is a rule nobody re-reads before adding one, and getting it
         // wrong shows up as an empty /v1/price/live that looks like a normal fresh start (D-16).
-        // Item 5's ring buffer warms the same way, so the two can later merge by deletion.
-        try
-        {
-            await cache.EnsureWarmAsync(stoppingToken);
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        // Two reads, not one: a Sample has no bid, ask or ReceivedAt, so the cache cannot be warmed
+        // from the delta history without making every buffered entry larger (D-17).
+        if (!await TryWarmAsync(cache.EnsureWarmAsync, "Latest-quote cache", stoppingToken)
+            || !await TryWarmAsync(deltas.EnsureWarmAsync, "Price-move history", stoppingToken))
         {
             return;
-        }
-        catch (Exception ex)
-        {
-            // Best-effort. An unhandled exception here would end ExecuteAsync and, by default,
-            // stop the host — taking the poller down over a convenience. The first successful
-            // poll fills the cache anyway; until then /v1/price/live has no price, as on a fresh
-            // database.
-            logger.LogError(ex, "Latest-quote warm-up failed; the cache stays empty until the first poll.");
         }
 
         using var timer = new PeriodicTimer(polling.Value.PollInterval, clock);
@@ -115,6 +107,34 @@ public class PricePollingService(
             }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
+    }
+
+    /// <summary>
+    /// Runs one warm-up. Returns false only when the host is stopping.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort, each in its own try so one failing does not skip the other. An unhandled
+    /// exception here would end ExecuteAsync and, by default, stop the host — taking the poller
+    /// down over a convenience. The first successful poll starts filling both anyway; until then
+    /// there is no price, and every window says no answer, as on a fresh database.
+    /// </remarks>
+    private async Task<bool> TryWarmAsync(
+        Func<CancellationToken, Task> warm, string what, CancellationToken stoppingToken)
+    {
+        try
+        {
+            await warm(stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "{What} warm-up failed; it fills from the first poll instead.", what);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -169,11 +189,13 @@ public class PricePollingService(
             throw;
         }
 
-        // Memory first, then the database, then (item 7) connected clients. The cache is not the
-        // record of truth, but a database hiccup must not hide a price the app successfully
-        // fetched. A failed poll never reaches here: the AllSourcesFailedException path above
-        // projects onto price_sources and rethrows, and the held quote's growing Age says the rest.
+        // Memory first, then the database, then (item 7) connected clients. The cache and the
+        // delta history are not the record of truth, but a database hiccup must not hide a price
+        // the app successfully fetched. A failed poll never reaches here: the
+        // AllSourcesFailedException path above projects onto price_sources and rethrows, and the
+        // held quote's growing Age says the rest.
         cache.Record(result);
+        deltas.Record(result.Quote);
 
         db.PriceTicks.Add(result.Quote.ToTick());
         await ProjectAttemptsAsync(db, result.Attempts, ct);

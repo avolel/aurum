@@ -34,6 +34,26 @@ The rules:
 
 When editing an older doc that doesn't follow this yet, rewrite the section you touch to follow it.
 
+## Policy: keep it simple (K.I.S.S.)
+
+**This is mandatory.** Write the least code that does the job. The simpler the code, the faster
+another developer can pick it up and change it safely.
+
+1. Solve the problem in front of you. No hooks, options or abstractions for a future that has not
+   arrived.
+2. Prefer the plain version over the clever one. A lock and a flag beat a shared `Task` with
+   identity checks; a two-pass loop beats a one-pass trick when the input is small.
+3. Remove what is unreachable. No guards for states the code or the validators already rule out.
+4. Use what .NET and the existing code already provide before writing a new helper, type or
+   interface.
+5. Keep comments short. Say why in a line or two; long reasoning belongs in the decision log
+   (`ops/decisions/decisions.md`), not in a `<remarks>` block.
+6. Before you hand back a change, re-read it and cut anything that can go without breaking a test
+   or a recorded decision.
+
+Simple does not mean careless. The invariants recorded below and in the decision log still hold. If
+a simpler version would break one, keep the complex version and say why in one line.
+
 ## Commands
 
 ```bash
@@ -371,9 +391,10 @@ Related invariants:
   growing `Age` is the signal. `A_poll_writes_the_cache_before_it_persists` was mutation-checked
   against `Record` moved below the save.
 - **Warm-up is awaited by the poller, not a hosted service of its own** — hosted-service start order
-  is registration order, and nobody re-reads that before adding one. Item 5's ring buffer warms the
-  same way so the two can merge by deletion. A warm-up that throws is logged and polling continues:
-  an unhandled exception in `ExecuteAsync` stops the host by default.
+  is registration order, and nobody re-reads that before adding one. The delta engine warms the same
+  way, but the two reads do **not** merge: a `Sample` has no bid, ask or `ReceivedAt` (D-17). Each
+  warm-up is in its own try in `PricePollingService.TryWarmAsync`; one that throws is logged and
+  polling continues: an unhandled exception in `ExecuteAsync` stops the host by default.
 - **Warm-up goes through `Record`**, so it is idempotent and cannot overwrite a newer live quote.
   It builds `PriceQuote` with the constructor, not `Normalize`, so a since-tightened plausibility band
   cannot fail boot over stored data. A warmed quote has empty `AttemptedSources` ("not observed by
@@ -399,6 +420,36 @@ Related invariants:
   interface, and internal types would take the first option away.
 - Symbol keys are `OrdinalIgnoreCase` to match `PriceSourcesOptions.Sources` and
   `PriceFeedResult.UsedFallback`.
+
+### The price-move calculator (D-17)
+
+`DeltaEngine` (`Pricing/Deltas/`) works out how far each symbol moved over the six fixed
+`DeltaWindow`s (1m, 5m, 15m, 1h, 4h, 1d) for item 6's classifier. Singleton, registered beside
+`LatestQuoteCache`. `PricePollingService` awaits `EnsureWarmAsync` after the cache's and calls
+`Record(result.Quote)` on the line after `cache.Record`, before the save.
+
+- **A window is two real prices or null.** Never a zero-filled `WindowDelta`. With the shipped
+  15-minute cadence, 1m and 5m are almost always null — correct, not a bug.
+- **Start = last sample at or before `now - W`** (`TickRingBuffer.LastIndexAtOrBefore`), never
+  first-after. **Now = the injected clock**, not the newest sample's time, and the newest sample must
+  also be within `Tolerance(W)` of now. Both rules have tests that go red when broken.
+- **One `TickRingBuffer` per symbol behind its own `Lock`**, not one per window. Strictly increasing
+  `ObservedAt`; `TryAppend` refuses at-or-before and never re-sorts. `Record` counts refusals in
+  `DroppedOutOfOrder`; warm-up appends through `TryAppend` directly so overlap is not counted.
+- **Lookback is `1d + Tolerance(1d)` (36h), not 1d.** The 1d start is *older* than "now − 1 day". The
+  warm-up query and `DeltaEngineOptions.BufferCoversLongestWindow` (checked at boot against
+  `PricePolling:PollInterval`) both use `Lookback`. Shrinking it makes the 1d window dark for a day
+  after every restart.
+- **`EnsureWarmAsync` loads at most once**, behind a `SemaphoreSlim` and a `_warmed` flag. A second
+  load would add nothing (everything is older than live data) and the buffer cannot back-fill. A
+  failed or cancelled load leaves the flag false so the next caller retries. A symbol with no stored ticks gets no history, so `GetSnapshot` stays null ("never held a
+  price") rather than six nulls.
+- **`CrossSource` is a flag, not a correction.** It compares the start and end samples' per-process
+  `SourceOrdinal`s only.
+- Volatility is a `double`, two-pass sample standard deviation of step-to-step percent changes, null
+  below `MinSamplesForVolatility`.
+- `IDeltaEngine`, `DeltaSnapshot`, `WindowDelta`, `DeltaWindow` and `Sample` are public for the same
+  item 8 reason as `ILatestQuoteCache`.
 
 ### Database
 
@@ -515,6 +566,13 @@ behind a `Barrier` and checks after every round. Its first version checked only 
 writes decide the final state, and by then most writers had finished. Do not collapse it back into
 one long run, and do not swap the threads for `Task.Run`: pool threads arrive at the barrier
 staggered.
+
+**Tests that store ticks must date them within 30 days of the real clock.** `price_ticks` has
+TimescaleDB's 30-day retention policy, and its background job drops old chunks by the database
+server's real time, not the fake clock. A fixed date older than that loses its rows whenever the job
+runs mid-test, so the test fails only sometimes. `DeltaEngineWarmupTests` uses the real time truncated
+to the minute for this reason. `LatestQuoteCacheWarmupTests` and `PricePollingServiceTests` still use
+fixed June 2026 dates and are exposed to it.
 
 `LatestQuoteCacheWarmupTests` is the Postgres half of the cache. It inserts ticks with **seeded**
 source codes — `price_ticks.SourceCode` has a foreign key to `price_sources` — and deletes *every*
