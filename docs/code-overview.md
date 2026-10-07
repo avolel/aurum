@@ -17,7 +17,7 @@ It sits beside the other documents like this:
 
 Numbers in brackets, like (D-7), point to entries in the decision log.
 
-Everything here was checked against the code on 2026-10-06, at commit `34d5fb1`. If you change how a
+Everything here was checked against the code on 2026-10-07, at commit `17d3de1`. If you change how a
 piece works, update its section here too.
 
 ---
@@ -28,14 +28,14 @@ Aurum is a back-end service (an "API", a program other programs talk to over the
 the price of gold. Every 15 minutes it asks an outside price service for the current gold price. If
 that service fails, it tries the next one, and then a third. It saves every price it gets into a
 Postgres database, keeps the newest price in memory, and works out how much the price has moved over
-the last 1 minute, 5 minutes, 15 minutes, 1 hour, 4 hours and 1 day. It also counts every request it
+the last 1 minute, 5 minutes, 15 minutes, 1 hour, 4 hours and 1 day. When one of those moves is big
+enough to matter, it saves it to the database as a price event. It also counts every request it
 sends to each price service, in the database, so it never goes over a service's free monthly
 allowance.
 
-**Nobody can ask the app for a price yet.** There are no web endpoints for prices. The only web
-addresses that answer are the two health checks, `/health` and `/health/ready`. The endpoints, live
-updates to connected apps, and the rules for "this move is big enough to flag" are later items in
-`ops/phase-1-todo.md`.
+**Nobody can ask the app for a price or an event yet.** There are no web endpoints for either. The
+only web addresses that answer are the two health checks, `/health` and `/health/ready`. The
+endpoints and live updates to connected apps are later items in `ops/phase-1-todo.md`.
 
 ```mermaid
 flowchart LR
@@ -50,6 +50,7 @@ flowchart LR
         F[FailoverPriceFeed<br/>tries services in order]
         C[LatestQuoteCache<br/>newest price, in memory]
         D[DeltaEngine<br/>price moves, in memory]
+        S[SignificanceClassifier<br/>which moves are big enough]
     end
 
     DB[(Postgres +<br/>TimescaleDB)]
@@ -58,7 +59,9 @@ flowchart LR
     F --> N & G & M
     P --> C
     P --> D
+    D -. snapshot .-> S
     P --> DB
+    S -. events, saved by the poller .-> DB
     F -. counts every request .-> DB
 ```
 
@@ -170,7 +173,10 @@ Aurum.App.Infrastructure.Pricing/
     ├── DeltaEngine.cs                  ← works out price moves over six windows
     ├── TickRingBuffer.cs               ← a fixed-size list of recent prices
     ├── DeltaWindow.cs                  ← the six windows: 1m, 5m, 15m, 1h, 4h, 1d
-    └── DeltaSnapshot.cs                ← the result: one move per window, or "no answer"
+    ├── DeltaSnapshot.cs                ← the result: one move per window, or "no answer"
+    ├── SignificanceOptions.cs          ← the threshold and waiting period per window (settings)
+    ├── SignificanceClassifier.cs       ← decides which moves are big enough to be events
+    └── PriceEventSql.cs                ← saves an event, unless one was saved too recently
 ```
 
 **`Aurum.App.Application`** — the plumbing for future endpoints. No feature uses it yet.
@@ -212,7 +218,7 @@ it goes in this file.
    three lines is the order a request passes through them.
 5. **App logging.** Registers the log queue (one for the whole app), the log service, and the
    background job that writes queued rows to `app_logs`.
-6. **Settings.** Binds five settings sections and registers the checks for each. `ValidateOnStart()`
+6. **Settings.** Binds six settings sections and registers the checks for each. `ValidateOnStart()`
    means a bad setting stops the app at startup, with a message naming the setting, instead of
    failing later.
 7. **Pricing objects.** The circuit store, latest-price cache and price-move engine are created once
@@ -267,7 +273,8 @@ flowchart TD
     E --> F{"What came back?"}
     F -- "a price ✅" --> G["Save to memory<br/>latest-price cache + price-move engine"]
     G --> H["Save to database<br/>new row in price_ticks,<br/>times in price_sources"]
-    H --> Z(["Wait for the next timer"])
+    H --> E2["Check each window's move<br/>against its threshold;<br/>save the big ones to price_events"]
+    E2 --> Z(["Wait for the next timer"])
 
     F -- "out of allowance" --> C
     F -- "any other failure ❌" --> I["Add one failure<br/>to its breaker"]
@@ -284,6 +291,7 @@ Which class owns each box:
 | Box | Class |
 |---|---|
 | Timer, the two "Save" boxes, the "every service failed" branch | `PricePollingService` |
+| "Check each window's move" | `SignificanceClassifier` decides, `PriceEventSql` saves, `PricePollingService` calls both |
 | "Get the list", the loop over services, the breaker checks | `FailoverPriceFeed` |
 | "Is its circuit breaker open?", "Add one failure" | `SourceCircuit` |
 | ★ "Ask it for a price" | `ApiNinjasSource`, `GoldApiIoSource` or `MetalPriceApiSource`, plus the layers in Zoom 2 |
@@ -361,6 +369,9 @@ worst case for exactly this reason.
   it logs the error and carries on. Memory then fills from the first poll.
 - **Memory is saved before the database** (D-16). If the database save fails, the app still holds the
   price it just fetched.
+- **Events are saved after the price** (D-18), so an event never points at a price the database
+  failed to keep. If saving an event fails, the poll's normal error handling logs it, and the next
+  poll measures again.
 - **Successes are saved too.** Each service that was called gets its `LastSuccessAt` or `LastFailureAt`
   updated in `price_sources`. A skipped service gets nothing written, so the failure that opened its
   breaker stays visible.
@@ -406,7 +417,10 @@ Backup metalprice-api: 1000 requests = 10.4 days of full outage coverage.
 Warmed XAUUSD from stored tick: api-ninjas, observed 2026-10-06T14:00:00Z, 00:12:31 old.
 Warmed XAUUSD price history: 144 of 144 stored ticks since 2026-10-05T02:12:31Z.
 Tick XAUUSD mid=4412.30 from api-ninjas, 812ms stale.
+Price event XAUUSD 15m Up 0.452100% (magnitude >= 0.40%).
 ```
+
+The last line only appears on a poll where a move crossed its threshold and was saved.
 
 (The numbers above are made up to show the format.)
 
@@ -628,7 +642,9 @@ evidence that the app's count and the service's count disagree.
 ## 8. Memory: the circuit breaker, the latest price and the price moves
 
 Three objects keep state in memory for the life of the process. None of them is reloaded from a
-saved copy of itself; two of them rebuild from `price_ticks` at startup.
+saved copy of itself; two of them rebuild from `price_ticks` at startup. The last part of this
+section covers the price events made from those moves, which are the opposite: they keep nothing in
+memory.
 
 ### The circuit breaker (`SourceCircuit`)
 
@@ -682,8 +698,8 @@ Rules worth knowing:
 
 ### Price moves (`DeltaEngine`)
 
-Works out how far the price moved over six fixed windows: 1m, 5m, 15m, 1h, 4h and 1d. The rules for
-which moves are big enough to flag (item 6) will read from this.
+Works out how far the price moved over six fixed windows: 1m, 5m, 15m, 1h, 4h and 1d. The
+classifier in the next part reads from this to decide which moves are big enough to save.
 
 It keeps one `TickRingBuffer` per symbol. A ring buffer is a fixed-size list where, once full, each
 new entry overwrites the oldest. Each entry is a `Sample`: the time, the middle price, and a small
@@ -722,8 +738,14 @@ public sealed record WindowDelta(
     decimal VelocityPercentPerMinute, // DeltaPercent ÷ real minutes between Start and End
     double? Volatility,               // spread of step-to-step changes; null below 5 prices
     int SampleCount,
-    bool CrossSource);                // Start and End came from different services
+    bool CrossSource,                 // Start and End came from different services
+    string StartSourceCode,           // e.g. "api-ninjas"; saved on events
+    string EndSourceCode);
 ```
+
+Each `Sample` stores only a small per-process number for its service, to keep it at 40 bytes. The
+engine turns that number back into the service's code when it builds a `WindowDelta`, because an
+event row needs the real code.
 
 **With the shipped 15-minute poll, the 1m and 5m windows are almost always `null`.** That is
 correct, not a bug: two prices 15 minutes apart cannot tell you about a 1-minute move.
@@ -734,6 +756,65 @@ measured across a switch from one to another may be partly that gap.
 At startup the engine loads 36 hours of saved prices, not 24. The 1d window's start price can sit up
 to 12 hours before "one day ago", so stopping at 24 hours would leave the 1d window empty for a day
 after every restart.
+
+### From a move to a saved event (`SignificanceClassifier`, `PriceEventSql`)
+
+After each poll's price is saved, the poller asks the engine for the symbol's snapshot and passes it
+to `SignificanceClassifier.Classify`. That is a plain function with no clock and no database: it
+takes the six moves and the settings, and returns the events.
+
+For each window, it fires when:
+
+```
+|DeltaPercent| >= MinPercent                                       (both prices from one service)
+|DeltaPercent| >= MinPercent × CrossSourceMagnitudeMultiplier      (prices from two services)
+```
+
+A window with no answer (`null`) never fires. Neither does a window that has no entry in
+`Significance:Windows`; leaving one out is how to switch it off.
+
+Worked example with the shipped settings (5m threshold 0.25%, multiplier 2.0):
+
+| 5-minute move | Prices from | Needed | Event? |
+|---|---|---|---|
+| +0.30% | one service | 0.25% | Yes, `Up` |
+| +0.30% | two services | 0.50% | No |
+| −0.60% | two services | 0.50% | Yes, `Down` |
+
+Each event row also saves `ThresholdProfile` (the name of the threshold set, `default-v1`) and
+`TriggeredRule`, the rule as text, e.g. `magnitude >= 0.50% (0.25% x2 cross-source)`. So an old row
+still says why it fired after someone changes the numbers.
+
+**The waiting period is checked by the database, not held in memory.** After an event, the same
+symbol and window stay quiet for that window's `Cooldown`. `PriceEventSql.InsertAsync` does the check
+inside the insert:
+
+```sql
+-- src/Aurum.App.Infrastructure.Pricing/Deltas/PriceEventSql.cs — simplified
+INSERT INTO price_events (...)
+SELECT ...
+WHERE NOT EXISTS (                       -- skip if this window already fired within the waiting period
+    SELECT 1 FROM price_events
+     WHERE "Symbol" = @symbol AND "WindowCode" = @window
+       AND "WindowEndedAt" > @windowEndedAt - @cooldown)
+ON CONFLICT ("Symbol", "WindowCode", "WindowEndedAt") DO NOTHING   -- skip an exact repeat
+```
+
+Why not remember the last event in memory, like the other objects in this section? Because a
+restart would forget it. Say a 1.2% daily move fires at 10:00 and the app restarts at 10:40. The
+10:45 poll measures the same daily move, but with a newer end price, so the unique rule alone would
+not match and a second identical event would be saved. The database check survives the restart
+(D-18).
+
+The waiting period is measured on the prices' own times (`WindowEndedAt`), not the clock, so
+replaying old prices gives the same events.
+
+Things to know:
+
+- **Windows inside each other each fire.** A big 1-day move usually means a big 1-hour move too, so
+  one poll can save several events. Merging them is planned for Phase 2.
+- **Only one copy of the app may poll.** Two copies inserting at the same moment could both pass the
+  `NOT EXISTS` check. The unique rule still stops exact repeats.
 
 ---
 
@@ -752,7 +833,18 @@ these through from `.env`.
 | `PriceFeed:Resilience` | `MaxAttempts`, `RetryBackoffBase` | 3, 2 seconds | Tries per request, and the first wait between them. |
 | `PriceFeedCircuit` | `FailureThreshold`, `BreakDuration` | 3, 15 min | The circuit breaker. |
 | `DeltaEngine` | `MaxSamplesPerSymbol`, `ToleranceFraction`, `MinSamplesForVolatility` | 8,640, 0.5, 5 | Price-move memory size and rules. |
+| `Significance` | `ThresholdProfile`, `CrossSourceMagnitudeMultiplier`, `Windows:<code>:MinPercent`, `Windows:<code>:Cooldown` | `default-v1`, 2.0, see below | Which moves become events, and how long a window stays quiet after one. |
 | `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2. **Nothing reads it yet.** |
+
+The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
+
+| Window | 1m | 5m | 15m | 1h | 4h | 1d |
+|---|---|---|---|---|---|---|
+| `MinPercent` | 0.15 | **0.25** | 0.40 | 0.75 | 1.25 | 2.00 |
+
+**Only the 5m value comes from the requirements (BR-02).** The other five are placeholders until
+there are real numbers for gold. There are no defaults in code: the settings reader can add windows
+but not remove them, so a coded default could never be switched off.
 
 To look up one service's settings in code, use `PriceSourcesOptions.RequireByCode(code)`. It throws if
 the service is not configured. Never write a `switch` on the code with a default branch; a made-up
@@ -774,6 +866,9 @@ fix.
 | `PollInterval` is not positive, or `StaleAfter` is not longer than it. | `Program.cs` / `PricePollingOptions` |
 | The circuit break is not longer than `PollInterval`. | `PriceFeedCircuitOptionsValidator` |
 | `MaxSamplesPerSymbol` can't hold 36 hours of prices at `PollInterval`. | `DeltaEngineOptions.BufferCoversLongestWindow` |
+| A `Significance:Windows` key isn't one of the six window codes (a typo would switch that window off). | `SignificanceOptions.WindowKeysAreKnown` |
+| A `MinPercent` or `Cooldown` is zero or less, or `CrossSourceMagnitudeMultiplier` is below 1. | `SignificanceOptions.ValuesAreInRange` |
+| `Significance:ThresholdProfile` is empty, which includes the whole section being missing. | `[Required]` on `SignificanceOptions` |
 
 The month check, worked through with the shipped values: 31 days ÷ 15 minutes = 2,976 polls. Each
 poll can take up to 3 tries, so up to 8,928 requests. API Ninjas allows 10,000, so it passes. GoldAPI's
@@ -797,7 +892,7 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 | `price_ticks` | One price from one service. Key is `(ObservedAt, Id)`. Kept 30 days. | `PricePollingService` | Cache and delta warm-up at startup |
 | `price_sources` | One price service: name, last success, last failure and why. | Seeded in migrations; `PricePollingService` updates the times | Nothing in code — for people looking at the database |
 | `api_quota_windows` | One service's request count for one month. | `PostgresQuotaGovernor` | `PostgresQuotaGovernor` |
-| `price_events` | A price move big enough to flag. Not split by time, so never deleted after 30 days. | Nothing yet (item 6) | Nothing yet |
+| `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check. Nothing else yet (item 8) |
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
 | `macro_series`, `macro_observations` | Economic data series and their values. | Nothing yet (Phase 2) | Nothing yet |
 
@@ -807,12 +902,14 @@ Things that will catch you out:
   that leaves out the time column it splits on.
 - **`price_sources.IsEnabled` and `Priority` do nothing.** Settings decide which services run and in
   what order. Changing the table changes nothing.
+- **`price_events` is an ordinary table on purpose (D-18).** Do not turn it into a TimescaleDB table
+  or give it the 30-day deletion. Events are the app's history and must outlive the prices.
 - **The first migration does more than create tables.** It also turns `price_ticks` into a
   TimescaleDB table, sets the 30-day deletion, and adds the GoldAPI row. Read it before adding a
   migration that touches `price_ticks`.
 - **Every timestamp comes from the injected clock.** `AurumDbContext` takes a `TimeProvider` and uses
   it to fill `CreatedAt` and `UpdatedAt`. Raw SQL skips that, so raw SQL must pass those two values
-  itself, as the quota governor does. The SQL `now()` function is never used.
+  itself, as the quota governor and `PriceEventSql` do. The SQL `now()` function is never used.
 
 ---
 
@@ -897,8 +994,8 @@ Aurum.Api.Tests/
 | Needs Docker (real Postgres) | No container, runs in milliseconds |
 |---|---|
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
-| `PricePollingServiceTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `TickRingBufferTests` |
-| `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, the `*OptionsTests` classes |
+| `PricePollingServiceTests`, `PriceEventSqlTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `TickRingBufferTests` |
+| `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
 
 Run one class, or a set of fast tests:
 
@@ -942,7 +1039,9 @@ is planned after the API endpoints exist.
 | See why prices stopped | `SELECT * FROM price_sources;` for the last failure per service, then `SELECT * FROM api_quota_windows ORDER BY "UpdatedAt" DESC;` for allowance. |
 | See how many requests are left this month | `api_quota_windows`: `RequestLimit - RequestsUsed`, **and zero if `ProviderRejectedAt` is set**. |
 | Change the circuit breaker | `PriceFeedCircuit:FailureThreshold` / `BreakDuration`, logic in `SourceCircuit.cs`. |
-| Change the price-move windows | `DeltaWindow.cs`. They are fixed on purpose; the item 6 thresholds are tuned to them. |
+| Change the price-move windows | `DeltaWindow.cs`. They are fixed on purpose; the event thresholds are tuned to them. |
+| Change what counts as a big move | `Significance:Windows` in `appsettings.json`. Rename `ThresholdProfile` when the numbers change, so old and new events can be told apart. |
+| See recent events | `SELECT "WindowCode", "Direction", "DeltaPercent", "TriggeredRule", "WindowEndedAt" FROM price_events ORDER BY "WindowEndedAt" DESC;` |
 | Add a new table | A new entity in `Entities/`, its setup in `AurumDbContext.OnModelCreating`, then `dotnet ef migrations add <Name> --project src/Aurum.App.Infrastructure.Data`. |
 | Register a new class | `src/Aurum.Api/Program.cs`. Nowhere else (D-5). |
 | Add the first endpoint | `CLAUDE.md` → "Feature Folder Structure" and "Controller Rules". |
@@ -985,5 +1084,8 @@ as a map of this repository. In particular:
 | **Warm-up** | Loading saved prices into memory at startup. |
 | **Window** | One of the six time spans a price move is measured over. |
 | **Delta** | A price move over one window. |
+| **Price event** | A delta big enough to save: a row in `price_events`. |
+| **Threshold** | The smallest move, in percent, that counts as an event for one window (`MinPercent`). |
+| **Waiting period (cooldown)** | How long one symbol and window stay quiet after an event. Checked in the database. |
 | **Hypertable** | A TimescaleDB table that is stored split by time. |
 | **Scope** | A short-lived group of objects, created for one web request or one poll and then thrown away. |

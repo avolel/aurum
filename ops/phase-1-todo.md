@@ -27,7 +27,7 @@ A few terms used below:
 - **Circuit breaker**: the part that stops calling a service after several failures in a row, and
   tries again after a rest.
 
-> **Decision numbers.** D-9 to D-16 are taken and written up:
+> **Decision numbers.** D-9 to D-18 are taken and written up:
 >
 > | Number | Decision | Item |
 > |---|---|---|
@@ -39,6 +39,8 @@ A few terms used below:
 > | D-14 | my own circuit breaker | 3 |
 > | D-15 | the startup check counts tries | 4 (moved out of 3) |
 > | D-16 | the latest price kept in memory, its age worked out when read | 4 |
+> | D-17 | a price move from two real prices, or "no answer" | 5 |
+> | D-18 | big moves saved as events; the waiting period lives in the database | 6 |
 >
 > Numbers are handed out when a decision is actually made, not held back for planned work. So the
 > Phase 1 plan's draft list is now off by **five**. The numbers used below are the real ones.
@@ -417,23 +419,40 @@ no data". Mixing the two up is the purest form of the risk in §14, "delayed dat
 
 ---
 
-## 6. Deciding which moves matter, and saving them as `PriceEvent` · 1 to 2 days · BR-02 · needed by 8
+## 6. Deciding which moves matter, and saving them as `PriceEvent` · DONE · BR-02 · needed by 8
 
-- [ ] `PriceEvent`, built on the shared base with created and updated times (`AuditableEntity`), with
+*Done on 2026-10-07, in five steps ending at commit `17d3de1`. One change from the plan below: the
+in-memory waiting period (`LastEmittedAt`) was dropped. The waiting period is checked in the database
+instead, inside the insert, because the in-memory one is lost on restart and the unique rule alone
+doesn't catch the repeat that follows. D-18 has the worked example.*
+
+- [x] `PriceEvent`, built on the shared base with created and updated times (`AuditableEntity`), with
       these columns: `Symbol`, `DetectedAt`, `WindowCode`, `WindowStartedAt` and `WindowEndedAt`,
       `Direction`, `StartMid`, `EndMid`, `DeltaAbsolute`, `DeltaPercent`, `VelocityPercentPerMinute`,
       `Volatility` (can be empty), `SampleCount`, `SourceCode`, `BaselineSourceCode`, `IsCrossSource`,
       `ThresholdProfile`, `TriggeredRule`. Prices stored to 4 decimal places, ratios to 6. **No
       `ExplanationId`**: Phase 2 owns that side.
-- [ ] `ThresholdProfile` is there because business rule BR-02 makes the thresholds a setting. So what
+      - `Direction` is `Up` or `Down`, from the new constants class `PriceEventDirection`.
+      - `SourceCode` and `BaselineSourceCode` must match a `price_sources` row, like `price_ticks`.
+        To fill them, `DeltaEngine` now turns each price's per-process service number back into its
+        code, and `WindowDelta` carries `StartSourceCode` and `EndSourceCode`.
+- [x] `ThresholdProfile` is there because business rule BR-02 makes the thresholds a setting. So what
       an event means depends on settings that may have changed since. Adding the column now is free.
       Adding it later means going back over existing data.
-- [ ] `SignificanceOptions.Windows` is a set of thresholds, one per window. A 0.25% move in 5 minutes
+      - `TriggeredRule` also saves the rule as text, e.g. `magnitude >= 0.50% (0.25% x2 cross-source)`,
+        so a row still explains itself if someone changes the numbers without renaming the profile.
+- [x] `SignificanceOptions.Windows` is a set of thresholds, one per window. A 0.25% move in 5 minutes
       and a 0.25% move in a day aren't the same kind of event. BR-02's 0.25% in 5 minutes is the
       starting default.
-- [ ] Windows flagged as crossing services need `CrossSourceMagnitudeMultiplier` times more movement
+      - **The other five thresholds are guesses** (1m 0.15%, 15m 0.40%, 1h 0.75%, 4h 1.25%, 1d 2.00%)
+        and need real numbers.
+      - Defaults are in `appsettings.json` only. The settings reader can add windows but not remove
+        them, so a default in code could never be switched off. A window left out is never checked.
+      - The app refuses to start on a window key that isn't a window code, a threshold or waiting
+        period of zero or less, a multiplier below 1, or an empty `ThresholdProfile`.
+- [x] Windows flagged as crossing services need `CrossSourceMagnitudeMultiplier` times more movement
       (default 2.0) to count.
-- [ ] **`price_events` is an ordinary table, not a TimescaleDB one**, and the database change says why
+- [x] **`price_events` is an ordinary table, not a TimescaleDB one**, and the database change says why
       in a comment.
       - `price_ticks` had to become a TimescaleDB table in the very first change, because converting a
         table that's already full means moving all its data.
@@ -441,21 +460,39 @@ no data". Mixing the two up is the purest form of the risk in §14, "delayed dat
       - Most importantly, the prices table **deletes everything after 30 days**, and events must be kept
         longer than that. Making this a TimescaleDB table too invites someone to add the same deletion
         rule "for consistency", quietly wiping the product's history.
-- [ ] Stop the same event being saved twice, at two levels:
-      - In memory: remember when each (symbol, window) last produced an event (`LastEmittedAt`), with a
-        waiting period you can set.
-      - In the database: **a "must be unique" rule on `(Symbol, WindowCode, WindowEndedAt)`**, as the
-        safety net after a restart. Save with "insert, or do nothing if it's already there"
-        (`ON CONFLICT DO NOTHING`), instead of letting the save throw an error.
-- [ ] Windows inside each other (a 1-day move contains the 1-hour move, which contains the 5-minute
+- [x] Stop the same event being saved twice. **Changed from the plan: both checks are in the database,
+      in one insert statement (`PriceEventSql.InsertAsync`).**
+      - ~~In memory: remember when each (symbol, window) last produced an event (`LastEmittedAt`), with
+        a waiting period you can set.~~ Dropped. After a restart the next poll measures the same move
+        with a newer end price, so the unique rule below doesn't match and the event is saved again.
+        Instead the insert skips the row when the same symbol and window already has an event that
+        ended inside the waiting period (`WHERE NOT EXISTS`). The waiting period is set per window
+        (`Cooldown`) and measured in price time (`WindowEndedAt`), not on the wall clock.
+      - In the database: **a "must be unique" rule on `(Symbol, WindowCode, WindowEndedAt)`**, kept
+        as the safety net for an exact repeat. Save with "insert, or do nothing if it's already
+        there" (`ON CONFLICT DO NOTHING`), instead of letting the save throw an error.
+      - Events are saved after the poll's price is saved, so an event never points at a price the
+        database failed to keep.
+      - Not safe with two copies of the app polling at once: both could pass the `NOT EXISTS` check.
+        The unique rule still stops exact repeats.
+- [x] Windows inside each other (a 1-day move contains the 1-hour move, which contains the 5-minute
       one) each produce their own event in this batch. Merging them into one event belongs in Phase 2,
       with the explanation feature, which is what actually suffers from three explanations for one move.
-      Note that in the decision, not only here.
+      Noted in D-18.
 - [x] ~~Database change adds the two new `price_sources` rows~~: done early, under item 2. It couldn't
       wait for this item, because the "must match a row" rule fails on the first switch to a backup,
       and item 3 delivers that.
-- [ ] Tests: `Restart_does_not_re_emit_the_same_event`, `Cross_source_delta_requires_higher_magnitude`.
-- [ ] **D-18 written up**: why `price_events` isn't a TimescaleDB table.
+- [x] Tests: `Restart_does_not_re_emit_the_same_event`, `Cross_source_delta_requires_higher_magnitude`.
+      - Also `Restart_does_not_re_emit_within_the_cooldown`, the case the in-memory design misses, and
+        `Event_after_the_cooldown_is_saved`, both against a real database in `PriceEventSqlTests`.
+      - Without a container: `SignificanceClassifierTests`, `SignificanceOptionsTests`, and
+        `Shipped_significance_thresholds_are_valid_and_match_BR02`.
+      - `PricePollingServiceTests.A_poll_whose_window_crosses_its_threshold_writes_one_event`.
+- [ ] Check the tests notice when a rule is broken on purpose: drop the cross-service multiplier, drop
+      the `NOT EXISTS`, and move the event insert above the price save. Each should turn a named test
+      red. Not recorded as done yet.
+- [x] **D-18 written up**: why `price_events` isn't a TimescaleDB table, why the waiting period lives
+      in the database, and that windows inside each other each produce an event.
 
 ---
 

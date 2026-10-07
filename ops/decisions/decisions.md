@@ -1343,3 +1343,147 @@ the app never actually observed, and it hides a service that keeps sending old p
 Turned down: **making the six windows a setting.** They are a requirement that item 6's thresholds
 are written against. A setting would let a deployment measure a different "1 hour" from the one those
 thresholds were chosen for.
+
+## D-18 — Big price moves are saved as events, and the waiting period between them lives in the database
+
+**DECIDED:**
+
+- After every poll, `SignificanceClassifier` looks at each of the six windows from `DeltaEngine`
+  (D-17) and decides whether the move was big enough to report (BR-02). Each one that was is saved as
+  a row in a new table, `price_events`.
+- How big is "big enough" is a setting, one threshold per window, under `Significance:Windows`.
+- After an event, the same symbol and window stay quiet for a waiting period, also set per window
+  (`Cooldown`). **The waiting period is checked in the database, inside the insert itself**, not
+  held in memory.
+- `price_events` is an ordinary Postgres table, not a TimescaleDB one.
+- Events are saved only after the poll's price has been saved.
+
+Built on 2026-10-06 and 2026-10-07, in five steps, ending at commit `17d3de1`.
+
+**Why an ordinary table, not a TimescaleDB one.** `price_ticks` is a TimescaleDB table, meaning
+Postgres stores it in one chunk per stretch of time behind the scenes. It had to be one from the very
+first migration, because converting a table that's already full means moving all its data.
+`price_events` has none of that pressure: it gets a few dozen rows a day. The bigger reason is that
+`price_ticks` **deletes everything older than 30 days**, and events are the product's history, so
+they must last longer than that. A second TimescaleDB table invites someone to add the same 30-day
+deletion "for consistency", and that would quietly wipe the history. The migration,
+`AddPriceEvents`, says this in a comment at the top so the reason is next to the table.
+
+**Why the waiting period lives in the database: the restart problem.** The original plan kept the
+time of each window's last event in memory (`LastEmittedAt`), with a "must be unique" rule on
+`(Symbol, WindowCode, WindowEndedAt)` as the safety net after a restart. That pair does not stop a
+repeat after a restart:
+
+1. A 1.2% daily move produces a `1d` event at 10:00. The in-memory waiting period holds back the
+   same move at 10:15, 10:30, and so on.
+2. The app restarts at 10:40, and the in-memory time is gone.
+3. The 10:45 poll measures the 1-day window again. Its end is the 10:45 price, so `WindowEndedAt` is
+   new and the unique rule doesn't match. A second "gold up 1.2% today" event is saved.
+
+The unique rule only catches a repeat when the end price is exactly the same. In this poller that
+happens in one case: a service keeps answering with the same price time, so `DeltaEngine` drops each
+new price and the window's end stays put. The planned test, `Restart_does_not_re_emit_the_same_event`,
+would have passed anyway, because it saves the *same* end price twice. It proved the safety net
+catches a case the poller almost never produces.
+
+So `PriceEventSql.InsertAsync` does both checks in one statement:
+
+```sql
+INSERT INTO price_events (...)
+SELECT ...
+WHERE NOT EXISTS (                                        -- the waiting period, which survives a restart
+    SELECT 1 FROM price_events
+     WHERE "Symbol" = @symbol AND "WindowCode" = @window
+       AND "WindowEndedAt" > @windowEndedAt - @cooldown)
+ON CONFLICT ("Symbol", "WindowCode", "WindowEndedAt") DO NOTHING   -- the safety net, kept
+```
+
+The `NOT EXISTS` part reads a range of the same unique index, so it costs one index lookup per window
+that crossed its threshold: at most six per poll. Nothing about the waiting period is held in memory,
+so there is nothing for a restart to lose. `Restart_does_not_re_emit_within_the_cooldown` is the test
+for the case above: one event at 10:00, then a later end at 10:45 with a one-day waiting period, and
+only one row. That is the test the in-memory design fails.
+
+**The waiting period is measured in price time, not on the wall clock.** It compares
+`WindowEndedAt`, the time the service gave for the end price, with the last event's. Replaying a
+past stretch of prices therefore gives the same events as it did live. A move exactly one waiting
+period after the last event counts as outside it (`Event_after_the_cooldown_is_saved`).
+
+**The insert is raw SQL, so it passes its own timestamps.** Raw SQL skips `ApplyAuditFields`, so
+`CreatedAt` and `UpdatedAt` come from the injected clock, the same as the quota governor (D-7). One
+small trap: when `Volatility` is null, Postgres can't tell what type the empty value is meant to be
+and treats it as text, which a number column refuses. The SQL casts it to a number.
+
+**Saved after the price, not before.** `PricePollingService` saves the tick first, then classifies and
+saves the events. An event must never point at prices the database failed to keep. If an event insert
+fails, the poll's existing "Price poll failed" error handling catches it, and the next poll measures
+again. The latest-price cache and the move engine are still updated before either save (D-16).
+
+**One threshold per window, and only one of them comes from the requirements.** A 0.25% move in 5
+minutes and a 0.25% move in a day are not the same kind of news, so each window has its own
+`MinPercent`. BR-02 fixes only one number: 0.25% over 5 minutes.
+`Shipped_significance_thresholds_are_valid_and_match_BR02` pins that. **The other five shipped
+thresholds (1m 0.15%, 15m 0.40%, 1h 0.75%, 4h 1.25%, 1d 2.00%) are my guesses at gold's normal
+range**, waiting for real numbers. Each window's waiting period is set to its own length.
+
+**Defaults live in `appsettings.json` only, not in code.** The settings reader can add entries to a
+list of windows but can't remove them. A window given a default in code could therefore never be
+switched off from configuration. Leaving a window out of `Significance:Windows` is how to switch it
+off, and that is allowed on purpose.
+
+**The app refuses to start on a bad threshold setting.** It checks for: a `Windows` key that isn't one
+of the six window codes (a typo would otherwise switch that window off without a word); a
+`MinPercent` or `Cooldown` of zero or less; a `CrossSourceMagnitudeMultiplier` below 1; and an empty
+`ThresholdProfile`. The checks are methods on `SignificanceOptions` (`WindowKeysAreKnown`,
+`ValuesAreInRange`), so the tests call the same rule the app runs.
+
+**A move measured across two services must be bigger.** D-17 flags a window whose start and end
+prices came from different services, because part of that move may be the gap between two services.
+Such a window needs `CrossSourceMagnitudeMultiplier` times the usual threshold (2.0 shipped). So a
+0.30% move over 5 minutes is an event when both prices came from one service, and not when they came
+from two (`Cross_source_delta_requires_higher_magnitude`). This lowers the false alarms; it doesn't
+correct the gap. That still needs the per-service correction D-17 describes.
+
+**Each row explains itself.** `ThresholdProfile` saves the name of the threshold set that produced
+the event (`default-v1` shipped). `TriggeredRule` saves the actual rule as text, such as
+`magnitude >= 0.50% (0.25% x2 cross-source)`. Thresholds are a setting, so what an event means can
+change. With the rule written on the row, an old event still says why it fired, even if someone
+changes the numbers without renaming the profile. Adding these columns now cost nothing; adding them
+later would have meant going back over saved rows.
+
+**To save an event, the app needs each price's service code.** D-17 kept only a small per-process
+number for each price's service (`SourceOrdinal`), to keep each stored price at 40 bytes. An event
+row needs the real codes, because `SourceCode` and `BaselineSourceCode` are foreign keys to
+`price_sources`. `DeltaEngine` now keeps a reverse lookup from that number to the code, filled in at
+the one place a number is handed out, and puts both codes on `WindowDelta` as `StartSourceCode` and
+`EndSourceCode`. The stored price is unchanged.
+
+**Windows inside each other each produce their own event.** A 1-day move contains the 1-hour move,
+which contains the 5-minute one. If all three cross their thresholds, this item saves three events.
+Merging them into one belongs in Phase 2, with the explanation feature, because that is what actually
+suffers from writing three explanations for one move
+(`Each_window_that_crosses_its_threshold_is_its_own_event`).
+
+**Known limit: one poller only.** The `NOT EXISTS` check is not safe between two copies of the app
+inserting at the same moment; both could see no recent event and both save. The unique rule still
+stops exact repeats. This is the same one-copy assumption `PricePollingService` and the startup
+migration already make.
+
+Turned down: **the in-memory waiting period (`LastEmittedAt`).** It forgets everything on restart, and
+the unique rule behind it only catches an exact repeat. See the restart problem above.
+
+Turned down: **measuring the waiting period on the wall clock.** It would make replayed prices produce
+different events from the live run, and it would tie the result to when the poll happened to run
+rather than to the prices.
+
+Turned down: **a TimescaleDB table for `price_events`.** Too few rows to need it, and it invites the
+30-day deletion that would destroy the history.
+
+Turned down: **default thresholds in code.** A window with a default in code can't be switched off
+from configuration.
+
+Turned down: **merging nested windows into one event now.** That belongs with the Phase 2
+explanations, which are what the duplicates actually affect.
+
+Not done in this item: a rule based on volatility (D-17 mentions one; the todo did not ask for it),
+and a per-service price correction (needs data I don't have).

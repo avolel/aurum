@@ -450,6 +450,40 @@ Related invariants:
   below `MinSamplesForVolatility`.
 - `IDeltaEngine`, `DeltaSnapshot`, `WindowDelta`, `DeltaWindow` and `Sample` are public for the same
   item 8 reason as `ILatestQuoteCache`.
+- `WindowDelta.StartSourceCode` / `EndSourceCode` come from a reverse `ordinal → code` array filled
+  where `Ordinal()` hands one out. `Sample` stays 40 bytes; do not put the code on it.
+
+### Price-move events (D-18)
+
+`SignificanceClassifier` (`Pricing/Deltas/`) turns a `DeltaSnapshot` into `PriceEvent`s;
+`PriceEventSql.InsertAsync` saves each one. `PricePollingService.SaveEventsAsync` runs both **after**
+the tick's `SaveChangesAsync`, so an event never points at a price the database failed to keep. A
+failed insert falls into the poll's existing catch.
+
+- **The waiting period is in the insert, not in memory.** `WHERE NOT EXISTS` an event for the same
+  `(Symbol, WindowCode)` with `WindowEndedAt > @windowEndedAt - @cooldown`, plus `ON CONFLICT DO
+  NOTHING` on the unique `(Symbol, WindowCode, WindowEndedAt)`. Do not reintroduce an in-memory
+  `LastEmittedAt`: after a restart the next poll's 1d window has a new end time, the unique rule
+  misses, and the event repeats. `Restart_does_not_re_emit_within_the_cooldown` catches it.
+- **Measured on `WindowEndedAt` (price time), never the clock**, so a replay gives the same events.
+  The boundary is strict: exactly one cooldown later is saved.
+- Raw SQL: pass `CreatedAt`/`UpdatedAt` from the clock, and keep `CAST(... AS numeric)` on
+  `Volatility` — a null parameter is untyped and Postgres reads it as text in a `SELECT` list.
+- **The classifier is static and pure** — no clock, no database, no interface. Required magnitude is
+  `MinPercent`, times `CrossSourceMagnitudeMultiplier` when `CrossSource`; fires on `>=`.
+  `TriggeredRule` is formatted with the invariant culture.
+- **`SignificanceOptions` has no defaults in code.** The binder adds dictionary keys but cannot remove
+  them, so a coded default could never be switched off. A window missing from `Windows` is never
+  classified, deliberately. `Windows` is get-only to keep its `OrdinalIgnoreCase` comparer. Boot rules
+  are `WindowKeysAreKnown` and `ValuesAreInRange`, registered in `Program.cs`.
+- Only the 5m threshold (0.25%) is from BR-02; the other five are placeholders.
+- `price_events` is an ordinary table, not a hypertable, so it never gets `price_ticks`' 30-day
+  retention. Nested windows each produce an event; merging is Phase 2.
+- **Single poller only.** `NOT EXISTS` is not atomic across instances; the unique rule still stops
+  exact duplicates.
+- `PricePollingServiceTests` and `PriceEventSqlTests` delete every `price_events` row in
+  `InitializeAsync`; the waiting-period check reads across sources, so a leftover row suppresses the
+  test's insert.
 
 ### Database
 

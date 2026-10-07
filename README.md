@@ -3,7 +3,7 @@
 Aurum tracks the price of gold. It asks outside price services for the current price on a regular
 schedule, stores every answer, and will later show those prices in an app.
 
-**Where things stand: the groundwork is done, and Phase 1 items 0 to 3 are finished.**
+**Where things stand: the groundwork is done, and Phase 1 items 0 to 6 are finished.**
 
 What has been built and checked by hand:
 
@@ -41,8 +41,8 @@ retrying uses up its allowance up to three times faster.
 **Why API Ninjas goes first:** it is the only free plan big enough to let the app check the price every 15
 minutes. Every check can take up to three tries, and each try counts against the allowance, so a
 31-day month can need about 8,928 requests. GoldAPI's 100 requests would allow one check roughly
-every 22 hours. That is too slow for the "how much did the price move in the last 1 or 5 minutes"
-feature planned for later, which would never have enough readings to work.
+every 22 hours. That is too slow for the "how much did the price move" feature (item 5), which would
+almost never have two readings close enough together to give an answer.
 
 The downside: API Ninjas gives one price, not separate buy and sell prices. The app only sees buy and sell
 prices when GoldAPI is standing in. Those prices can't be compared across services anyway (see the
@@ -111,12 +111,38 @@ leave it empty. How old the price is gets worked out when it's read, from the ti
 the price was taken. A price counts as out of date after twice the check interval, which the
 `PricePolling:StaleAfter` setting can change. Nothing serves it over the web yet; that's item 8.
 
-**Not built yet:** the "how much did it move" feature, live updates to the app, and the web
-endpoints. Those are items 5 onward in `ops/phase-1-todo.md`.
-
 **The `IsEnabled` column in the `price_sources` table does nothing.** Nothing reads it and nothing
 writes it. The settings file decides which services are on. Item 8 will either hook the column up
 or delete it. Don't change it in the database and expect anything to happen.
+
+## How much the price moved, and which moves are saved (items 5 and 6, done)
+
+**The app works out how far the price moved over six windows**: 1 minute, 5 minutes, 15 minutes,
+1 hour, 4 hours and 1 day (D-17). It keeps a day and a half of prices in memory and reloads them from
+the database at startup. Each move is worked out from two real prices. If the app doesn't have two
+prices spaced right for a window, the answer for that window is "no answer", never 0%. With the
+15-minute check interval, the 1-minute and 5-minute windows almost always say "no answer", and that
+is correct.
+
+**A move big enough to matter is saved as a price event** (D-18), a row in the `price_events` table.
+Each window has its own threshold, the smallest move in percent that counts. For example, a 0.25%
+move counts over 5 minutes, but over a day the move has to reach 2%. A move measured across two
+different services must be twice as big, because part of it may only be the gap between their
+prices. Each row records the threshold set it was judged by and the rule that fired, so an old event
+still explains itself after the settings change.
+
+- **Only the 5-minute threshold comes from the requirements** (0.25%, from BR-02). The other five
+  are my guesses and need real numbers. They are in the `Significance` section of `appsettings.json`.
+- **After an event, that window stays quiet for a while** (one window length by default), so a
+  big daily move isn't saved again on every check. The database checks this when it saves the
+  event, so a restart can't cause a repeat.
+- **`price_events` keeps its rows for good.** Unlike `price_ticks`, nothing deletes them after 30
+  days, because the events are the history the later phases build on.
+- A big daily move usually means a big hourly move too, so one check can save several events.
+  Merging those into one is left for Phase 2.
+
+**Not built yet:** live updates to the app and the web endpoints. Nothing can read the prices or the
+events over the web yet. Those are items 7 onward in `ops/phase-1-todo.md`.
 
 ## Decisions that were made without testing
 
@@ -126,9 +152,9 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-16** so far. `ops/phase-1-todo.md` lists the remaining work in an
-order where each item can be checked when it is finished. Numbers D-17 and up are already assigned
-there to the items that will need them.
+The decision log has **D-1 to D-18** so far. `ops/phase-1-todo.md` lists the remaining work in an
+order where each item can be checked when it is finished. A decision number is only given out when
+the decision is actually made, so the next one will be D-19.
 
 ## Where things are
 
@@ -142,6 +168,8 @@ src/Aurum.App.Infrastructure.Data/ the database: tables, changes to them, saving
 src/Aurum.App.Infrastructure.Pricing/
   Sources/                         the three price services, the fallback order, the circuit breaker
   Quota/                           the request counter
+  Cache/                           the latest price, kept in memory
+  Deltas/                          how much the price moved, and which moves become events
   Jobs/                            the timer that checks the price
 src/Aurum.App.Application/         the rules for handling requests, and logging
 src/Aurum.Api/                     the web API; Program.cs sets everything up
@@ -191,7 +219,7 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 83 tests. Most of them start a real copy of the database in Docker rather than a fake one,
+There are 180 tests (counted with `dotnet test --list-tests` on 2026-10-07). Most of them start a real copy of the database in Docker rather than a fake one,
 because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
@@ -210,6 +238,10 @@ Tests worth knowing about:
   real setup code from `Program.cs` rather than rebuilding it, because the thing being tested is the
   order of two lines in that code. The first time it ran it found that the app never retried when a
   service answered with an error code. The retry setting looked right and did nothing.
+- **`PriceEventSqlTests`** checks that a restart can't save the same event twice. Each save uses a
+  fresh database connection, the way a restarted app would, and
+  `Restart_does_not_re_emit_within_the_cooldown` is the case an in-memory "last event" time would get
+  wrong (D-18).
 
 **Some tests guard a decision, not a bug.** For example, the app never gives back a request that failed,
 because the service still counts it. Nothing in the code says so; the rule is simply that there is
