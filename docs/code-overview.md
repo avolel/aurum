@@ -249,76 +249,124 @@ database, do the same.
 This is the most important flow in the app. `PricePollingService` runs it once at startup and then
 every `PricePolling:PollInterval` (15 minutes by default).
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Poller as PricePollingService
-    participant Feed as FailoverPriceFeed
-    participant Circuit as SourceCircuit
-    participant Source as ApiNinjasSource
-    participant Pipe as Retry + timeouts
-    participant Quota as QuotaHandler
-    participant Gov as PostgresQuotaGovernor
-    participant Web as api-ninjas.com
-    participant Cache as LatestQuoteCache
-    participant Deltas as DeltaEngine
-    participant DB as Postgres
+It is shown at two zoom levels. The first diagram is the whole poll, with each service treated as a
+black box. The second opens up the box marked ★ and shows what happens inside one service call.
+Read each one from top to bottom and follow the labelled arrows.
 
-    Poller->>Feed: GetLatestQuoteAsync("XAUUSD")
-    Feed->>Circuit: IsOpen()?
-    Circuit-->>Feed: no
-    Feed->>Source: GetLatestQuoteAsync("XAUUSD")
-    Source->>Pipe: GET v1/goldprice
-    loop up to 3 attempts
-        Pipe->>Quota: send
-        Quota->>Gov: AcquireAsync("api-ninjas")
-        Gov->>DB: INSERT … ON CONFLICT … RETURNING
-        Gov-->>Quota: granted, 8,500 left
-        Quota->>Web: HTTP request
-        Web-->>Quota: 200 OK + JSON
-    end
-    Quota-->>Source: response
-    Source-->>Feed: PriceQuote (checked)
-    Feed->>Circuit: RecordSuccess()
-    Feed-->>Poller: PriceFeedResult
-    Poller->>Cache: Record(result)
-    Poller->>Deltas: Record(quote)
-    Poller->>DB: INSERT price_ticks, UPDATE price_sources
+### Zoom 1: the whole poll
+
+```mermaid
+flowchart TD
+    A(["⏰ Timer fires"]) --> B["Get the list of services<br/>enabled ones, sorted by Priority<br/><i>api-ninjas → goldapi.io → metalprice-api</i>"]
+    B --> C{"Any service left<br/>on the list?"}
+
+    C -- "yes, take the next one" --> D{"Is its circuit<br/>breaker open?"}
+    D -- "yes: skip it,<br/>don't call it" --> C
+    D -- "no" --> E["★ Ask it for a price<br/><i>see Zoom 2</i>"]
+
+    E --> F{"What came back?"}
+    F -- "a price ✅" --> G["Save to memory<br/>latest-price cache + price-move engine"]
+    G --> H["Save to database<br/>new row in price_ticks,<br/>times in price_sources"]
+    H --> Z(["Wait for the next timer"])
+
+    F -- "out of allowance" --> C
+    F -- "any other failure ❌" --> I["Add one failure<br/>to its breaker"]
+    I --> C
+
+    C -- "no: every service failed" --> J["Save each failure reason<br/>to price_sources"]
+    J --> K{"Were ALL of them<br/>out of allowance?"}
+    K -- "yes" --> L(["Sleep until the first<br/>allowance resets"])
+    K -- "no" --> Z
 ```
 
-The same steps in words:
+Which class owns each box:
 
-1. **Warm-up (first run only).** Before the first poll, the poller loads the newest saved price into
-   the cache and the last 36 hours of saved prices into the price-move engine. If either load fails,
-   it logs the error and carries on; the memory fills from the first poll instead.
-2. **Build the list.** `FailoverPriceFeed` reads the settings, keeps the services marked
-   `Enabled: true`, and sorts them by `Priority` (lowest first). Today that gives API Ninjas,
-   GoldAPI, MetalpriceAPI.
-3. **For each service in the list:**
-   1. If its circuit breaker is open (it failed several times in a row recently), skip it without
-      calling it.
-   2. Otherwise call it. Below the service class, every web request passes through timeouts,
-      retries, the request counter and the login step (section 6).
-   3. If it returns a price, stop and return it.
-   4. If it has used up its allowance, note that and move to the next service. This does **not**
-      count against its circuit breaker; the service is healthy, just out of budget.
-   5. If it fails in any other way, record a failure on its circuit breaker and move on.
-4. **If every service failed**, the feed throws `AllSourcesFailedException`, which carries a record
-   of what happened with each one.
-5. **On success**, the poller:
-   1. Puts the price in the in-memory cache.
-   2. Adds it to the price-move engine.
-   3. Adds a row to `price_ticks`.
-   4. Updates `price_sources` with each service's latest success or failure time.
-   5. Saves to the database.
+| Box | Class |
+|---|---|
+| Timer, the two "Save" boxes, the "every service failed" branch | `PricePollingService` |
+| "Get the list", the loop over services, the breaker checks | `FailoverPriceFeed` |
+| "Is its circuit breaker open?", "Add one failure" | `SourceCircuit` |
+| ★ "Ask it for a price" | `ApiNinjasSource`, `GoldApiIoSource` or `MetalPriceApiSource`, plus the layers in Zoom 2 |
 
-   Memory is updated **before** the database, so a failed save cannot hide a price the app just
-   fetched (D-16).
-6. **On failure**, the poller still saves the failure times and reasons to `price_sources`, so
-   someone looking at the database can see why prices stopped. Then:
-   - If **every** service is out of allowance, it sleeps until the **earliest** one resets.
-   - For any other failure, it tries again at the next normal tick. Faults and open breakers clear
-     in minutes, so there is no point sleeping longer.
+**"Out of allowance" never adds a failure to the breaker.** The service is healthy, it has just
+used up its requests for the month. Opening the breaker would keep it off the list even after its
+allowance comes back.
+
+### Zoom 2: inside ★, one service call
+
+```mermaid
+flowchart TD
+    A["Service class sends its request<br/><i>e.g. GET v1/goldprice</i>"] --> B["Start a try<br/><i>try 1, 2 or 3</i>"]
+    B --> C{"Request counter:<br/>any allowance left<br/>this month?"}
+    C -- "no" --> OUT(["Return: out of allowance"])
+    C -- "yes: count 1 request" --> D["Send it over the network<br/><i>this try gets 10 s</i>"]
+
+    D --> E{"What did the<br/>service answer?"}
+    E -- "429 or 402<br/>'you are over your limit'" --> F["Mark this month as<br/>refused by the service"]
+    F --> OUT
+    E -- "timeout, network error,<br/>408 or 5xx" --> G{"Tries left, and still<br/>under 40 s in total?"}
+    G -- "yes: wait 2 s,<br/>then 4 s" --> B
+    G -- "no" --> FAIL(["Return: failure"])
+    E -- "any other error status<br/><i>e.g. 401 bad key</i>" --> FAIL
+    E -- "200 OK" --> H{"Is there a price, and<br/>is it between $100<br/>and $50,000?"}
+    H -- "no" --> FAIL
+    H -- "yes" --> OK(["Return: the price ✅"])
+```
+
+The three round ends are the three answers Zoom 1 checks for at "What came back?".
+
+Which class owns each box:
+
+| Box | Class |
+|---|---|
+| "Start a try", the retry decision, the 10 s and 40 s limits | Polly retry and timeouts, set up in `Program.AddPriceSource<T>` |
+| "Request counter", "Mark this month as refused" | `QuotaHandler`, which calls `PostgresQuotaGovernor` |
+| "Send it over the network" | .NET's `HttpClient`, after the login step adds the API key |
+| "Is there a price…" | The service class and `PriceQuote.Normalize` |
+
+**Every try is counted, including retries.** A poll where the first service needs all three tries
+costs three requests from its allowance, not one.
+
+### A worked example: the first service times out
+
+API Ninjas is slow and every try times out. GoldAPI answers on the first try.
+
+| # | What happens | Zoom | Requests counted |
+|---|---|---|---|
+| 1 | The timer fires. The list is api-ninjas, goldapi.io, metalprice-api. | 1 | |
+| 2 | api-ninjas: breaker closed, so call it. | 1 | |
+| 3 | Try 1: counter says yes, the request times out after 10 s. Wait 2 s. | 2 | api-ninjas: 1 |
+| 4 | Try 2: counter says yes, times out after 10 s. Wait 4 s. | 2 | api-ninjas: 2 |
+| 5 | Try 3: counter says yes, times out after 10 s. No tries left. Return: failure. | 2 | api-ninjas: 3 |
+| 6 | Back in Zoom 1: "any other failure", so api-ninjas gets **one** failure on its breaker (1 of 3). | 1 | |
+| 7 | goldapi.io: breaker closed. Try 1 answers 200 OK with a price of 4,412.30. | 2 | goldapi.io: 1 |
+| 8 | Save to memory, then to the database. | 1 | |
+
+That poll took about 36 seconds and spent 4 requests. The console shows (price and lag made up):
+
+```
+Primary api-ninjas did not serve this poll; goldapi.io did after api-ninjas -> goldapi.io.
+Tick XAUUSD mid=4412.30 from goldapi.io, 640ms stale.
+```
+
+Step 6 is worth noticing: **three failed tries count as one breaker failure.** The breaker sees whole
+calls, not tries. So a service that fails twice and works on the third try looks healthy to the
+breaker, while it quietly costs three times the requests. The startup check in section 9 assumes the
+worst case for exactly this reason.
+
+### What the diagrams leave out
+
+- **Warm-up, first run only.** Before the first poll, the poller loads the newest saved price into
+  the cache and the last 36 hours of saved prices into the price-move engine. If either load fails,
+  it logs the error and carries on. Memory then fills from the first poll.
+- **Memory is saved before the database** (D-16). If the database save fails, the app still holds the
+  price it just fetched.
+- **Successes are saved too.** Each service that was called gets its `LastSuccessAt` or `LastFailureAt`
+  updated in `price_sources`. A skipped service gets nothing written, so the failure that opened its
+  breaker stays visible.
+- **"Every service failed" never stops the timer.** Unless every service is out of allowance, the
+  next poll runs on schedule. Faults and open breakers clear in minutes, so a long sleep would only
+  lose prices.
 
 Here is the poller's loop, trimmed to show the shape:
 
