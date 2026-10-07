@@ -10,6 +10,7 @@ namespace Aurum.App.Infrastructure.Data;
 public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvider clock) : DbContext(options)
 {
     public DbSet<PriceTick> PriceTicks => Set<PriceTick>();
+    public DbSet<PriceEvent> PriceEvents => Set<PriceEvent>();
     public DbSet<PriceSource> PriceSources => Set<PriceSource>();
     public DbSet<ApiQuotaWindow> ApiQuotaWindows => Set<ApiQuotaWindow>();
     public DbSet<MacroSeries> MacroSeries => Set<MacroSeries>();
@@ -53,6 +54,37 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
             e.HasOne(x => x.Source)
                 .WithMany()
                 .HasForeignKey(x => x.SourceCode)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        b.Entity<PriceEvent>(e =>
+        {
+            e.ToTable("price_events");
+            e.Property(x => x.Symbol).HasMaxLength(16).IsRequired();
+            e.Property(x => x.WindowCode).HasMaxLength(8).IsRequired();
+            e.Property(x => x.Direction).HasMaxLength(8).IsRequired();
+            e.Property(x => x.SourceCode).HasMaxLength(64).IsRequired();
+            e.Property(x => x.BaselineSourceCode).HasMaxLength(64).IsRequired();
+            e.Property(x => x.ThresholdProfile).HasMaxLength(64).IsRequired();
+            e.Property(x => x.TriggeredRule).HasMaxLength(256).IsRequired();
+
+            e.Property(x => x.StartMid).HasPrecision(18, 4);
+            e.Property(x => x.EndMid).HasPrecision(18, 4);
+            e.Property(x => x.DeltaAbsolute).HasPrecision(18, 4);
+            e.Property(x => x.DeltaPercent).HasPrecision(18, 6);
+            e.Property(x => x.VelocityPercentPerMinute).HasPrecision(18, 6);
+            e.Property(x => x.Volatility).HasPrecision(18, 6);
+
+            // The duplicate safety net's ON CONFLICT, and the cooldown's range read (D-18).
+            e.HasIndex(x => new { x.Symbol, x.WindowCode, x.WindowEndedAt }).IsUnique();
+
+            e.HasOne<PriceSource>()
+                .WithMany()
+                .HasForeignKey(x => x.SourceCode)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<PriceSource>()
+                .WithMany()
+                .HasForeignKey(x => x.BaselineSourceCode)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
