@@ -189,7 +189,10 @@ public class DeltaEngineTests
             Quote(Minutes(30), 4_010m, Backup),  // the middle price's source must not matter
             Quote(TimeSpan.Zero, 4_020m, endSource));
 
-        Assert.Equal(crossSource, Snapshot(engine)[DeltaWindow.OneHour]!.CrossSource);
+        var hour = Snapshot(engine)[DeltaWindow.OneHour]!;
+        Assert.Equal(crossSource, hour.CrossSource);
+        Assert.Equal(startSource, hour.StartSourceCode);
+        Assert.Equal(endSource, hour.EndSourceCode);
     }
 
     [Fact]

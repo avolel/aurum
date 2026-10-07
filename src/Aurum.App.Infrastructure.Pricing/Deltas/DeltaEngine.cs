@@ -27,6 +27,10 @@ internal sealed class DeltaEngine(
     private readonly ConcurrentDictionary<string, byte> _ordinals = new(StringComparer.OrdinalIgnoreCase);
     private int _lastOrdinal = -1;
 
+    // The reverse of _ordinals. Written before the sample reaches a buffer, so any ordinal read
+    // back under a symbol's lock already has its code here.
+    private readonly string[] _codes = new string[byte.MaxValue + 1];
+
     private readonly SemaphoreSlim _warmGate = new(1, 1);
     private bool _warmed;
 
@@ -110,7 +114,9 @@ internal sealed class DeltaEngine(
                 ? null
                 : Volatility(buffer, startIndex, endIndex),
             sampleCount,
-            CrossSource: start.SourceOrdinal != end.SourceOrdinal);
+            CrossSource: start.SourceOrdinal != end.SourceOrdinal,
+            StartSourceCode: _codes[start.SourceOrdinal],
+            EndSourceCode: _codes[end.SourceOrdinal]);
     }
 
     /// <summary>
@@ -210,8 +216,14 @@ internal sealed class DeltaEngine(
     private SymbolHistory History(string symbol) =>
         _histories.GetOrAdd(symbol, _ => new SymbolHistory(new TickRingBuffer(_options.MaxSamplesPerSymbol)));
 
+    // The factory can run more than once under contention; a losing run fills a slot no sample uses.
     private byte Ordinal(string sourceCode) =>
-        _ordinals.GetOrAdd(sourceCode, _ => checked((byte)Interlocked.Increment(ref _lastOrdinal)));
+        _ordinals.GetOrAdd(sourceCode, code =>
+        {
+            var ordinal = checked((byte)Interlocked.Increment(ref _lastOrdinal));
+            _codes[ordinal] = code;
+            return ordinal;
+        });
 
     private sealed class SymbolHistory(TickRingBuffer buffer)
     {

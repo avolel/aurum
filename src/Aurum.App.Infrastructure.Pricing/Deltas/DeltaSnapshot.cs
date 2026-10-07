@@ -41,6 +41,10 @@ public sealed record DeltaSnapshot(
 /// <paramref name="Start"/> and <paramref name="End"/> came from different sources, so part of the
 /// move may be the gap between two providers' prices rather than the market. A flag, not a fix.
 /// </param>
+/// <param name="StartSourceCode">
+/// The source code behind <paramref name="Start"/>. Carried here because a <see cref="Sample"/> holds
+/// only a per-process ordinal, which means nothing once saved.
+/// </param>
 public sealed record WindowDelta(
     DeltaWindow Window,
     Sample Start,
@@ -50,4 +54,6 @@ public sealed record WindowDelta(
     decimal VelocityPercentPerMinute,
     double? Volatility,
     int SampleCount,
-    bool CrossSource);
+    bool CrossSource,
+    string StartSourceCode,
+    string EndSourceCode);
