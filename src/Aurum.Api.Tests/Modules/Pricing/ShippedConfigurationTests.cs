@@ -125,6 +125,22 @@ public class ShippedConfigurationTests
     }
 
     /// <summary>
+    /// The shipped thresholds pass the boot rules, cover every window, and keep BR-02's one fixed
+    /// number: a 0.25% move over 5 minutes.
+    /// </summary>
+    [Fact]
+    public void Shipped_significance_thresholds_are_valid_and_match_BR02()
+    {
+        var options = BuildConfiguration().GetSection(SignificanceOptions.SectionName).Get<SignificanceOptions>()!;
+
+        Assert.True(SignificanceOptions.WindowKeysAreKnown(options));
+        Assert.True(SignificanceOptions.ValuesAreInRange(options));
+        Assert.False(string.IsNullOrWhiteSpace(options.ThresholdProfile));
+        Assert.Equal(DeltaWindow.All.Count, options.Windows.Count);
+        Assert.Equal(0.25m, options.Windows[DeltaWindow.FiveMinutes.Code].MinPercent);
+    }
+
+    /// <summary>
     /// The shipped file, then the credentials an operator supplies through <c>.env</c>. The
     /// in-memory layer comes second so it overrides the empty keys.
     /// </summary>

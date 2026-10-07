@@ -97,6 +97,19 @@ builder.Services.AddOptions<DeltaEngineOptions>()
           + "tolerance at PricePolling:PollInterval; below that the 1d window never has a starting price.")
     .ValidateOnStart();
 
+builder.Services.AddOptions<SignificanceOptions>()
+    .BindConfiguration(SignificanceOptions.SectionName)
+    .ValidateDataAnnotations()
+    .Validate(
+        SignificanceOptions.WindowKeysAreKnown,
+        $"{SignificanceOptions.SectionName}:Windows has a key that is not a window code "
+          + $"({string.Join(", ", DeltaWindow.All.Select(w => w.Code))}); a typo switches that window off.")
+    .Validate(
+        SignificanceOptions.ValuesAreInRange,
+        $"{SignificanceOptions.SectionName}: every MinPercent and Cooldown must be positive, and "
+          + "CrossSourceMagnitudeMultiplier must be at least 1.")
+    .ValidateOnStart();
+
 builder.Services.AddOptions<PriceFeedResilienceOptions>()
     .BindConfiguration(PriceFeedResilienceOptions.SectionName)
     .ValidateDataAnnotations()
