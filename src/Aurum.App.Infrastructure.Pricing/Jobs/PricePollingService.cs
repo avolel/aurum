@@ -22,6 +22,7 @@ public class PricePollingService(
     IOptions<PricePollingOptions> polling,
     ILatestQuoteCache cache,
     IDeltaEngine deltas,
+    IOptions<SignificanceOptions> significance,
     ILogger<PricePollingService> logger) : BackgroundService
 {
     /// <summary>
@@ -161,6 +162,9 @@ public class PricePollingService(
         await ProjectAttemptsAsync(db, result.Attempts, ct);
         await db.SaveChangesAsync(ct);
 
+        // After the save: an event must never point at prices the database failed to keep (D-18).
+        await SaveEventsAsync(db, result.Quote.Symbol, ct);
+
         if (result.UsedFallback)
         {
             logger.LogWarning(
@@ -173,6 +177,34 @@ public class PricePollingService(
             "Tick {Symbol} mid={Mid} from {Source}, {StalenessMs}ms stale.",
             result.Quote.Symbol, result.Quote.Mid, result.Quote.SourceCode,
             (result.Quote.ReceivedAt - result.Quote.ObservedAt).TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Classifies the symbol's current moves and saves each one that crossed its threshold.
+    /// </summary>
+    /// <remarks>
+    /// A failed insert throws into the poll's catch; the next poll measures again.
+    /// </remarks>
+    private async Task SaveEventsAsync(AurumDbContext db, string symbol, CancellationToken ct)
+    {
+        if (deltas.GetSnapshot(symbol) is not { } snapshot)
+        {
+            return;
+        }
+
+        foreach (var priceEvent in SignificanceClassifier.Classify(snapshot, significance.Value))
+        {
+            // The classifier only returns windows that have a threshold, so the key is present.
+            var cooldown = significance.Value.Windows[priceEvent.WindowCode].Cooldown;
+
+            if (await PriceEventSql.InsertAsync(db, priceEvent, cooldown, clock.GetUtcNow(), ct))
+            {
+                logger.LogInformation(
+                    "Price event {Symbol} {Window} {Direction} {DeltaPercent}% ({Rule}).",
+                    priceEvent.Symbol, priceEvent.WindowCode, priceEvent.Direction,
+                    priceEvent.DeltaPercent, priceEvent.TriggeredRule);
+            }
+        }
     }
 
     /// <summary>

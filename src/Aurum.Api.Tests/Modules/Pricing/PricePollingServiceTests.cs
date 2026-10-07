@@ -52,6 +52,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         // newest stored tick whatever its source, and a newer leftover row would make the cache
         // drop this test's quote as older. The collection runs one class at a time.
         await using var db = fixture.CreateDbContext();
+        await db.PriceEvents.ExecuteDeleteAsync(Ct);
         await db.PriceTicks.ExecuteDeleteAsync(Ct);
         await db.PriceSources.Where(s => s.Code == Primary || s.Code == Secondary)
             .ExecuteUpdateAsync(setters => setters
@@ -85,8 +86,14 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         var deltas = new DeltaEngine(
             scopes, Options.Create(new DeltaEngineOptions()), clock, NullLogger<DeltaEngine>.Instance);
 
+        // Only 5m has a threshold, so a test controls exactly which window can fire.
+        var significance = new SignificanceOptions { ThresholdProfile = "test-v1", CrossSourceMagnitudeMultiplier = 2m };
+        significance.Windows[DeltaWindow.FiveMinutes.Code] =
+            new SignificanceWindowOptions { MinPercent = 0.25m, Cooldown = TimeSpan.FromMinutes(5) };
+
         var poller = new PricePollingService(
-            scopes, sources, clock, polling, cache, deltas, NullLogger<PricePollingService>.Instance);
+            scopes, sources, clock, polling, cache, deltas, Options.Create(significance),
+            NullLogger<PricePollingService>.Instance);
 
         return (poller, clock, cache, deltas);
     }
@@ -551,5 +558,47 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.NotNull(snapshot);
         Assert.Equal(0, snapshot.DroppedOutOfOrder);
         Assert.All(snapshot.Windows.Values, Assert.Null);
+    }
+
+    [Fact]
+    public async Task A_poll_whose_window_crosses_its_threshold_writes_one_event()
+    {
+        // 4,000 then 4,020 five minutes later: +0.5%, over the 0.25% 5m threshold.
+        var feed = new ScriptedPriceFeed(call =>
+        {
+            var observedAt = Start + PollInterval * call;
+            return new PriceFeedResult(
+                PriceQuote.Normalize(SupportedSymbol.Gold, observedAt, observedAt, null, null,
+                    4_000m + 20m * call, Primary),
+                Primary,
+                [new SourceAttempt(Primary, SourceAttemptOutcome.Success)]);
+        });
+
+        var (poller, clock, _, _) = Build(feed);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            await feed.WaitForCallAsync(1).WaitAsync(CallTimeout, Ct);
+            await WaitUntilAsync(db => db.PriceTicks.AnyAsync(t => t.ObservedAt == Start, Ct),
+                "the first tick to be persisted");
+
+            clock.Advance(PollInterval);
+            await feed.WaitForCallAsync(2).WaitAsync(CallTimeout, Ct);
+            await WaitUntilAsync(db => db.PriceEvents.AnyAsync(Ct), "the event to be saved");
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        await using var db = fixture.CreateDbContext();
+        var saved = await db.PriceEvents.AsNoTracking().SingleAsync(Ct);
+
+        Assert.Equal(DeltaWindow.FiveMinutes.Code, saved.WindowCode);
+        Assert.Equal(PriceEventDirection.Up, saved.Direction);
+        Assert.Equal(Start, saved.WindowStartedAt);
+        Assert.Equal(Start + PollInterval, saved.WindowEndedAt);
+        Assert.Equal(Primary, saved.SourceCode);
     }
 }
