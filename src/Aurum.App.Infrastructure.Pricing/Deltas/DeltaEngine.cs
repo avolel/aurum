@@ -7,6 +7,10 @@ using Microsoft.Extensions.Options;
 
 namespace Aurum.App.Infrastructure.Pricing.Deltas;
 
+/// <summary>
+/// Keeps the last 36 hours of polled prices per symbol and works out how far each symbol moved
+/// over the six fixed windows (1m to 1d). The significance classifier reads its snapshots.
+/// </summary>
 /// <remarks>
 /// One <see cref="TickRingBuffer"/> per symbol, behind its own lock, serving all six windows by
 /// binary search (D-17). Singleton with the same single-instance assumption as the poller.
