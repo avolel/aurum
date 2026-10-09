@@ -3,7 +3,7 @@
 Aurum tracks the price of gold. It asks outside price services for the current price on a regular
 schedule, stores every answer, and will later show those prices in an app.
 
-**Where things stand: the groundwork is done, and Phase 1 items 0 to 6 are finished.**
+**Where things stand: the groundwork is done, and Phase 1 items 0 to 7 are finished.**
 
 What has been built and checked by hand:
 
@@ -141,8 +141,38 @@ still explains itself after the settings change.
 - A big daily move usually means a big hourly move too, so one check can save several events.
   Merging those into one is left for Phase 2.
 
-**Not built yet:** live updates to the app and the web endpoints. Nothing can read the prices or the
-events over the web yet. Those are items 7 onward in `ops/phase-1-todo.md`.
+## Live prices sent to connected apps (item 7, done)
+
+**Apps can now get each new price the moment it arrives** (D-19). The API uses SignalR, a library
+that keeps a connection open from the server to the app, so the server can send messages without
+being asked. An app connects to `/hubs/price` and calls `Subscribe("XAUUSD")`. From then on it gets a
+`PriceUpdated` message after every poll that saves a price.
+
+- **A new subscriber gets the held price and moves straight away**, not at the next poll. Without
+  that, an app that connects during an eight-hour gap would see nothing for hours, and "connected"
+  would look exactly like "the feed is dead". If the app has no price yet, the message says so with
+  `quote: null`.
+- **Each message has all six windows.** A window with no answer is `null`, never 0%, the same rule as
+  in the database (D-17).
+- **The symbol can be typed in any case.** `xauusd` works. An unknown symbol is refused with a
+  message listing the ones that are supported.
+- **A price is sent only after it's saved**, so an app is never told a price the database lost. If
+  sending fails, the app logs it and still saves the events.
+
+What a message looks like with two prices 15 minutes apart (other fields left out):
+
+```json
+{ "symbol": "XAUUSD",
+  "quote": { "mid": 4010, "sourceCode": "goldapi.io", "isFallback": false, "isStale": false },
+  "windows": { "1m": null, "5m": null, "15m": { "deltaPercent": 0.25 }, "1h": null, "4h": null, "1d": null } }
+```
+
+**Anyone can connect, and only one copy of the API can serve it.** Logins are out of scope for
+Phase 1. The list of who is listening lives in the API's memory, which fits the rule below about
+running one copy.
+
+**Not built yet:** the web endpoints. Nothing can read past prices or the events over ordinary web
+requests yet. That is item 8 onward in `ops/phase-1-todo.md`.
 
 ## Decisions that were made without testing
 
@@ -152,9 +182,9 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-18** so far. `ops/phase-1-todo.md` lists the remaining work in an
+The decision log has **D-1 to D-19** so far. `ops/phase-1-todo.md` lists the remaining work in an
 order where each item can be checked when it is finished. A decision number is only given out when
-the decision is actually made, so the next one will be D-19.
+the decision is actually made, so the next one will be D-20.
 
 ## Where things are
 
@@ -171,8 +201,10 @@ src/Aurum.App.Infrastructure.Pricing/
   Cache/                           the latest price, kept in memory
   Deltas/                          how much the price moved, and which moves become events
   Jobs/                            the timer that checks the price
+  Realtime/                        the interface the timer uses to send prices to apps
 src/Aurum.App.Application/         the rules for handling requests, and logging
 src/Aurum.Api/                     the web API; Program.cs sets everything up
+  Hubs/                            the live connection apps subscribe to, and its messages
 src/Aurum.Api.Tests/               tests, run against a real database
 app/                               the start of the mobile app; nothing much in it yet
 ```
@@ -219,7 +251,7 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 180 tests (counted with `dotnet test --list-tests` on 2026-10-07). Most of them start a real copy of the database in Docker rather than a fake one,
+There are 191 tests (counted with `dotnet test --list-tests` on 2026-10-08). Most of them start a real copy of the database in Docker rather than a fake one,
 because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
@@ -242,6 +274,10 @@ Tests worth knowing about:
   fresh database connection, the way a restarted app would, and
   `Restart_does_not_re_emit_within_the_cooldown` is the case an in-memory "last event" time would get
   wrong (D-18).
+- **`PriceHubTests`** starts a small copy of the web server in memory and connects a real SignalR
+  client to it. It needs no database and no Docker, and finishes in under a second. It reads each
+  message as raw JSON, so it checks what an app actually receives, including the `null` windows
+  (D-19).
 
 **Some tests guard a decision, not a bug.** For example, the app never gives back a request that failed,
 because the service still counts it. Nothing in the code says so; the rule is simply that there is

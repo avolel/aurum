@@ -1,5 +1,6 @@
 using System.Net;
 using Aurum.Api;
+using Aurum.Api.Hubs;
 using Aurum.App.Application.AppLogs;
 using Aurum.App.Application.Common.Behaviors;
 using Aurum.App.Infrastructure.Data;
@@ -11,6 +12,7 @@ using FluentValidation;
 using MediatR;
 using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Quota;
+using Aurum.App.Infrastructure.Pricing.Realtime;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Http.Resilience;
@@ -156,6 +158,10 @@ builder.Services.AddHostedService<PricePollingService>();
 builder.Services.AddHealthChecks()
     .AddNpgSql(connectionString, name: "postgres", tags: ["ready"]);
 
+// ── SignalR ───────────────────────────────────────────────────────────────────────────
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<IPriceBroadcaster, SignalRPriceBroadcaster>();
+
 var app = builder.Build();
 
 app.UseSerilogRequestLogging();
@@ -165,6 +171,7 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+app.MapHub<PriceHub>("/hubs/price");
 app.MapControllers();
 app.MapHealthChecks("/health", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });

@@ -27,7 +27,7 @@ A few terms used below:
 - **Circuit breaker**: the part that stops calling a service after several failures in a row, and
   tries again after a rest.
 
-> **Decision numbers.** D-9 to D-18 are taken and written up:
+> **Decision numbers.** D-9 to D-19 are taken and written up:
 >
 > | Number | Decision | Item |
 > |---|---|---|
@@ -41,6 +41,7 @@ A few terms used below:
 > | D-16 | the latest price kept in memory, its age worked out when read | 4 |
 > | D-17 | a price move from two real prices, or "no answer" | 5 |
 > | D-18 | big moves saved as events; the waiting period lives in the database | 6 |
+> | D-19 | live prices through one SignalR sender, set up directly in `Program.cs` | 7 |
 >
 > Numbers are handed out when a decision is actually made, not held back for planned work. So the
 > Phase 1 plan's draft list is now off by **five**. The numbers used below are the real ones.
@@ -51,13 +52,16 @@ A few terms used below:
 > the "count tries" setting moved out of item 3 took D-15 when it was actually done. Then item 4's
 > saved latest price took D-16 on 2026-09-30, because it was decided first. So the "no answer, not
 > zero" rule for the price-move feature is now **D-17**, and items 5, 6 and 8 use **D-17 to D-19**.
-> D-11's two references to that rule were updated in place both times.
+> D-11's two references to that rule were updated in place both times. Then item 7 took D-19 on
+> 2026-10-08, because the plan had no decision for it and replanning it after D-5 produced one. So
+> item 8's decision is now **D-20**.
 
 > **Since D-5 (2026-09-26):** every service is now set up in `src/Aurum.Api/Program.cs`. The
 > `PricingModule`, `AddPricingModule`, `AddRealtimeModule` and `Add<Module>Module` methods mentioned in
-> items 2, 3, 7 and 8 no longer exist. Items 7 and 8 were planned around them and need replanning
-> before they start. Their notes below are left as originally written, so the plan's reasoning isn't
-> lost.
+> items 2, 3, 7 and 8 no longer exist. Items 7 and 8 were planned around them. Item 7 was replanned
+> and built (D-19); the bullets it dropped are struck through below with the reason. Item 8 still
+> needs replanning before it starts, and its notes are left as originally written, so the plan's
+> reasoning isn't lost.
 
 ---
 
@@ -328,8 +332,8 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
         and the backup flag under two different service orders.
 - [x] After each check, the timer does things in this order: **save in memory → save to the database →
       send to connected apps.** A database hiccup must not hide a price the app successfully fetched.
-      The in-memory copy isn't the official record. Sending to connected apps is item 7; there is
-      nothing to call yet.
+      The in-memory copy isn't the official record. Sending to connected apps came with item 7
+      (D-19), and the events from item 6 are saved after that send.
       - Tested with a price the database refuses to save. The saved price still updates. I moved the
         memory write below the save to confirm the test catches the wrong order, and it did.
       - A failed check leaves the held price alone, and its age keeps growing. Also tested.
@@ -496,27 +500,70 @@ doesn't catch the repeat that follows. D-18 has the worked example.*
 
 ---
 
-## 7. Live updates to connected apps (SignalR `PriceHub`) · half a day · FR-5.3
+## 7. Live updates to connected apps (SignalR `PriceHub`) · DONE · FR-5.3 · needed by 8
 
-*Needs replanning before it starts: the setup approach below was superseded by D-5. See the note at the
-top.*
+*Done on 2026-10-08, after replanning for D-5 (plan copied to
+`plans/aurum-phase-1-item-7-live-updates.md`). One change from the original plan: the do-nothing
+sender and its replacement were dropped. With every registration in `Program.cs` there is one
+registration and no order to get wrong. D-19 has the reasoning.*
 
-- [ ] `IPriceBroadcaster` (the thing that sends prices to connected apps) is declared **in** the
-      pricing code, and `AddPricingModule` sets up a do-nothing version (`NullPriceBroadcaster`) only if
-      nothing else is set up yet (`TryAddSingleton`). `AddRealtimeModule()` then replaces it with the
-      real one. The pricing code never refers to SignalR directly, and pricing tests don't need SignalR
-      at all.
-- [ ] The "do-nothing version first, then replace it" order is the fragile part. **Pin it with a
-      test** that builds the full app setup and checks it got the real `SignalRPriceBroadcaster`.
-- [ ] A typed SignalR hub (`Hub<IPriceClient>`) with `Subscribe` and `Unsubscribe(symbol)`, over one
-      group of listeners per symbol, named `price:{symbol}`.
-- [ ] **As soon as an app subscribes, send it the saved price and the latest moves.** Otherwise an app
+- [x] `IPriceBroadcaster` (the thing that sends prices to connected apps) is declared **in** the
+      pricing code, in `Realtime/`. Its one method is `PublishAsync(symbol)`: the sender reads the
+      held price and the moves itself. The pricing code never refers to SignalR directly, and pricing
+      tests don't need SignalR at all.
+      - ~~`AddPricingModule` sets up a do-nothing version (`NullPriceBroadcaster`) and
+        `AddRealtimeModule()` replaces it.~~ Dropped: those methods no longer exist (D-5).
+        `SignalRPriceBroadcaster` is registered directly in `Program.cs`.
+- [x] ~~Pin the "do-nothing version first, then replace it" order with a test.~~ Dropped with the
+      do-nothing version: there is no order left to pin.
+- [x] A typed SignalR hub (`Hub<IPriceClient>`) with `Subscribe` and `Unsubscribe(symbol)`, over one
+      group of listeners per symbol, named `price:{symbol}`. It's at `/hubs/price`.
+      - The symbol is matched ignoring case and changed to its stored spelling, because group names
+        are case-sensitive and `xauusd` would otherwise be its own group that never gets a price.
+      - An unknown symbol is refused with a message listing the supported ones.
+      - The hub reads the cache and the move engine directly, not through MediatR, until item 8
+        decides otherwise.
+- [x] **As soon as an app subscribes, send it the saved price and the latest moves.** Otherwise an app
       connecting three minutes into an eight-hour gap sees nothing for 7 hours 57 minutes, and "connected"
       looks exactly like "the feed is dead".
-- [ ] The data sent is its own set of records in `Hubs/`, never the database classes. `Deltas` holds
-      **values that can be empty**, so item 5's "no answer, not zero" rule survives the trip to the app.
-- [ ] If sending fails, log it and carry on. A price that reached the database is a success even if no
+      - The hub joins the group first, then sends. The other order can miss a price sent in between.
+      - With no price yet, the app still gets a message, with `quote: null`.
+- [x] The data sent is its own set of records in `Hubs/` (`PriceUpdate`, `QuoteMessage`,
+      `WindowMessage`), never the database classes. `Windows` always has all six window codes, and a
+      window with no answer is `null`, so item 5's "no answer, not zero" rule survives the trip to the
+      app.
+- [x] If sending fails, log it and carry on. A price that reached the database is a success even if no
       app heard about it.
+      - The send happens after the price is saved and before events are saved, in its own error
+        handling, so a failed send never skips the events and a failed event never blocks the send.
+- [x] Tests:
+      - `PricePollingServiceTests`: `A_poll_publishes_after_the_tick_is_saved`,
+        `A_failed_publish_still_saves_events`, `A_failed_save_does_not_publish`.
+      - `PriceHubTests`, 7 tests over a real SignalR connection to an in-memory server, with no
+        database: the held price on subscribe, `null` windows in the raw JSON, a `null` quote,
+        symbol case, an unknown symbol, sends reaching only their own symbol's group, and
+        unsubscribe.
+      - 191 tests pass in total on 2026-10-08.
+- [x] Check the tests notice when a rule is broken on purpose. Each of these turned a named test red:
+      - send moved above the price save → `A_poll_publishes_after_the_tick_is_saved`,
+        `A_failed_save_does_not_publish`
+      - the send's error handling rethrowing → `A_failed_publish_still_saves_events`
+      - symbol case not changed → `Symbol_case_does_not_split_groups`
+      - a missing window sent as a zero record → `A_window_with_no_answer_arrives_as_null_not_zero`
+- [ ] **The order inside `Subscribe` has no test.** When an app subscribes, the hub does two things:
+      it adds the app to the symbol's group, then it sends the app the held price.
+      - **What goes wrong if someone swaps them:** a poll can send a new price to the group in the
+        moment between the two steps. The app isn't in the group yet, so it misses that price and shows
+        the older one until the next poll, up to 15 minutes later.
+      - **Why no test catches it:** I swapped the two lines on purpose and every test still passed. The
+        gap lasts a few microseconds, and a test can't make a poll land inside it on demand.
+      - **What protects it today:** only the comment above the two lines in `PriceHub.Subscribe`. Check
+        that order in any review that touches the method.
+      - **Why this box stays unticked:** every other rule in this item has a test that fails when the
+        rule is broken. This one doesn't. Tick it only if a test is added that fails when the lines are
+        swapped.
+- [x] **D-19 written up**: direct registration over the do-nothing default, the hub reading pricing
+      types directly until item 8, joining before sending, and the turned-down options.
 
 ---
 
@@ -542,7 +589,8 @@ note at the top.*
       success and failure, its breaker state, and its requests used, limit and reset time. This is how
       to show the fallback goal being met, and how whoever runs the app answers "why is the price eight
       hours old?" without opening the database.
-- [ ] **D-19 written up**: the second setup method, and why endpoints don't fit the `Add*Module` one.
+- [ ] **D-20 written up**: the second setup method, and why endpoints don't fit the `Add*Module` one.
+      Also decide whether the hub's direct reads move behind MediatR (D-19).
 
 ---
 
@@ -564,6 +612,8 @@ Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/L
 - [ ] `StubPriceSource`: returns a scripted price or error, and counts how often it's called.
 - [ ] `RecordingBroadcaster` (remembers what would have been sent to apps) and `TickReplay` (feeds in a
       list of prices).
+      - `RecordingBroadcaster` is done: built early under item 7, which needed it. It can also run a
+        step inside each send, to look at the database at that moment or to throw.
 - [ ] `AurumApiFactory`, a test version of the whole API (`WebApplicationFactory<Program>`). It needs
       `public partial class Program { }` added at the end of `Program.cs`; letting tests see internal
       code (`InternalsVisibleTo`) isn't enough. **The test API must swap the price timer and the real
@@ -599,10 +649,12 @@ Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/L
         the same command, raise `PricePolling__PollInterval` above the startup check's minimum, or the
         app refuses to start before the fallback is ever reached.
 - [ ] The hand-written test data produces exactly the expected set of `PriceEvent`s (5, 6, 10)
-- [ ] An app that subscribes partway through a gap immediately receives the saved price and moves (7)
+- [x] An app that subscribes partway through a gap immediately receives the saved price and moves (7).
+      Checked by `Subscribe_sends_the_held_price_and_moves_immediately`; not yet tried by hand against
+      `docker compose up`.
 - [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` answers 400 and names the 30-day limit (8)
 - [ ] `docker compose down -v && docker compose up --build` from empty still works (9)
-- [ ] D-17 to D-19 written up with the options turned down (each item). D-9 to D-16 are done.
+- [ ] D-17 to D-20 written up with the options turned down (each item). D-9 to D-19 are done.
 
 **Deliberately not in this batch:** the dashboard app and its under-1.5-seconds goal, logins, limiting
 how often people can call the API, paid tiers, economic and news data, and the paid GoldAPI plan. The

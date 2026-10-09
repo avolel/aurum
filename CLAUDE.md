@@ -120,9 +120,9 @@ one lives and what is actually in it today.
 src/
 ├── Aurum.App.SharedKernel/            ApiResponse<T>, PageResult<T>, AuditableEntity, SupportedSymbol
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
-├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/ — the price feed
+├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/
-├── Aurum.Api/                         Program.cs (every registration), Controllers/
+├── Aurum.Api/                         Program.cs (every registration), Hubs/ (SignalR)
 └── Aurum.Api.Tests/
 ```
 
@@ -385,8 +385,8 @@ Related invariants:
 `/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. `PricePollingService` awaits
 `EnsureWarmAsync` before its first poll and calls `Record` after every successful one.
 
-- **`Record` runs before the tick is added to the `DbContext`.** Memory, then database, then (item 7)
-  clients: a failed save must not hide a price the app fetched. A failed poll never records — the
+- **`Record` runs before the tick is added to the `DbContext`.** Memory, then database, then clients
+  (D-19): a failed save must not hide a price the app fetched. A failed poll never records — the
   `AllSourcesFailedException` path projects onto `price_sources` and rethrows, and the held quote's
   growing `Age` is the signal. `A_poll_writes_the_cache_before_it_persists` was mutation-checked
   against `Record` moved below the save.
@@ -485,6 +485,41 @@ pins the order; it was mutation-checked by moving the insert above the save.
 - `PricePollingServiceTests` and `PriceEventSqlTests` delete every `price_events` row in
   `InitializeAsync`; the waiting-period check reads across sources, so a leftover row suppresses the
   test's insert.
+
+### Live updates (D-19)
+
+`PriceHub` (`Aurum.Api/Hubs/`, mapped at `/hubs/price`) is a `Hub<IPriceClient>` with
+`Subscribe`/`Unsubscribe(symbol)` over one group per symbol, `PriceHub.GroupName` → `price:{symbol}`.
+The poller talks only to `IPriceBroadcaster` (`Pricing/Realtime/`); `SignalRPriceBroadcaster` is its
+one implementation, a singleton registered directly in `Program.cs`.
+
+- **No `NullPriceBroadcaster`, no `TryAdd`-then-replace.** That pattern existed only because two module
+  methods each registered a sender; D-5 removed them. Tests that build `PricePollingService` by hand
+  pass a `RecordingBroadcaster`. Do not reintroduce a default "so tests don't need one".
+- **Poll order: memory → tick save → `TryPublishAsync` → `SaveEventsAsync`.** After the save so an app
+  is never told a price the database lost (`A_poll_publishes_after_the_tick_is_saved`,
+  `A_failed_save_does_not_publish`). Before events so a failed insert can't silence apps. Own catch so
+  a failed send can't skip events (`A_failed_publish_still_saves_events`). All three were
+  mutation-checked.
+- **`Subscribe` joins the group, then sends to `Clients.Caller`.** The reverse loses a broadcast that
+  lands in between. **No test catches the swap** — it was mutation-checked and stayed green. Guard it
+  in review.
+- **`Subscribe` resolves the symbol against `SupportedSymbol.All` ignoring case and uses the stored
+  spelling.** Group names are case-sensitive; `xauusd` would otherwise be a silent group
+  (`Symbol_case_does_not_split_groups`). Unknown symbol → `HubException` naming the supported ones.
+  `SignalRPriceBroadcaster` does **not** resolve: its only caller passes `PriceQuote.Symbol`, which is
+  already the stored spelling. A new caller with user input must resolve first.
+- **`PriceUpdate.From(symbol, LatestQuoteSnapshot?, DeltaSnapshot?)` is the only mapper**, used by hub
+  and sender. Takes `symbol` because both snapshots can be null. `Windows` is keyed by
+  `DeltaWindow.Code` and always has all six keys; no answer is a `null` value, never a zero record or
+  a missing key (`A_window_with_no_answer_arrives_as_null_not_zero` reads raw JSON). `Quote` null =
+  "no price yet", still sent. `AttemptedSources` stays server-side.
+- **The hub reads `ILatestQuoteCache`/`IDeltaEngine` directly, not via MediatR** — a cache-only query
+  would be a pass-through handler. Item 8 (D-20) may move it.
+- Typed client methods take no `CancellationToken`; `PublishAsync`'s `ct` is unused by the SignalR
+  implementation. Group sends only queue into per-connection buffers.
+- Not handled: auth (Phase 1 is open), CORS, events over SignalR, scale-out (groups are in-process;
+  needs a backplane), and subscribe/broadcast arrival order (client keeps newer `observedAt`).
 
 ### Database
 
@@ -621,6 +656,14 @@ not seeded, so the foreign key rejects it — no mocked `DbContext` needed. `Wai
 `WaitUntilAsync` for the in-memory cache. Its waits are the fragile part: `ScriptedPriceFeed.WaitForCallAsync` completes when the
 feed is *entered*, and the poller writes the tick afterwards, so a test that asserts straight after
 that wait races the save. `WaitUntilAsync` polls the database for the side effect instead.
+
+`PriceHubTests` needs **no container**: an in-test `WebApplication` on `TestServer` with
+`AddSignalR`, `MapHub<PriceHub>`, the real cache and `DeltaEngine` on a `FakeTimeProvider`, and a real
+`HubConnection`. Transport is **long polling** via `server.CreateHandler()` — `TestServer` has no
+socket — so "nothing arrived" assertions wait 250ms. The fake clock is passed to the cache and engine
+by constructor and **not registered in the container**, so SignalR's own timers stay on real time.
+Messages are received as `JsonElement` so assertions check the wire (camelCase names, nulls inside
+the dictionary), not the record. It does not use `Program.cs`; that is item 10's `AurumApiFactory`.
 
 `QuotaHandlerTests` drives the handler through a real `HttpClient` over a stub inner handler rather
 than calling `SendAsync` directly, because `HttpClient` does its own exception handling on the way

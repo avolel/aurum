@@ -17,8 +17,8 @@ It sits beside the other documents like this:
 
 Numbers in brackets, like (D-7), point to entries in the decision log.
 
-Everything here was checked against the code on 2026-10-07, at commit `17d3de1`. If you change how a
-piece works, update its section here too.
+Everything here was checked against the code on 2026-10-08, after item 7 (live updates) was built on
+top of commit `0628b34`. If you change how a piece works, update its section here too.
 
 ---
 
@@ -29,13 +29,15 @@ the price of gold. Every 15 minutes it asks an outside price service for the cur
 that service fails, it tries the next one, and then a third. It saves every price it gets into a
 Postgres database, keeps the newest price in memory, and works out how much the price has moved over
 the last 1 minute, 5 minutes, 15 minutes, 1 hour, 4 hours and 1 day. When one of those moves is big
-enough to matter, it saves it to the database as a price event. It also counts every request it
-sends to each price service, in the database, so it never goes over a service's free monthly
-allowance.
+enough to matter, it saves it to the database as a price event. After each saved price it sends the
+price and its moves to every connected app that subscribed to that symbol. It also counts every
+request it sends to each price service, in the database, so it never goes over a service's free
+monthly allowance.
 
-**Nobody can ask the app for a price or an event yet.** There are no web endpoints for either. The
-only web addresses that answer are the two health checks, `/health` and `/health/ready`. The
-endpoints and live updates to connected apps are later items in `ops/phase-1-todo.md`.
+**Apps can listen for prices, but nobody can ask for one over an ordinary web request yet.** The
+live connection is at `/hubs/price` (section 9). Apart from that, the only web addresses that answer
+are the two health checks, `/health` and `/health/ready`. The endpoints for the price, its history
+and the events are item 8 in `ops/phase-1-todo.md`.
 
 ```mermaid
 flowchart LR
@@ -51,9 +53,11 @@ flowchart LR
         C[LatestQuoteCache<br/>newest price, in memory]
         D[DeltaEngine<br/>price moves, in memory]
         S[SignificanceClassifier<br/>which moves are big enough]
+        B[SignalRPriceBroadcaster<br/>sends to subscribed apps]
     end
 
     DB[(Postgres +<br/>TimescaleDB)]
+    A[Connected apps<br/>/hubs/price]
 
     P --> F
     F --> N & G & M
@@ -63,6 +67,9 @@ flowchart LR
     P --> DB
     S -. events, saved by the poller .-> DB
     F -. counts every request .-> DB
+    P --> B
+    B -. reads .-> C & D
+    B --> A
 ```
 
 ---
@@ -169,6 +176,8 @@ Aurum.App.Infrastructure.Pricing/
 │   └── QuotaHandler.cs                 ← asks the governor before every request leaves
 ├── Cache/
 │   └── LatestQuoteCache.cs             ← newest price per symbol, in memory
+├── Realtime/
+│   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
 └── Deltas/
     ├── DeltaEngine.cs                  ← works out price moves over six windows
     ├── TickRingBuffer.cs               ← a fixed-size list of recent prices
@@ -193,6 +202,10 @@ Aurum.App.Infrastructure.Pricing/
 |---|---|
 | `Program.cs` | Creates and registers every object the app uses, sets up health checks, runs migrations, starts the web server. |
 | `HttpRequestContextAccessor.cs` | Reads the user, address and request id from the current web request, for log rows. |
+| `Hubs/PriceHub.cs` | The live connection apps subscribe to, at `/hubs/price` (section 9). |
+| `Hubs/IPriceClient.cs` | The one message the server sends: `PriceUpdated`. |
+| `Hubs/PriceUpdate.cs` | The message records (`PriceUpdate`, `QuoteMessage`, `WindowMessage`) and the one method that builds them. |
+| `Hubs/SignalRPriceBroadcaster.cs` | The real `IPriceBroadcaster`: sends to a symbol's group from outside the hub. |
 | `appsettings.json` | Default settings. Environment variables override them. |
 | `Dockerfile` | How the `api` container is built. |
 
@@ -230,7 +243,10 @@ it goes in this file.
 9. **The poller.** `PricePollingService` is registered as a background job.
 10. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
-11. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
+11. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
+    There is no do-nothing stand-in to replace (D-19). After the app is built, `MapHub<PriceHub>`
+    puts the hub at `/hubs/price`.
+12. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
     starts. This is only safe with one copy of the app running; two copies migrating at once would
     clash.
 
@@ -241,6 +257,8 @@ This matters, because getting it wrong causes bugs that only show up under load.
 | Object | Lifetime | Why |
 |---|---|---|
 | `TimeProvider`, `SourceCircuitStore`, `LatestQuoteCache`, `DeltaEngine`, `IAppLogQueue` | One for the whole app ("singleton") | They hold memory that must survive between polls or requests. |
+| `SignalRPriceBroadcaster` | Singleton | The poller is a singleton and holds it. It keeps no state; SignalR's hub context, which it uses, is a singleton too. |
+| `PriceHub` | New for every call from an app | SignalR creates a hub for each call and throws it away. Anything that must last goes in the cache, the engine or SignalR's groups. |
 | `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IAppLogService<T>`, `IUnitOfWork` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, or one poll. |
 | Each price service class | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
 
@@ -273,7 +291,8 @@ flowchart TD
     E --> F{"What came back?"}
     F -- "a price ✅" --> G["Save to memory<br/>latest-price cache + price-move engine"]
     G --> H["Save to database<br/>new row in price_ticks,<br/>times in price_sources"]
-    H --> E2["Check each window's move<br/>against its threshold;<br/>save the big ones to price_events"]
+    H --> SEND["Send price and moves<br/>to subscribed apps<br/><i>a failure is logged, not fatal</i>"]
+    SEND --> E2["Check each window's move<br/>against its threshold;<br/>save the big ones to price_events"]
     E2 --> Z(["Wait for the next timer"])
 
     F -- "out of allowance" --> C
@@ -291,6 +310,7 @@ Which class owns each box:
 | Box | Class |
 |---|---|
 | Timer, the two "Save" boxes, the "every service failed" branch | `PricePollingService` |
+| "Send price and moves" | `PricePollingService.TryPublishAsync` calls `IPriceBroadcaster`, which is `SignalRPriceBroadcaster` |
 | "Check each window's move" | `SignificanceClassifier` decides, `PriceEventSql` saves, `PricePollingService` calls both |
 | "Get the list", the loop over services, the breaker checks | `FailoverPriceFeed` |
 | "Is its circuit breaker open?", "Add one failure" | `SourceCircuit` |
@@ -359,7 +379,7 @@ Tick XAUUSD mid=4412.30 from goldapi.io, 640ms stale.
 
 Step 6 is worth noticing: **three failed tries count as one breaker failure.** The breaker sees whole
 calls, not tries. So a service that fails twice and works on the third try looks healthy to the
-breaker, while it quietly costs three times the requests. The startup check in section 9 assumes the
+breaker, while it quietly costs three times the requests. The startup check in section 10 assumes the
 worst case for exactly this reason.
 
 ### What the diagrams leave out
@@ -369,9 +389,12 @@ worst case for exactly this reason.
   it logs the error and carries on. Memory then fills from the first poll.
 - **Memory is saved before the database** (D-16). If the database save fails, the app still holds the
   price it just fetched.
-- **Events are saved after the price** (D-18), so an event never points at a price the database
-  failed to keep. If saving an event fails, the poll's normal error handling logs it, and the next
-  poll measures again.
+- **Apps are told after the price is saved** (D-19), so an app never hears of a price the database
+  failed to keep. The send has its own error handling: a failed send is logged and the events are
+  still saved.
+- **Events are saved after the send** (D-18, D-19), so an event never points at a price the database
+  failed to keep, and a failed event can't stop apps hearing the price. If saving an event fails, the
+  poll's normal error handling logs it, and the next poll measures again.
 - **Successes are saved too.** Each service that was called gets its `LastSuccessAt` or `LastFailureAt`
   updated in `price_sources`. A skipped service gets nothing written, so the failure that opened its
   breaker stays visible.
@@ -562,7 +585,7 @@ configureAuth(clientBuilder, GetOptions);                // 5. the login step
 ```
 
 `UseJitter = false` matters because Polly's web retry settings turn on random extra waiting by
-default. The startup check (section 9) works out the minimum total timeout from a fixed wait
+default. The startup check (section 10) works out the minimum total timeout from a fixed wait
 schedule; random waits would make that number wrong.
 
 ---
@@ -818,7 +841,86 @@ Things to know:
 
 ---
 
-## 9. Settings
+## 9. Live updates to apps (`PriceHub`)
+
+SignalR is the library that keeps a connection open from the server to an app, so the server can
+send messages without being asked. A **hub** is the server end of that connection: a class whose
+public methods an app can call. A **group** is a named list of connections the server can send to in
+one go.
+
+There is one hub, `PriceHub`, at `/hubs/price`, and one group per symbol, named `price:XAUUSD`.
+
+```
+app                                    server
+───                                    ──────
+connect to /hubs/price      ─────────►
+Subscribe("xauusd")         ─────────► PriceHub.Subscribe
+                                         1. match the symbol ignoring case → "XAUUSD"
+                                         2. join group "price:XAUUSD"
+                                         3. send the held price and moves to this app only
+PriceUpdated(...)           ◄─────────
+
+            … every poll that saves a price …
+
+                                       PricePollingService → TryPublishAsync("XAUUSD")
+                                         → SignalRPriceBroadcaster: send to group "price:XAUUSD"
+PriceUpdated(...)           ◄─────────
+```
+
+**The pricing code never sees SignalR.** The poller only knows `IPriceBroadcaster`, declared in
+`Aurum.App.Infrastructure.Pricing/Realtime/`. The SignalR version lives in `Aurum.Api/Hubs/` and is
+registered once in `Program.cs` (D-19).
+
+**Both paths build the message the same way.** The hub on subscribe and the sender after a poll each
+read `ILatestQuoteCache.Get` and `IDeltaEngine.GetSnapshot`, then call `PriceUpdate.From`. That is the
+only place pricing records become app messages:
+
+```csharp
+// src/Aurum.Api/Hubs/PriceUpdate.cs
+public sealed record PriceUpdate(
+    string Symbol,
+    QuoteMessage? Quote,                                     // null: the app holds no price yet
+    IReadOnlyDictionary<string, WindowMessage?> Windows);    // always "1m" … "1d"; null = no answer
+```
+
+What an app receives, with two prices 15 minutes apart (SignalR sends property names starting
+with a small letter; some fields left out):
+
+```json
+{
+  "symbol": "XAUUSD",
+  "quote": { "mid": 4010, "bid": null, "ask": null, "observedAt": "2026-06-01T12:00:00+00:00",
+             "sourceCode": "goldapi.io", "isFallback": false, "age": "00:00:00", "isStale": false },
+  "windows": {
+    "1m": null, "5m": null,
+    "15m": { "deltaPercent": 0.25, "deltaAbsolute": 10, "sampleCount": 2, "crossSource": false },
+    "1h": null, "4h": null, "1d": null
+  }
+}
+```
+
+Rules worth knowing:
+
+- **Join the group, then send.** Sending first leaves a gap in which a new price goes to the group
+  before the app is in it, and the app misses it. **No test catches this order**; only the comment in
+  `Subscribe` protects it (D-19).
+- **The symbol is changed to its stored spelling.** Group names are case-sensitive, so without this
+  `xauusd` would be its own group that never gets a price. An unknown symbol throws a `HubException`
+  listing the supported ones, and the app sees that message.
+- **A window with no answer is `null`, and its key is always there** (D-17). Leaving the key out would
+  look like "this window isn't supported".
+- **The hub reads the cache and the engine directly**, not through MediatR. A hub call is not a web
+  request with a database transaction, and a query that only read the cache would be a handler that
+  just passes the call on. Item 8 may change this.
+- **The list of services tried is not sent.** Item 8's sources endpoint will serve it.
+
+Not handled yet: logins (anyone can connect), a CORS policy for browsers on another address, sending
+events, and more than one server. Rarely, the subscribe message and a poll's message can arrive in
+either order; an app should keep the one with the newer `observedAt`.
+
+---
+
+## 10. Settings
 
 Settings come from `src/Aurum.Api/appsettings.json`, overridden by environment variables. A double
 underscore in a variable name stands for a nested section, so
@@ -877,7 +979,7 @@ pass. The backups are allowed to run out during a long outage; the counter stops
 
 ---
 
-## 10. The database
+## 11. The database
 
 Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3):
 
@@ -913,7 +1015,7 @@ Things that will catch you out:
 
 ---
 
-## 11. The request pipeline and app logging (ready, not used yet)
+## 12. The request pipeline and app logging (ready, not used yet)
 
 This part is built and registered but has no endpoints using it. It is the path every future
 endpoint will follow:
@@ -973,7 +1075,7 @@ AppLogQueue (holds up to 10,000) ──► AppLogDrainService
 
 ---
 
-## 12. Tests
+## 13. Tests
 
 Everything is in `src/Aurum.Api.Tests`. Run them with `dotnet test`. **Docker must be running**,
 because many tests start a real Postgres container using Testcontainers (a library that starts
@@ -987,6 +1089,7 @@ Aurum.Api.Tests/
 │   ├── ScriptedPriceFeed.cs   ← a fake feed, for poller tests
 │   ├── CountingHandler.cs     ← a fake network that counts requests
 │   ├── ListLogger.cs          ← captures log lines so a test can check them
+│   ├── RecordingBroadcaster.cs ← a fake sender that remembers each send, and can look or throw
 │   └── …
 └── Modules/Pricing/           ← one test class per production class, roughly
 ```
@@ -996,6 +1099,7 @@ Aurum.Api.Tests/
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
 | `PricePollingServiceTests`, `PriceEventSqlTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
+| | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 
 Run one class, or a set of fast tests:
 
@@ -1003,6 +1107,13 @@ Run one class, or a set of fast tests:
 dotnet test --filter "FullyQualifiedName~SourceCircuitTests"   # one class
 dotnet test --filter "FullyQualifiedName~ResolvePeriod"        # one test name, no container needed
 ```
+
+`PriceHubTests` uses ASP.NET Core's `TestServer`, which runs the web server inside the test process
+with no network. The SignalR client connects to it with long polling, meaning it asks the server
+again and again for new messages, because `TestServer` has no socket for WebSockets. So a test that
+checks a message did *not* arrive waits 250 milliseconds first. The fake clock is handed to the cache
+and the engine directly and kept out of the server's container, so SignalR's own timers keep real
+time.
 
 Four things to know before writing a test:
 
@@ -1020,7 +1131,7 @@ Four things to know before writing a test:
 
 ---
 
-## 13. The app (`app/`)
+## 14. The app (`app/`)
 
 An empty Expo shell (Expo is a toolkit for building React Native apps for phones and the web).
 `App.tsx` shows a placeholder screen with a summary of fake prices from `src/fixture/generateTicks.ts`.
@@ -1029,7 +1140,7 @@ is planned after the API endpoints exist.
 
 ---
 
-## 14. Where to look when…
+## 15. Where to look when…
 
 | You want to… | Start here |
 |---|---|
@@ -1041,6 +1152,7 @@ is planned after the API endpoints exist.
 | Change the circuit breaker | `PriceFeedCircuit:FailureThreshold` / `BreakDuration`, logic in `SourceCircuit.cs`. |
 | Change the price-move windows | `DeltaWindow.cs`. They are fixed on purpose; the event thresholds are tuned to them. |
 | Change what counts as a big move | `Significance:Windows` in `appsettings.json`. Rename `ThresholdProfile` when the numbers change, so old and new events can be told apart. |
+| Change what apps receive live | `src/Aurum.Api/Hubs/PriceUpdate.cs`. Every message is built in `PriceUpdate.From`; `PriceHubTests` reads the raw JSON. |
 | See recent events | `SELECT "WindowCode", "Direction", "DeltaPercent", "TriggeredRule", "WindowEndedAt" FROM price_events ORDER BY "WindowEndedAt" DESC;` |
 | Add a new table | A new entity in `Entities/`, its setup in `AurumDbContext.OnModelCreating`, then `dotnet ef migrations add <Name> --project src/Aurum.App.Infrastructure.Data`. |
 | Register a new class | `src/Aurum.Api/Program.cs`. Nowhere else (D-5). |
@@ -1048,7 +1160,7 @@ is planned after the API endpoints exist.
 
 ---
 
-## 15. What the other docs describe that does not exist yet
+## 16. What the other docs describe that does not exist yet
 
 `docs/best-practices.md`, `docs/best-practices-redux.md`, `docs/best-practices-api.md` and
 `docs/cqrs-guide.md` were written for a larger admin application. Use them as the target shape, not
@@ -1066,7 +1178,7 @@ as a map of this repository. In particular:
 
 ---
 
-## 16. Word list
+## 17. Word list
 
 | Term | Meaning here |
 |---|---|
@@ -1088,4 +1200,8 @@ as a map of this repository. In particular:
 | **Threshold** | The smallest move, in percent, that counts as an event for one window (`MinPercent`). |
 | **Waiting period (cooldown)** | How long one symbol and window stay quiet after an event. Checked in the database. |
 | **Hypertable** | A TimescaleDB table that is stored split by time. |
+| **SignalR** | The library that keeps a connection open so the server can send to apps without being asked. |
+| **Hub** | The server end of a SignalR connection; `PriceHub`. Apps call its methods. |
+| **Group** | A named list of connections the server sends to together; one per symbol, `price:XAUUSD`. |
+| **Broadcast / publish** | Sending one symbol's price and moves to everyone in its group. |
 | **Scope** | A short-lived group of objects, created for one web request or one poll and then thrown away. |

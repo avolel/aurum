@@ -2,6 +2,7 @@ using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Deltas;
+using Aurum.App.Infrastructure.Pricing.Realtime;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
@@ -23,6 +24,7 @@ public class PricePollingService(
     ILatestQuoteCache cache,
     IDeltaEngine deltas,
     IOptions<SignificanceOptions> significance,
+    IPriceBroadcaster broadcaster,
     ILogger<PricePollingService> logger) : BackgroundService
 {
     /// <summary>
@@ -162,6 +164,9 @@ public class PricePollingService(
         await ProjectAttemptsAsync(db, result.Attempts, ct);
         await db.SaveChangesAsync(ct);
 
+        // After the save, so an app is never told a price the database does not hold (D-19).
+        await TryPublishAsync(result.Quote.Symbol, ct);
+
         // After the save: an event must never point at prices the database failed to keep (D-18).
         await SaveEventsAsync(db, result.Quote.Symbol, ct);
 
@@ -177,6 +182,28 @@ public class PricePollingService(
             "Tick {Symbol} mid={Mid} from {Source}, {StalenessMs}ms stale.",
             result.Quote.Symbol, result.Quote.Mid, result.Quote.SourceCode,
             (result.Quote.ReceivedAt - result.Quote.ObservedAt).TotalMilliseconds);
+    }
+
+    /// <summary>
+    /// Sends the symbol's held price and moves to subscribed apps.
+    /// </summary>
+    /// <remarks>
+    /// Its own catch: a failed send must not skip the events that follow (D-19).
+    /// </remarks>
+    private async Task TryPublishAsync(string symbol, CancellationToken ct)
+    {
+        try
+        {
+            await broadcaster.PublishAsync(symbol, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Sending {Symbol} to live clients failed; the poll carries on.", symbol);
+        }
     }
 
     /// <summary>

@@ -1113,8 +1113,8 @@ claim are exactly that, whether or not something further down saves the day.
   `PollInterval`.
 - At startup, `EnsureWarmAsync` reloads the newest saved price per symbol from the database.
   `PricePollingService` waits for it before its first check.
-- After each successful check, the order is: save in memory, then save to the database, then (from
-  item 7) send to connected apps.
+- After each successful check, the order is: save in memory, then save to the database, then send to
+  connected apps (item 7, D-19).
 
 All of this was built and tested by 2026-10-03.
 
@@ -1487,3 +1487,123 @@ explanations, which are what the duplicates actually affect.
 
 Not done in this item: a rule based on volatility (D-17 mentions one; the todo did not ask for it),
 and a per-service price correction (needs data I don't have).
+
+## D-19 — Live prices go to connected apps through one SignalR sender, set up directly in `Program.cs`
+
+**DECIDED:**
+
+- After each poll saves its price, the app sends the symbol's held price and its six price moves to
+  every connected app that asked for that symbol. SignalR is the library that does this: it keeps a
+  connection open from the server to the app, so the server can send without being asked.
+- The pricing code talks only to an interface, `IPriceBroadcaster`, with one method:
+  `PublishAsync(symbol)`. The real sender, `SignalRPriceBroadcaster`, lives in `Aurum.Api` and is set
+  up with one line in `Program.cs`. There is no do-nothing sender and no "replace it later" step.
+- Apps connect to `/hubs/price` and call `Subscribe("XAUUSD")` or `Unsubscribe("XAUUSD")`. Each
+  symbol has its own group of listeners, named `price:XAUUSD`.
+- An app that subscribes gets the held price and moves straight away, not at the next poll.
+- The send happens after the price is saved and before events are saved. A failed send is logged
+  and the poll carries on.
+
+Built on 2026-10-08.
+
+**Why one direct registration, not a do-nothing default plus a replacement.** The Phase 1 todo planned
+for the pricing code to register a do-nothing sender (`NullPriceBroadcaster`), and for a separate
+realtime setup method to replace it with the real one later. That was needed only because two setup
+methods each registered a sender, and the order of the two calls decided which one won. A test would
+then have checked that order. D-5 put every registration in `Program.cs`, so there is now one
+registration and no order to get wrong. The do-nothing sender, the replace step and the order test
+were all dropped. The cost: tests that build `PricePollingService` by hand must pass a sender. They
+already pass every other dependency by hand, and they use `RecordingBroadcaster`, which remembers
+each send.
+
+**Why the hub reads the cache and the move engine directly, not through MediatR.** MediatR is the
+library that routes a request object to its handler. A hub method is not a web request with a
+database transaction. A MediatR query that only read the cache would be a handler that just passes
+the call on, which CLAUDE.md forbids. Whether `Aurum.App.Application` may refer to the pricing project
+at all is item 8's decision (D-20). If item 8 moves reads behind MediatR, the hub moves with them.
+
+**Why join the group first, then send the held price.** If the hub sent the held price first and
+joined second, a new price could be sent to the group in the gap between the two lines. The app would
+not be in the group yet, so it would miss that price and keep showing the older one until the next
+poll. **No test catches this.** I swapped the two lines on purpose and every test still passed: the
+gap is a few microseconds, and no test can make a broadcast land inside it on demand. The order is
+protected only by a comment in `PriceHub.Subscribe`.
+
+**Why the symbol is changed to its stored spelling.** SignalR group names are case-sensitive. An app
+that subscribed as `xauusd` would join a group called `price:xauusd`, while the poller sends to
+`price:XAUUSD`. The app would be connected and would never get a price. `Subscribe` matches the symbol
+against `SupportedSymbol.All` ignoring case and uses the stored spelling. An unknown symbol is refused
+with a message that lists the supported ones. `Symbol_case_does_not_split_groups` catches a
+regression; I removed the change on purpose and it went red.
+
+**The messages are their own records, and "no answer" stays null on the wire.** `PriceUpdate` holds
+the symbol, a `QuoteMessage` and a `Windows` dictionary keyed by window code (`1m` to `1d`). They are
+separate from the pricing records and the database classes, so changing a table can't silently change
+what apps receive. Two rules:
+
+- `Windows` **always has all six keys.** A window with no answer is present with the value `null`
+  (D-17). Leaving the key out would make "unknown" look like "this window isn't supported". I made a
+  missing window send a zero-filled record on purpose, and
+  `A_window_with_no_answer_arrives_as_null_not_zero` went red. That test reads the raw JSON, so it
+  checks what the app actually receives.
+- `Quote` is `null` when the app holds no price yet. A new subscriber still gets a message, which says
+  "connected, no price yet" instead of nothing.
+
+`QuoteMessage` leaves out the list of services tried. Item 8's sources endpoint will serve that.
+`WindowMessage` carries the start and end times instead of the internal `Sample` type.
+
+`PriceUpdate.From(symbol, quote, moves)` is the only place that turns pricing records into app
+messages. The hub and the sender both use it. It takes the symbol as well, because when there is no
+price and no moves there is nothing else to read it from.
+
+**Why the send goes after the price save and before the events.** The order after each poll is now:
+save in memory, save the price to the database, send to apps, save events.
+
+- After the price save, so an app is never told a price the database failed to keep.
+  `A_poll_publishes_after_the_tick_is_saved` checks that the price row exists at the moment the
+  sender is called. `A_failed_save_does_not_publish` checks that a failed save sends nothing. I moved
+  the send above the save on purpose and both went red.
+- Before the events, because a failed event insert throws into the poll's error handling. If the send
+  came after it, one bad event would also keep the price from reaching apps.
+- In its own error handling, because a failed send must not skip the events.
+  `A_failed_publish_still_saves_events` uses a sender that always throws. I made the error handling
+  rethrow on purpose and that test went red.
+
+**How the hub is tested.** `PriceHubTests` starts a small web server in memory with ASP.NET Core's
+`TestServer`, maps the real hub, and connects a real SignalR client to it. It uses the real cache and
+move engine on a fake clock. It needs no database and no Docker, and runs in under a second. Two test
+packages were added for this, `Microsoft.AspNetCore.TestHost` and
+`Microsoft.AspNetCore.SignalR.Client`. A hand-written fake of SignalR's client list would check none of
+the things that actually break: JSON names, nulls inside a dictionary, and group names. The client
+uses long polling, meaning it asks the server again and again for new messages, because `TestServer`
+has no real network socket for WebSockets. So a test that waits to be sure a message did *not* arrive
+sleeps for 250 milliseconds.
+
+**Known limits.**
+
+- **Anyone can connect.** Logins are out of scope for Phase 1, so `/hubs/price` is open. Item 8's
+  endpoints will be too.
+- **No CORS policy.** CORS is the browser rule that blocks a web page from calling a server at another
+  address unless the server allows it. The dashboard is a later batch of work and will need one then.
+- **Events are not sent over SignalR.** The todo asks for the price and moves only. Apps will read
+  saved events from item 8's `/v1/events`.
+- **Messages can arrive out of order.** Rarely, the price sent on subscribe and a broadcast from a poll
+  can reach the app in either order. The app should keep whichever has the newer `ObservedAt`. This
+  is for the dashboard work.
+- **One server only.** The groups live in one process's memory. That fits the existing rule of one
+  copy of the API. Running more copies would need a SignalR backplane, which is a shared service that
+  passes each message to every copy.
+
+Turned down: **the do-nothing default sender plus a replacement.** Two registrations for one service,
+and a test whose only job is to check their order. The order problem came from the setup methods D-5
+removed.
+
+Turned down: **a MediatR query for the hub's read.** It would be a handler that only passes the call
+to the cache, and it would decide item 8's question about which project may refer to which, early.
+
+Turned down: **passing the price to `PublishAsync`.** The sender reads the cache and the move engine
+itself, the same way the hub does on subscribe. Passing the price in would give two places that build
+the message, and they could drift apart.
+
+Turned down: **a hand-written fake of SignalR for the hub tests.** It would check that the hub called
+a method, not what the app receives.

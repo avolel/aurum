@@ -5,6 +5,7 @@ using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Jobs;
+using Aurum.App.Infrastructure.Pricing.Realtime;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
@@ -65,7 +66,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
     public Task DisposeAsync() => Task.CompletedTask;
 
     private (PricePollingService Poller, FakeTimeProvider Clock, LatestQuoteCache Cache, DeltaEngine Deltas) Build(
-        IPriceFeed feed, IInterceptor? interceptor = null)
+        IPriceFeed feed, IInterceptor? interceptor = null, IPriceBroadcaster? broadcaster = null)
     {
         var clock = new FakeTimeProvider(Start);
 
@@ -94,7 +95,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
         var poller = new PricePollingService(
             scopes, sources, clock, polling, cache, deltas, Options.Create(significance),
-            NullLogger<PricePollingService>.Instance);
+            broadcaster ?? new RecordingBroadcaster(), NullLogger<PricePollingService>.Instance);
 
         return (poller, clock, cache, deltas);
     }
@@ -651,5 +652,103 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         await using var db = fixture.CreateDbContext();
         Assert.False(await db.PriceTicks.AnyAsync(t => t.ObservedAt == Start + PollInterval, Ct));
         Assert.False(await db.PriceEvents.AnyAsync(Ct));
+    }
+
+    /// <summary>
+    /// An app is never told a price the database does not hold (D-19). The recorder looks for the
+    /// tick at the moment it is called.
+    /// </summary>
+    [Fact]
+    public async Task A_poll_publishes_after_the_tick_is_saved()
+    {
+        var tickSavedAtPublish = false;
+        var broadcaster = new RecordingBroadcaster(async _ =>
+        {
+            await using var db = fixture.CreateDbContext();
+            tickSavedAtPublish = await db.PriceTicks.AnyAsync(t => t.ObservedAt == Start, Ct);
+        });
+
+        var feed = new ScriptedPriceFeed(_ => Quote(Primary,
+            [new SourceAttempt(Primary, SourceAttemptOutcome.Success)]));
+
+        var (poller, _, _, _) = Build(feed, broadcaster: broadcaster);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            await broadcaster.FirstPublish.WaitAsync(CallTimeout, Ct);
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        Assert.Equal([SupportedSymbol.Gold], broadcaster.Published);
+        Assert.True(tickSavedAtPublish);
+    }
+
+    /// <summary>
+    /// A failed send is logged and the poll carries on to its events (D-19).
+    /// </summary>
+    [Fact]
+    public async Task A_failed_publish_still_saves_events()
+    {
+        // 4,000 then 4,020 five minutes later: +0.5%, over the 0.25% 5m threshold.
+        var feed = new ScriptedPriceFeed(call =>
+        {
+            var observedAt = Start + PollInterval * call;
+            return new PriceFeedResult(
+                PriceQuote.Normalize(SupportedSymbol.Gold, observedAt, observedAt, null, null,
+                    4_000m + 20m * call, Primary),
+                Primary,
+                [new SourceAttempt(Primary, SourceAttemptOutcome.Success)]);
+        });
+
+        var broadcaster = new RecordingBroadcaster(_ => throw new InvalidOperationException("hub down"));
+
+        var (poller, clock, _, _) = Build(feed, broadcaster: broadcaster);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            await feed.WaitForCallAsync(1).WaitAsync(CallTimeout, Ct);
+            await WaitUntilAsync(db => db.PriceTicks.AnyAsync(t => t.ObservedAt == Start, Ct),
+                "the first tick to be persisted");
+
+            clock.Advance(PollInterval);
+            await feed.WaitForCallAsync(2).WaitAsync(CallTimeout, Ct);
+            await WaitUntilAsync(db => db.PriceEvents.AnyAsync(Ct), "the event to be saved");
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        Assert.Equal(2, broadcaster.Published.Count);
+    }
+
+    [Fact]
+    public async Task A_failed_save_does_not_publish()
+    {
+        var feed = new ScriptedPriceFeed(_ => Quote(Primary,
+            [new SourceAttempt(Primary, SourceAttemptOutcome.Success)]));
+
+        var failingSave = new FailingTickSaveInterceptor(failAt: Start);
+        var broadcaster = new RecordingBroadcaster();
+
+        var (poller, _, _, _) = Build(feed, failingSave, broadcaster);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            // In the wrong order the publish has already happened by the time the save is reached.
+            await failingSave.Tripped.WaitAsync(CallTimeout, Ct);
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        Assert.Empty(broadcaster.Published);
     }
 }
