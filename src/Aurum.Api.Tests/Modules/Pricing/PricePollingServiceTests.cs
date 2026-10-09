@@ -8,6 +8,7 @@ using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -64,7 +65,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
     public Task DisposeAsync() => Task.CompletedTask;
 
     private (PricePollingService Poller, FakeTimeProvider Clock, LatestQuoteCache Cache, DeltaEngine Deltas) Build(
-        IPriceFeed feed)
+        IPriceFeed feed, IInterceptor? interceptor = null)
     {
         var clock = new FakeTimeProvider(Start);
 
@@ -73,7 +74,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
         // Transient: the poller opens a scope per poll and a DbContext is not reusable across
         // them once one has failed.
-        services.AddTransient(_ => fixture.CreateDbContext(clock));
+        services.AddTransient(_ => fixture.CreateDbContext(clock, interceptor));
 
         var scopes = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         var sources = TestPriceSources.ForChain((Primary, 1, true), (Secondary, 2, true));
@@ -600,5 +601,55 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Equal(Start, saved.WindowStartedAt);
         Assert.Equal(Start + PollInterval, saved.WindowEndedAt);
         Assert.Equal(Primary, saved.SourceCode);
+    }
+
+    /// <summary>
+    /// An event must never point at a price the database failed to keep (D-18).
+    /// </summary>
+    /// <remarks>
+    /// Mutation-checked by moving SaveEventsAsync above SaveChangesAsync.
+    /// </remarks>
+    [Fact]
+    public async Task A_poll_whose_tick_fails_to_save_writes_no_event()
+    {
+        // 4,000 then 4,020 five minutes later: +0.5%, over the 0.25% 5m threshold
+        var feed = new ScriptedPriceFeed(call =>
+        {
+            var observedAt = Start + PollInterval * call;
+            return new PriceFeedResult(
+                PriceQuote.Normalize(SupportedSymbol.Gold, observedAt, observedAt, null, null,
+                    4_000m + 20m * call, Primary),
+                Primary,
+                [new SourceAttempt(Primary, SourceAttemptOutcome.Success)]);
+        });
+
+        // Only the second poll's tick fails: that is the poll whose window crosses the threshold
+        var failingSave = new FailingTickSaveInterceptor(failAt: Start + PollInterval);
+
+        var (poller, clock, _, _) = Build(feed, failingSave);
+        await poller.StartAsync(Ct);
+
+        try
+        {
+            await feed.WaitForCallAsync(1).WaitAsync(CallTimeout, Ct);
+            await WaitUntilAsync(db => db.PriceTicks.AnyAsync(t => t.ObservedAt == Start, Ct),
+                "the first tick to be persisted");
+
+            clock.Advance(PollInterval);
+            await feed.WaitForCallAsync(2).WaitAsync(CallTimeout, Ct);
+
+            // "No rows" holds from the start, so polling for it proves nothing. Wait for the failed
+            // save instead. In the wrong order the event is already written by then; in the right
+            // order the throw skips it.
+            await failingSave.Tripped.WaitAsync(CallTimeout, Ct);
+        }
+        finally
+        {
+            await poller.StopAsync(Ct);
+        }
+
+        await using var db = fixture.CreateDbContext();
+        Assert.False(await db.PriceTicks.AnyAsync(t => t.ObservedAt == Start + PollInterval, Ct));
+        Assert.False(await db.PriceEvents.AnyAsync(Ct));
     }
 }

@@ -458,7 +458,8 @@ Related invariants:
 `SignificanceClassifier` (`Pricing/Deltas/`) turns a `DeltaSnapshot` into `PriceEvent`s;
 `PriceEventSql.InsertAsync` saves each one. `PricePollingService.SaveEventsAsync` runs both **after**
 the tick's `SaveChangesAsync`, so an event never points at a price the database failed to keep. A
-failed insert falls into the poll's existing catch.
+failed insert falls into the poll's existing catch. `A_poll_whose_tick_fails_to_save_writes_no_event`
+pins the order; it was mutation-checked by moving the insert above the save.
 
 - **The waiting period is in the insert, not in memory.** `WHERE NOT EXISTS` an event for the same
   `(Symbol, WindowCode)` with `WindowEndedAt > @windowEndedAt - @cooldown`, plus `ON CONFLICT DO

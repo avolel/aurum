@@ -488,7 +488,7 @@ doesn't catch the repeat that follows. D-18 has the worked example.*
       - Without a container: `SignificanceClassifierTests`, `SignificanceOptionsTests`, and
         `Shipped_significance_thresholds_are_valid_and_match_BR02`.
       - `PricePollingServiceTests.A_poll_whose_window_crosses_its_threshold_writes_one_event`.
-- [ ] Check the tests notice when a rule is broken on purpose: drop the cross-service multiplier, drop
+- [x] Check the tests notice when a rule is broken on purpose: drop the cross-service multiplier, drop
       the `NOT EXISTS`, and move the event insert above the price save. Each should turn a named test
       red. Not recorded as done yet.
 - [x] **D-18 written up**: why `price_events` isn't a TimescaleDB table, why the waiting period lives

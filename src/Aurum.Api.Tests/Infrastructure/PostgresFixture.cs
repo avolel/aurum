@@ -2,6 +2,7 @@ using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using DotNet.Testcontainers.Builders;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Testcontainers.PostgreSql;
 
 namespace Aurum.Api.Tests.Infrastructure;
@@ -52,13 +53,17 @@ public class PostgresFixture : IAsyncLifetime
     /// A context over the fixture's database. Pass <paramref name="clock"/> when the test needs
     /// EF-written audit stamps to agree with the clock the governor writes its own rows under.
     /// </summary>
-    public AurumDbContext CreateDbContext(TimeProvider? clock = null)
+    public AurumDbContext CreateDbContext(TimeProvider? clock = null, IInterceptor? interceptor = null)
     {
-        var options = new DbContextOptionsBuilder<AurumDbContext>()
-            .UseNpgsql(ConnectionString)
-            .Options;
+        var builder = new DbContextOptionsBuilder<AurumDbContext>()
+            .UseNpgsql(ConnectionString);
 
-        return new AurumDbContext(options, clock ?? TimeProvider.System);
+        if (interceptor is not null)
+        {
+            builder.AddInterceptors(interceptor);
+        }
+
+        return new AurumDbContext(builder.Options, clock ?? TimeProvider.System);
     }
 
     /// <summary>Stores ticks with <c>ReceivedAt</c> equal to <c>ObservedAt</c>. Source codes must be seeded ones.</summary>
