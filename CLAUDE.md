@@ -126,7 +126,8 @@ src/
 └── Aurum.Api.Tests/
 ```
 
-Three things about this layout are not in the docs and will look wrong without the reason:
+Three things about this layout will look wrong without the reason. `best-practices-api.md` notes
+each one in a line; the reasoning is here:
 
 - **`Aurum.App.Infrastructure.Pricing` is a fifth project the layer table does not list.** The price
   sources are external HTTP clients and the poller is a background job; neither is "EF Core queries,
@@ -138,8 +139,7 @@ Three things about this layout are not in the docs and will look wrong without t
   composition root and every registration is in `Program.cs`, so it has to be able to name every
   concrete type it registers. The table's rule still holds for *code in `Controllers/`*: a
   controller that reaches past `IMediator` into Infrastructure is the violation that rule is about.
-- **`AutoMapper` is deliberately absent**, although `best-practices-api.md` and `cqrs-guide.md` both
-  assume it. Every published version, 15.0.1 included, carries the unpatched high-severity advisory
+- **`AutoMapper` is deliberately absent.** Every published version, 15.0.1 included, carries the unpatched high-severity advisory
   GHSA-rvv3-g6hj-g44x, so there is no version to upgrade to. Handlers map entity to DTO by hand
   until that has a fix. `MediatR` is pinned to 12.5.0 for a different reason: 13+ requires a paid
   licence key validated at runtime, so an unpinned bump fails the first `Send()` in production
@@ -171,9 +171,9 @@ An Expo scaffold, and little more: `App.tsx`, `src/fixture/generateTicks.ts` and
 
 **There is no Expo Router, no Redux, no NativeWind, no Gluestack UI, no `src/subscreens/`, no
 `components/`, no `babel.config.js`, `jest.config.js` or `eslint.config.js` in this repository.**
-`docs/best-practices.md` and `docs/best-practices-redux.md` describe a mature admin application and
-are **aspirational here** — treat them as the target shape for Phase 4, not as a description of
-anything you can import today. Check that a path exists before citing it.
+`docs/best-practices.md` and `docs/best-practices-redux.md` are the **target shape for Phase 4**, not
+a description of anything you can import today. Examples in `best-practices.md` marked "Found in the
+original app" come from another project. Check that a path exists before citing it.
 
 ### Data Flow (CQRS with MediatR)
  
@@ -185,8 +185,7 @@ Request → Controller → IMediator.Send() → Pipeline Behaviors → Handler �
  
 Pipeline order: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler
 
-**The DbContext is `AurumDbContext`.** The docs in `docs/` call it `ApplicationDbContext`
-throughout; no such type exists here.
+**The DbContext is `AurumDbContext`.**
 
 **There are no controllers yet.** The behaviors, `IAppLogService<T>` and `ApiResponse<T>` are
 registered and ready; the first controller lands with item 8. Until then the only thing running
@@ -202,10 +201,8 @@ on a schedule is `PricePollingService`, a `BackgroundService` that does not go t
  
 ### Feature Folder Structure
 
-Illustrated with `PriceSources`, the feature item 8 will add. The docs in `docs/` use `Prospects`
-and `Referrals`; those belong to a different application and no such feature exists here. Note the
-presentation project is `Aurum.Api`, not `Aurum.App.Api` — `best-practices-api.md`'s layer table is
-right and `cqrs-guide.md` is wrong on that one line.
+Illustrated with `PriceSources`, the feature item 8 will add; `cqrs-guide.md` uses the same example.
+None of these files exist yet.
  
 ```
 Aurum.Api/Controllers/PriceSourcesController.cs            ← thin, dispatches via IMediator
@@ -249,11 +246,9 @@ Aurum.App.Infrastructure.Data/Repositories/PriceSources/
 - No manual transaction management — `TransactionBehavior` handles it
 - Never returns raw entities — always DTOs
 - Never hardcode status strings or IDs — use constants. Here that means `SupportedSymbol.*` and
-  each source's `SourceCode` constant (`GoldApiIoSource.SourceCode`). The `ReferralFileStatus.*`
-  / `AppointmentStatusIds.*` families the docs cite belong to a different application and do not
-  exist in this repository. If a constants class doesn't exist for a domain, create one. The same
-  applies to the frontend — named constants, not inline magic numbers.
- one. The same applies to frontend — define named constants (e.g., `APPOINTMENT_STATUS_SCHEDULED = 1`) rather than inline magic numbers.
+  each source's `SourceCode` constant (`GoldApiIoSource.SourceCode`). If a constants class doesn't
+  exist for a domain, create one. The same applies to the frontend — named constants, not inline
+  magic numbers.
  
 ### Validator Rules
  

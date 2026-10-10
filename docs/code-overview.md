@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | The work still to do in Phase 1. |
-| `docs/best-practices*.md`, `docs/cqrs-guide.md` | The target shape for future code. **Parts of these describe a different, larger app.** See "What the other docs describe that does not exist yet" at the end. |
+| `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
 Numbers in brackets, like (D-7), point to entries in the decision log.
@@ -1160,21 +1160,18 @@ is planned after the API endpoints exist.
 
 ---
 
-## 16. What the other docs describe that does not exist yet
+## 16. What the other docs describe that is not built yet
 
 `docs/best-practices.md`, `docs/best-practices-redux.md`, `docs/best-practices-api.md` and
-`docs/cqrs-guide.md` were written for a larger admin application. Use them as the target shape, not
-as a map of this repository. In particular:
+`docs/cqrs-guide.md` describe how Aurum's code should look once it grows. Use them as a target, not
+as a map of this repository. The examples in `best-practices.md` marked "Found in the original app"
+come from another project, and their names do not exist here. The main gaps:
 
-| The docs mention | In this repository |
+| The docs describe | In this repository |
 |---|---|
-| `ApplicationDbContext` | It is called `AurumDbContext`. |
-| `Aurum.App.Api` | The project is `Aurum.Api`. |
-| AutoMapper | Not used. Handlers map by hand, because every AutoMapper version has an unfixed security advisory. |
-| Prospects, Referrals, `ReferralFileStatus`, `AppointmentStatusIds` | From the other application. None exist here. |
-| Expo Router, Redux, NativeWind, Gluestack UI, `components/` | None installed. The app is an empty shell. |
-| Per-layer `ServiceCollectionExtensions` / `Add<Module>Module` | Removed. Everything is in `Program.cs` (D-5). |
-| Controllers, repositories | None written yet. The first ones come with item 8. |
+| Controllers, feature repositories | None written yet. The first ones come with item 8. |
+| Redux, Expo Router, `components/` | None installed. The app is an empty shell, and these are the target for Phase 4. |
+| Mapping between database rows and DTOs (the plain classes the API sends) | Done by hand in each handler. AutoMapper is not used, because every version has an unfixed security advisory. |
 
 ---
 
