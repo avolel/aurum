@@ -39,38 +39,58 @@ live connection is at `/hubs/price` (section 9). Apart from that, the only web a
 are the two health checks, `/health` and `/health/ready`. The endpoints for the price, its history
 and the events are item 8 in `ops/phase-1-todo.md`.
 
+This is one poll. **`PricePollingService` drives every step.** Each solid arrow is one call the
+poller makes, numbered in order. The label says what goes in and what comes out. An arrow with a head
+at both ends is a call that returns something. The dashed arrows are the only calls other pieces
+make, lettered under the step they belong to: 1a–1c happen inside ①, and 5a–5c inside ⑤.
+
 ```mermaid
-flowchart LR
-    subgraph outside["Outside price services"]
-        N[API Ninjas<br/>tried 1st]
-        G[GoldAPI<br/>tried 2nd]
-        M[MetalpriceAPI<br/>tried 3rd]
+flowchart TD
+    X[Outside price services<br/>API Ninjas, GoldAPI, MetalpriceAPI]
+    Q[QuotaHandler<br/>in each service's web client]
+    F[FailoverPriceFeed<br/>tries services in order]
+    P(((PricePollingService<br/>drives every step)))
+
+    subgraph memory["In memory, rebuilt from price_ticks at startup"]
+        C[LatestQuoteCache<br/>stores newest LatestQuote]
+        D[DeltaEngine<br/>stores ~36 h of Samples]
     end
 
-    subgraph api["Aurum.Api process"]
-        P[PricePollingService<br/>runs every 15 min]
-        F[FailoverPriceFeed<br/>tries services in order]
-        C[LatestQuoteCache<br/>newest price, in memory]
-        D[DeltaEngine<br/>price moves, in memory]
-        S[SignificanceClassifier<br/>which moves are big enough]
-        B[SignalRPriceBroadcaster<br/>sends to subscribed apps]
-    end
+    S[SignificanceClassifier<br/>decides, saves nothing]
+    B[SignalRPriceBroadcaster]
+    DB[(Postgres)]
+    A[Connected apps]
 
-    DB[(Postgres +<br/>TimescaleDB)]
-    A[Connected apps<br/>/hubs/price]
+    F <-- "① in: symbol XAUUSD<br/>out: PriceFeedResult" --> P
+    Q <-. "1a in: one web request per try<br/>out: PriceQuote" .-> F
+    X <-. "1b in: request<br/>out: JSON" .-> Q
+    Q -. "1c counts the try<br/>api_quota_windows" .-> DB
 
-    P --> F
-    F --> N & G & M
-    P --> C
-    P --> D
-    D -. snapshot .-> S
-    P --> DB
-    S -. events, saved by the poller .-> DB
-    F -. counts every request .-> DB
-    P --> B
-    B -. reads .-> C & D
-    B --> A
+    P -- "② in: PriceFeedResult" --> C
+    P -- "③ in: PriceQuote" --> D
+    P -- "④ in: PriceTick row<br/>+ price_sources times" --> DB
+    P -- "⑤ in: symbol only" --> B
+    B <-. "5a out: LatestQuoteSnapshot<br/>built on read" .-> C
+    B <-. "5b out: DeltaSnapshot<br/>built on read" .-> D
+    B -. "5c PriceUpdate" .-> A
+    P <-- "⑥ in: symbol<br/>out: DeltaSnapshot, built again" --> D
+    P <-- "⑦ in: DeltaSnapshot + settings<br/>out: list of PriceEvent" --> S
+    P -- "⑧ in: each PriceEvent<br/>via PriceEventSql" --> DB
 ```
+
+| Step | Who calls whom | In | Out | Why |
+|---|---|---|---|---|
+| ① | Poller → feed | The symbol | A `PriceFeedResult`: the quote, plus every service tried and what happened | The poller does not choose a service. The feed does. The poller later writes the outcomes to `price_sources`. |
+| 1a–1c | Feed → `QuotaHandler` → service, once per try | One web request | JSON, which the source class turns into a `PriceQuote` | The counter sits inside the retry loop, so every try is counted in `api_quota_windows` (section 6). |
+| ② | Poller → cache | The whole `PriceFeedResult` | Nothing | The cache needs to know whether a backup answered. |
+| ③ | Poller → engine | Only the `PriceQuote` | Nothing | The engine keeps only a time, a price and a service number (a 40-byte `Sample`). |
+| ④ | Poller → database | A `price_ticks` row, and the success or failure time for each service tried | Nothing | This happens after ② and ③, so a failed save cannot hide the price (D-16). |
+| ⑤ | Poller → sender | **Only the symbol** | Nothing | The sender reads the price itself, so the hub's `Subscribe` and the sender build the message the same way (D-19). |
+| 5a–5b | Sender → cache, engine | The symbol | A `LatestQuoteSnapshot` and a `DeltaSnapshot` | Neither snapshot is stored. Each is a new object, built from what is stored plus the clock. |
+| 5c | Sender → apps | One `PriceUpdate`, built by `PriceUpdate.From` | Nothing | The only place pricing records become app messages (section 9). |
+| ⑥ | Poller → engine | The symbol | The `DeltaSnapshot`, built again | **The engine works out the snapshot twice per poll**, at 5b and here. It is cheap: six searches over about 150 prices, once every 15 minutes. |
+| ⑦ | Poller → classifier | The snapshot and the settings | A list of `PriceEvent`s | The classifier only decides which moves count. It has no clock and no database, so it is tested without either. |
+| ⑧ | Poller → database | Each event, through `PriceEventSql.InsertAsync` | Whether it was saved | The insert is skipped if the same window fired within its waiting period (D-18). |
 
 ---
 
