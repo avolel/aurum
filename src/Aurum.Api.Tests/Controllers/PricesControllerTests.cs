@@ -74,7 +74,7 @@ public class PricesControllerTests
         Assert.Equal(503, status);
         Assert.False(body.Success);
         Assert.Equal(503, body.StatusCode);
-        Assert.Equal(PricesController.NoPriceMessage, body.Message);
+        Assert.Equal(ErrorMessages.NoPriceMessage, body.Message);
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public class PricesControllerTests
         var (status, body) = Unwrap(await CreateController().GetLive(SupportedSymbol.Gold, CancellationToken.None));
 
         Assert.Equal(500, status);
-        Assert.Equal(PricesController.UnexpectedErrorMessage, body.Message); // never the exception's own text
+        Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message); // never the exception's own text
         _appLog.Verify(
             l => l.LogErrorAsync(nameof(PricesController.GetLive), failure, 500, It.IsAny<CancellationToken>()),
             Times.Once);
