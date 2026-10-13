@@ -22,12 +22,15 @@
     <PackageReference Include="FluentValidation" Version="11.11.0" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
     <!-- AppLogDrainService is a BackgroundService. Hosting.Abstractions only — this layer defines
-         the drain, it does not build a host. -->
-    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+         the drain, it does not build a host. At least the version Http.Resilience pulls in through
+         the Pricing reference, or restore fails on a package downgrade. -->
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
+    <!-- The price handlers read the cache, circuits and quota ledger directly (D-20). -->
+    <ProjectReference Include="..\Aurum.App.Infrastructure.Pricing\Aurum.App.Infrastructure.Pricing.csproj" />
     <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
   </ItemGroup>
 

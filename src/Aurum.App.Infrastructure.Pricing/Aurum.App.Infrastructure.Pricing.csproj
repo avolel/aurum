@@ -43,10 +43,11 @@
     </AssemblyAttribute>
 
     <!-- The composition root, and the second cost of moving every registration into Program.cs.
-         SourceCircuitStore, QueryKeyAuthHandler, RegisteredPriceSource and both options validators
-         are internal because nothing outside this module should resolve them; Program.cs now has
-         to *name* them to register them. Making them public instead would put five types on the
-         module's public surface to satisfy a wiring concern, which is the larger leak. -->
+         QueryKeyAuthHandler, RegisteredPriceSource and both options validators are internal
+         because nothing outside this module should resolve them; Program.cs now has to *name*
+         them to register them. Making them public instead would put four types on the module's
+         public surface to satisfy a wiring concern, which is the larger leak. SourceCircuitStore
+         was in this list until the sources endpoint needed to read it (D-20). -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>Aurum.Api</_Parameter1>
     </AssemblyAttribute>

@@ -129,7 +129,11 @@ builder.Services.AddSingleton<IValidateOptions<PriceFeedCircuitOptions>, PriceFe
 
 // Singletons: each holds state that must outlive a poll, and none holds an HttpClient (D-12).
 // The cache and the delta engine reach the database through IServiceScopeFactory (D-16, D-17).
-builder.Services.AddSingleton<SourceCircuitStore>();
+// A factory because the constructor is internal, and the container only calls public ones (D-20).
+builder.Services.AddSingleton(sp => new SourceCircuitStore(
+    sp.GetServices<RegisteredPriceSource>(),
+    sp.GetRequiredService<TimeProvider>(),
+    sp.GetRequiredService<IOptions<PriceFeedCircuitOptions>>()));
 builder.Services.AddSingleton<ILatestQuoteCache, LatestQuoteCache>();
 builder.Services.AddSingleton<IDeltaEngine, DeltaEngine>();
 

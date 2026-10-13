@@ -13,6 +13,12 @@ namespace Aurum.App.Infrastructure.Data.Entities.Pricing;
 /// </remarks>
 public class PriceTick : AuditableEntity
 {
+    /// <summary>
+    /// How long TimescaleDB keeps ticks. The migration's <c>INTERVAL '30 days'</c> cannot refer to
+    /// this, so <c>SchemaTests</c> checks the two agree.
+    /// </summary>
+    public static readonly TimeSpan Retention = TimeSpan.FromDays(30);
+
     public long Id { get; set; }
 
     /// <summary>Instrument, e.g. <c>XAUUSD</c> (D-4).</summary>

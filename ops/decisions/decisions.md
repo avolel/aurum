@@ -1607,3 +1607,85 @@ the message, and they could drift apart.
 
 Turned down: **a hand-written fake of SignalR for the hub tests.** It would check that the hub called
 a method, not what the app receives.
+
+## D-20 — The read endpoints are ordinary controllers, and the Application layer reads the pricing code directly
+
+**DECIDED:**
+
+- Item 8 adds four read-only web endpoints: `/api/v1/price/live`, `/api/v1/price/history`,
+  `/api/v1/price/sources` and `/api/v1/events`. None of them calls a price service. They only read
+  what the poller already gathered.
+- They are controllers that hand each request to MediatR, like every other controller CLAUDE.md
+  describes. `Program.cs` already calls `app.MapControllers()`, so there is no second setup method.
+- `Aurum.App.Application` refers to `Aurum.App.Infrastructure.Pricing`, so the query handlers can read
+  the price cache, the circuit breakers, the request counter and the source settings.
+- `PriceHub` keeps reading the cache and the move engine directly, not through MediatR.
+- The endpoints are open in Phase 1. They have no `[Authorize]`.
+- Routes start with `/api/v1`, not the `/v1` the Phase 1 todo used.
+- The `price_sources.IsEnabled` column is deleted. The sources endpoint reads "switched on" from
+  settings.
+
+Started on 2026-10-12.
+
+**Why controllers, not a `MapPricingModule` method.** The Phase 1 todo planned these as minimal-API
+endpoints, meaning routes declared as lambdas in a setup method rather than as controller classes.
+They would have been set up by a second pricing setup method, `MapPricingModule`. D-5 removed setup
+methods and put every registration in `Program.cs`. Controllers need no new setup at all, and they
+follow the controller rules CLAUDE.md already has: thin, hand off to MediatR, log, and always answer
+with `ApiResponse<T>`.
+
+**Why Application refers to the pricing project, instead of declaring its own interfaces.** Three of
+the four handlers need pricing code: `ILatestQuoteCache`, `SourceCircuitStore`, `IQuotaGovernor` and
+`PriceSourcesOptions`. The other way was for Application to declare its own copy of each interface
+and for the pricing project to implement them. That is three new interfaces, each with one
+implementation, kept in step by hand. It would also make the pricing project refer to Application,
+the reverse of how the projects point today. The reference is one line in a project file. The rule
+that matters, "a controller never reaches past MediatR", still holds, because controllers only see
+`IMediator`.
+
+The cost: `SourceCircuitStore` had to become public so a handler can call `SnapshotAll()`. Two parts
+stay internal:
+
+- `For()`, which hands out a circuit that can record a failure. Nothing outside the feed should be
+  able to open a breaker.
+- The constructor. It takes `RegisteredPriceSource`, which is internal so nothing outside the pricing
+  project registers a source. The .NET container only calls public constructors, so `Program.cs`
+  builds the store with a small factory instead of `AddSingleton<SourceCircuitStore>()`.
+
+**Why the hub still reads directly.** D-19's reason holds. A hub method is not a web request, and a
+MediatR query that only read the cache would just pass the call on, which CLAUDE.md forbids. `/live`
+is different: its handler checks the symbol, maps the price to a reply, and decides when there is no
+price to give.
+
+**Why the endpoints are open.** No login method is registered in Phase 1. `[Authorize]` would turn
+every call away. D-19 already left the hub open for the same reason. The attribute goes on when
+logins arrive.
+
+**Why `/api/v1`.** CLAUDE.md's controller rule fixes the `api/v1/{feature}` prefix. The todo was
+written before that rule.
+
+**Why history and events page with a cursor, not a page number.** A cursor is a bookmark: the time
+and `Id` of the last row the caller saw. The next page starts strictly after it. A page number
+re-counts from the top on every request. Ticks arrive every poll, so a new row pushes every later
+row along by one, and a caller paging by number sees a row twice or skips one. The cursor is sent as
+an opaque string, so callers can't build one by hand and depend on its format. It is base64url, the
+version of base64 that is safe in a web address. Plain base64 can contain `+`, which arrives at the
+server as a space. A bad cursor is answered with 400 ("bad request").
+
+**Why the 30-day limit is a constant in code.** History refuses a `from` older than the 30 days
+`price_ticks` keeps. It answers 400 instead of an empty or partial page that looks like "no prices
+then". The limit is `PriceTick.Retention`. The migration's `INTERVAL '30 days'` is raw SQL and can't
+refer to it, so `SchemaTests.PriceTicks_retention_policy_matches_PriceTick_Retention` reads the
+database's retention job and checks the two agree.
+
+**Why the `IsEnabled` column is deleted.** It had no reader and no writer. Settings decide whether a
+source is used (item 3), and the sources endpoint reads `Enabled` from settings. Keeping the column
+as a copy of settings would mean writing it at startup, and the database and the settings could then
+disagree in the gap. Nothing would ever read it.
+
+Turned down:
+
+- **Minimal-API endpoints in a `MapPricingModule` method.** The setup method D-5 removed.
+- **Interfaces redeclared in Application.** Three extra types and a reversed project reference, for
+  no behaviour gained.
+- **Moving the hub behind MediatR.** A query handler that only passes the call on.

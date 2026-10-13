@@ -6,12 +6,15 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// <remarks>
 /// In memory and never reloaded at startup, unlike <see cref="Quota.IQuotaGovernor"/> (D-14).
 /// Every registered source gets an empty circuit up front so the operator view can list them all.
+/// Public only so the sources endpoint can call <see cref="SnapshotAll"/> (D-20); <see cref="For"/>
+/// stays internal so nothing outside the feed can record a failure.
 /// </remarks>
-internal sealed class SourceCircuitStore
+public sealed class SourceCircuitStore
 {
     private readonly ConcurrentDictionary<string, SourceCircuit> _circuits;
 
-    public SourceCircuitStore(
+    // Internal because RegisteredPriceSource is; Program.cs registers it with a factory.
+    internal SourceCircuitStore(
         IEnumerable<RegisteredPriceSource> registered,
         TimeProvider clock,
         IOptions<PriceFeedCircuitOptions> options)

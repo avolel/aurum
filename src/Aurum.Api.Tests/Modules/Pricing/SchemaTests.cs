@@ -1,4 +1,5 @@
 using Aurum.Api.Tests.Infrastructure;
+using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Microsoft.EntityFrameworkCore;
 
 namespace Aurum.Api.Tests.Modules.Pricing;
@@ -33,20 +34,22 @@ public class SchemaTests(PostgresFixture fixture)
     }
 
     [Fact]
-    public async Task PriceTicks_has_a_thirty_day_retention_policy()
+    public async Task PriceTicks_retention_policy_matches_PriceTick_Retention()
     {
         await using var db = fixture.CreateDbContext();
 
-        var count = await db.Database
-            .SqlQuery<int>($"""
-                SELECT count(*)::int AS "Value"
+        // SingleAsync also fails on zero or two policies. The history endpoint refuses `from`
+        // older than PriceTick.Retention, so the two drifting apart would serve silent gaps.
+        var dropAfterSeconds = await db.Database
+            .SqlQuery<long>($"""
+                SELECT extract(epoch FROM (config->>'drop_after')::interval)::bigint AS "Value"
                   FROM timescaledb_information.jobs
                  WHERE hypertable_name = 'price_ticks'
                    AND proc_name = 'policy_retention'
                 """)
             .SingleAsync();
 
-        Assert.Equal(1, count);
+        Assert.Equal((long)PriceTick.Retention.TotalSeconds, dropAfterSeconds);
     }
 
     [Fact]
