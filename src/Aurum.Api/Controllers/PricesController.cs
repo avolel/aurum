@@ -1,6 +1,7 @@
 using Aurum.App.Application.AppLogs;
 using Aurum.App.Application.Prices.DTOs;
 using Aurum.App.Application.Prices.Queries;
+using Aurum.App.Application.Validation;
 using Aurum.App.SharedKernel.Common;
 using Aurum.App.SharedKernel.Constants;
 using FluentValidation;

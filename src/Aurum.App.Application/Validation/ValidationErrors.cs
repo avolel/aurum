@@ -1,8 +1,8 @@
 using FluentValidation;
 
-namespace Aurum.Api.Controllers;
+namespace Aurum.App.Application.Validation;
 
-internal static class ValidationErrors
+public static class ValidationErrors
 {
     /// <summary>Failures grouped by property, the shape <c>ApiResponse.Errors</c> carries.</summary>
     public static IReadOnlyDictionary<string, string[]> ToErrors(this ValidationException exception) =>
