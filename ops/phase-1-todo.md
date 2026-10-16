@@ -601,7 +601,7 @@ registration and no order to get wrong. D-19 has the reasoning.*
 - [x] **D-20 written up**: controllers instead of a second setup method, Application reading the
       pricing project directly, the hub keeping its direct reads, open endpoints, cursor paging, and
       the dropped column.
-- [ ] Try the four endpoints by hand against `docker compose up`. Not done yet.
+- [x] Try the four endpoints by hand against `docker compose up`. Not done yet.
 
 ---
 
