@@ -36,10 +36,10 @@ builder.Services.AddControllers();
 // The only clock for every timestamp the app writes (D-7).
 builder.Services.AddSingleton(TimeProvider.System);
 
-var connectionString = builder.Configuration.GetConnectionString("Aurum");
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrWhiteSpace(connectionString))
 {
-    throw new InvalidOperationException("ConnectionStrings:Aurum is not configured.");
+    throw new InvalidOperationException("ConnectionStrings:DefaultConnection is not configured.");
 }
 
 builder.Services.AddDbContext<AurumDbContext>(o => o.UseNpgsql(connectionString));
@@ -173,6 +173,7 @@ app.UseSerilogRequestLogging();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwaggerUI(o => o.SwaggerEndpoint("/openapi/v1.json", "Aurum API v1"));
 }
 
 app.MapHub<PriceHub>("/hubs/price");

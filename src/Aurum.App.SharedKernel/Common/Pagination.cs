@@ -19,7 +19,7 @@ public sealed class PaginationQuery
 public sealed record PageResult<T>(
     IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
 {
-    public int TotalPages => PageSize <= 0 ? 0 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+    public int TotalPages => PageSize <= 0 ? 1 : (int)Math.Ceiling(TotalCount / (double)PageSize);
 
     public bool HasNextPage => Page < TotalPages;
 }
@@ -36,11 +36,13 @@ public static class PaginationHelper
     public static (int Page, int PageSize) GetEffectivePagination(PaginationQuery? pagination)
     {
         var page = Math.Max(1, pagination?.Page ?? 1);
-        var requested = pagination?.PageSize ?? PaginationQuery.DefaultPageSize;
-        var pageSize = requested <= 0
-            ? PaginationQuery.DefaultPageSize
-            : Math.Min(requested, PaginationQuery.MaxPageSize);
 
-        return (page, pageSize);
+        return (page, ClampPageSize(pagination?.PageSize));
     }
+
+    /// <summary>Missing or non-positive → the default; above the ceiling → the ceiling.</summary>
+    public static int ClampPageSize(int? requested) =>
+        requested is null or <= 0
+            ? PaginationQuery.DefaultPageSize
+            : Math.Min(requested.Value, PaginationQuery.MaxPageSize);
 }

@@ -154,10 +154,13 @@ registration anywhere else.
 
 Two consequences you will hit immediately:
 
-- `Aurum.App.Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")`. `SourceCircuitStore`,
-  `QueryKeyAuthHandler`, `RegisteredPriceSource` and both options validators stay `internal` because
-  nothing outside the module should resolve them, and `Program.cs` now has to name them anyway.
-  Making them public to satisfy a wiring concern is the larger leak.
+- `Aurum.App.Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")`. `QueryKeyAuthHandler`,
+  `RegisteredPriceSource` and both options validators stay `internal` because nothing outside the
+  module should resolve them, and `Program.cs` now has to name them anyway. Making them public to
+  satisfy a wiring concern is the larger leak. `SourceCircuitStore` is public so the sources
+  endpoint can call `SnapshotAll()` (D-20), but its constructor and `For()` stay internal — so
+  `Program.cs` registers it with a factory lambda, because the container only calls public
+  constructors.
 - `Program.AddPriceSource<T>` is a **member of the `Program` class**, not a local function. A local
   function in top-level statements is unreachable from the test assembly, and the order of two lines
   inside that method — resilience handler above `QuotaHandler` — is what `ResilienceWiringTests`
@@ -187,9 +190,9 @@ Pipeline order: LoggingBehavior → ValidationBehavior → TransactionBehavior (
 
 **The DbContext is `AurumDbContext`.**
 
-**There are no controllers yet.** The behaviors, `IAppLogService<T>` and `ApiResponse<T>` are
-registered and ready; the first controller lands with item 8. Until then the only thing running
-on a schedule is `PricePollingService`, a `BackgroundService` that does not go through MediatR.
+The only controllers are the four read endpoints (see "The read endpoints" below). The only thing
+running on a schedule is `PricePollingService`, a `BackgroundService` that does not go through
+MediatR.
  
 - Controllers dispatch via `_mediator.Send()` — never call services or repositories directly
 - Handlers own all business logic and entity ↔ DTO mapping
@@ -201,21 +204,20 @@ on a schedule is `PricePollingService`, a `BackgroundService` that does not go t
  
 ### Feature Folder Structure
 
-Illustrated with `PriceSources`, the feature item 8 will add; `cqrs-guide.md` uses the same example.
-None of these files exist yet.
- 
+The one real feature is `Prices` (item 8). It has queries only, so no `Commands/` and no
+repository — query handlers read `AurumDbContext` directly. A feature with commands adds
+`Commands/`, `Handlers/Commands/`, a validator per command, and
+`Aurum.App.Infrastructure.Data/Repositories/{Feature}/`; `cqrs-guide.md` shows that shape.
+
 ```
-Aurum.Api/Controllers/PriceSourcesController.cs            ← thin, dispatches via IMediator
-Aurum.App.Application/PriceSources/
-  Commands/SetPriceSourceEnabledCommand.cs           ← ICommand<T> record
-  Queries/GetPriceSourcesQuery.cs                    ← IQuery<T> record
-  Handlers/Commands/SetPriceSourceEnabledCommandHandler.cs
-  Handlers/Queries/GetPriceSourcesQueryHandler.cs
-  Validators/SetPriceSourceEnabledCommandValidator.cs ← FluentValidation
-  DTOs/PriceSourceDto.cs
-Aurum.App.Infrastructure.Data/Repositories/PriceSources/
-  IPriceSourceRepository.cs
-  PriceSourceRepository.cs
+Aurum.Api/Controllers/PricesController.cs              ← /api/v1/price/live, /history, /sources
+Aurum.Api/Controllers/PriceEventsController.cs         ← /api/v1/events
+Aurum.App.Application/Prices/
+  Queries/Get{LivePrice,PriceHistory,PriceEvents,PriceSources}Query.cs   ← IQuery<T> records
+  Handlers/Queries/*QueryHandler.cs
+  Validators/*QueryValidator.cs                       ← live, history, events (sources has no input)
+  DTOs/*.cs
+Aurum.App.Application/Validation/ValidationErrors.cs   ← ValidationException → ApiResponse.Errors
 ```
  
 ### Controller Rules
@@ -346,10 +348,8 @@ Related invariants:
   configuration and joins it to the registered sources, so a disabled or unconfigured source is not
   called. Before item 3 the poller selected straight off `IEnumerable<IPriceSource>`, which has no
   `Enabled` to filter on, and setting it shortened the startup log while changing nothing.
-- **`PriceSource.IsEnabled`, the entity column, has no reader and no writer.** Configuration is
-  authoritative; the column is descriptive and seeded only. Item 8 serves `price_sources` over HTTP
-  and is the point at which it is either wired as a projection or deleted. Do not toggle it in psql
-  and expect anything to happen.
+- **`price_sources` has no `IsEnabled` column.** It had no reader and no writer; D-20 dropped it.
+  Configuration alone says whether a source is used, and `/api/v1/price/sources` reads it from there.
 - The cadence is one feed-wide value, `PricePolling:PollInterval`, and it is coupled to the
   **primary** source's `MonthlyRequestLimit` — the enabled entry with the lowest `Priority` — **and
   to `PriceFeed:Resilience:MaxAttempts`**. A poll is not a request: every attempt re-enters
@@ -376,8 +376,8 @@ Related invariants:
 
 ### The latest-quote cache (D-16)
 
-`LatestQuoteCache` (`Pricing/Cache/`) holds the newest `PriceQuote` per symbol for item 8's
-`/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. `PricePollingService` awaits
+`LatestQuoteCache` (`Pricing/Cache/`) holds the newest `PriceQuote` per symbol for
+`/api/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. `PricePollingService` awaits
 `EnsureWarmAsync` before its first poll and calls `Record` after every successful one.
 
 - **`Record` runs before the tick is added to the `DbContext`.** Memory, then database, then clients
@@ -410,9 +410,8 @@ Related invariants:
 - **`LatestQuote` must not carry `SourceAttempt`.** It holds an `Exception`, which a cached quote
   would pin for hours. `Record` takes the whole `PriceFeedResult` so that projection happens in one
   place; `A_cached_quote_holds_no_exception_reference` is a decision-pinning test, not dead weight.
-- `ILatestQuoteCache` and both records are **public** although only `Program.cs` names the
-  implementation: item 8 decides whether Application references this project or redeclares the
-  interface, and internal types would take the first option away.
+- `ILatestQuoteCache` and both records are **public** because `Aurum.App.Application` references
+  this project and `GetLivePriceQueryHandler` reads the cache (D-20).
 - Symbol keys are `OrdinalIgnoreCase` to match `PriceSourcesOptions.Sources` and
   `PriceFeedResult.UsedFallback`.
 
@@ -444,7 +443,7 @@ Related invariants:
 - Volatility is a `double`, two-pass sample standard deviation of step-to-step percent changes, null
   below `MinSamplesForVolatility`.
 - `IDeltaEngine`, `DeltaSnapshot`, `WindowDelta`, `DeltaWindow` and `Sample` are public for the same
-  item 8 reason as `ILatestQuoteCache`.
+  reason as `ILatestQuoteCache`; `GetPriceEventsQueryValidator` reads `DeltaWindow.All`.
 - `WindowDelta.StartSourceCode` / `EndSourceCode` come from a reverse `ordinal → code` array filled
   where `Ordinal()` hands one out. `Sample` stays 40 bytes; do not put the code on it.
 
@@ -510,11 +509,49 @@ one implementation, a singleton registered directly in `Program.cs`.
   a missing key (`A_window_with_no_answer_arrives_as_null_not_zero` reads raw JSON). `Quote` null =
   "no price yet", still sent. `AttemptedSources` stays server-side.
 - **The hub reads `ILatestQuoteCache`/`IDeltaEngine` directly, not via MediatR** — a cache-only query
-  would be a pass-through handler. Item 8 (D-20) may move it.
+  would be a pass-through handler. D-20 kept it that way.
 - Typed client methods take no `CancellationToken`; `PublishAsync`'s `ct` is unused by the SignalR
   implementation. Group sends only queue into per-connection buffers.
 - Not handled: auth (Phase 1 is open), CORS, events over SignalR, scale-out (groups are in-process;
   needs a backplane), and subscribe/broadcast arrival order (client keeps newer `observedAt`).
+
+### The read endpoints (D-20)
+
+Four controller actions, all `GET`, all open in Phase 1 (no login method is registered, so
+`[Authorize]` would refuse everything). **None of them calls a price service** — every provider
+request spends part of a 100-request month, and these can be reloaded freely.
+
+| Route | Reads | Notes |
+|---|---|---|
+| `/api/v1/price/live?symbol=` | `ILatestQuoteCache` | 503 with `ErrorMessages.NoPriceMessage` when nothing is held |
+| `/api/v1/price/history?symbol=&from=&to=&limit=&cursor=` | `price_ticks` | oldest first, `[from, to)`, 400 when `from` is older than `PriceTick.Retention` |
+| `/api/v1/events?symbol=&window=&minPercent=&limit=&cursor=` | `price_events` | newest first; `minPercent` matches `abs(DeltaPercent)` |
+| `/api/v1/price/sources` | settings + `price_sources` + `SourceCircuitStore` + `IQuotaGovernor` | ordered by `Priority`, switched-off sources included |
+
+- **`Aurum.App.Application` references `Aurum.App.Infrastructure.Pricing`** so handlers can read the
+  cache, circuits, governor and settings. Controllers still see only `IMediator`.
+- **Paging is keyset, not page numbers.** `Cursor` (SharedKernel) is the last row's `(time, Id)`,
+  sent as base64url — plain base64's `+` arrives as a space in a query string. The comparison is
+  written out (`t > c.Time || (t == c.Time && Id > c.Id)`): EF Core does not translate tuple
+  comparison. Handlers read `limit + 1` rows; `NextCursor` is null on the last page. Page size is
+  `PaginationHelper.ClampPageSize` — clamped, never rejected. The tie tests
+  (`..._SplitAcrossAPage_...`) fail when `>` becomes `>=` or the `Id` half is dropped; both were
+  mutation-checked.
+- **Symbols are resolved with `SupportedSymbol.Find`** and compared exactly in SQL. A
+  case-insensitive comparison there skips the `(Symbol, ObservedAt)` index.
+- **`PriceTick.Retention` must equal the migration's `INTERVAL '30 days'`.**
+  `SchemaTests.PriceTicks_retention_policy_matches_PriceTick_Retention` reads the job and compares.
+- **`/sources` asks the governor only about switched-on sources.** The validator lets a switched-off
+  source sit half-configured, and `ResolvePeriod` throws for a rolling period with no anchor.
+  `Quota` is null for those; `Circuit` is null for a configured source with no registered code.
+  `Remaining` is `0` when `ProviderRejected` (`Handle_ProviderRejected_...` was mutation-checked).
+- Controllers rethrow `OperationCanceledException` when the request's own token fired, so a client
+  hanging up is not logged as a 500.
+- **`price_events` has no index on `DetectedAt`.** `/events` sorts the symbol's rows; fine at Phase 1
+  volume. Add `(Symbol, DetectedAt DESC, Id DESC)` if it grows.
+- Not handled: CORS, response caching, a cursor reused with a different range or symbol (it just
+  starts from that point), and malformed dates (`from=yesterday` fails model binding with the
+  framework's ProblemDetails, not `ApiResponse`).
 
 ### Database
 

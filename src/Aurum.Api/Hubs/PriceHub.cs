@@ -31,7 +31,7 @@ public sealed class PriceHub(ILatestQuoteCache cache, IDeltaEngine deltas) : Hub
 
     // Group names are case-sensitive, so use the stored spelling or "xauusd" becomes its own silent group.
     private static string Resolve(string symbol) =>
-        SupportedSymbol.All.FirstOrDefault(s => string.Equals(s, symbol, StringComparison.OrdinalIgnoreCase))
+        SupportedSymbol.Find(symbol)
         ?? throw new HubException(
             $"Unknown symbol '{symbol}'. Supported: {string.Join(", ", SupportedSymbol.All)}.");
 }

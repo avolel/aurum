@@ -302,9 +302,6 @@ namespace Aurum.App.Infrastructure.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
-                    b.Property<bool>("IsEnabled")
-                        .HasColumnType("boolean");
-
                     b.Property<DateTimeOffset?>("LastFailureAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -322,8 +319,6 @@ namespace Aurum.App.Infrastructure.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Code");
-
-                    b.HasIndex("IsEnabled", "Priority");
 
                     b.ToTable("price_sources", (string)null);
                 });

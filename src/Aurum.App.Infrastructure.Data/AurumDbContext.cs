@@ -29,7 +29,6 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
             e.Property(x => x.Code).HasMaxLength(64);
             e.Property(x => x.DisplayName).HasMaxLength(128).IsRequired();
             e.Property(x => x.LastFailureReason).HasMaxLength(512);
-            e.HasIndex(x => new { x.IsEnabled, x.Priority });
         });
 
         b.Entity<PriceTick>(e =>

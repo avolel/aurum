@@ -57,7 +57,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       ASPNETCORE_HTTP_PORTS: "8080"
-      ConnectionStrings__Aurum: ${ConnectionStrings__Aurum:?set in .env}
+      ConnectionStrings__DefaultConnection: ${ConnectionStrings__Aurum:?set in .env}
       Ollama__BaseUrl: ${Ollama__BaseUrl:-http://ollama:11434}
       PriceSources__GoldApiIo__ApiKey: ${PriceSources__GoldApiIo__ApiKey:-}
       PriceSources__ApiNinjas__ApiKey: ${PriceSources__ApiNinjas__ApiKey:-}

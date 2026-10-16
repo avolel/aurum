@@ -107,6 +107,26 @@ public class ShippedConfigurationTests
     }
 
     /// <summary>
+    /// The shipped break must outlast the shipped cadence, or the host refuses to start.
+    /// </summary>
+    /// <remarks>
+    /// Both once defaulted to 15 minutes, which this validator rejects: a break that ends by the
+    /// next poll never skips one. Runs the real validator so the rule and this test cannot drift.
+    /// </remarks>
+    [Fact]
+    public void Shipped_circuit_break_outlasts_the_shipped_cadence()
+    {
+        var config = BuildConfiguration();
+        var polling = config.GetSection(PricePollingOptions.SectionName).Get<PricePollingOptions>()!;
+        var circuit = config.GetSection(PriceFeedCircuitOptions.SectionName).Get<PriceFeedCircuitOptions>()
+            ?? new PriceFeedCircuitOptions();
+
+        var result = new PriceFeedCircuitOptionsValidator(Options.Create(polling)).Validate(null, circuit);
+
+        Assert.True(result.Succeeded, result.FailureMessage);
+    }
+
+    /// <summary>
     /// The shipped buffer must hold one day plus slack at the shipped cadence, or the 1d window
     /// never has a starting price.
     /// </summary>

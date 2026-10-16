@@ -567,30 +567,41 @@ registration and no order to get wrong. D-19 has the reasoning.*
 
 ---
 
-## 8. Endpoints + a second setup method · 1 day
+## 8. Endpoints · 1 day
 
-*Needs replanning before it starts: the first bullet is about a setup approach D-5 replaced. See the
-note at the top.*
-
-- [ ] `MapPricingModule(this IEndpointRouteBuilder)`. This contradicted CLAUDE.md's rule of "a single
-      `Add<Module>Module` method as each area's only setup method". **Write it up as a decision and
-      update CLAUDE.md**, instead of letting the two drift apart.
-- [ ] **`GET /v1/price/live`**: serves the saved price **only**, and never fetches a new one. A public
-      page that fetched from a service on every visit would let anyone use up a 100-request month by
-      reloading it. When there's no saved price yet, answer "unavailable" (HTTP 503) with a message
-      explaining why.
-- [ ] **`GET /v1/price/history`**: pages through results using the last `(ObservedAt, Id)` seen, not a
-      page number, with a cap on how many rows come back. **When `from` is older than the 30 days the
-      database keeps, answer "bad request" (HTTP 400) and say that's the reason.** Quietly returning a
-      shorter range is the same misleading-data mistake in a different form.
-- [ ] **`GET /v1/events`**: newest first, paged the same way, and can be filtered by window and by size
-      of move.
-- [ ] **`GET /v1/price/sources`**: for each service, its priority, whether it's switched on, its last
-      success and failure, its breaker state, and its requests used, limit and reset time. This is how
-      to show the fallback goal being met, and how whoever runs the app answers "why is the price eight
-      hours old?" without opening the database.
-- [ ] **D-20 written up**: the second setup method, and why endpoints don't fit the `Add*Module` one.
-      Also decide whether the hub's direct reads move behind MediatR (D-19).
+- [x] ~~`MapPricingModule(this IEndpointRouteBuilder)`.~~ Dropped: D-5 removed setup methods. The
+      endpoints are ordinary controllers, and `Program.cs` already calls `app.MapControllers()`, so
+      nothing new needed setting up. D-20 says why.
+- [x] Routes start with `/api/v1`, not `/v1`. CLAUDE.md's controller rule fixes that prefix.
+- [x] **`GET /api/v1/price/live`**: serves the saved price **only**, and never fetches a new one. With
+      no saved price yet it answers 503 ("unavailable") and says why.
+- [x] **`GET /api/v1/price/history`**: oldest first, from `from` up to but not including `to`. It pages
+      with a cursor, which is a bookmark holding the last `(ObservedAt, Id)` seen, and caps the rows per
+      page at 500. **A `from` older than the 30 days the database keeps gets 400 ("bad request") naming
+      the limit.**
+- [x] **`GET /api/v1/events`**: newest first, paged the same way. It can be filtered by window, and by
+      size of move, so a fall counts as well as a rise.
+- [x] **`GET /api/v1/price/sources`**: for each configured service, in priority order: whether it's
+      switched on, its last success and failure, its breaker state, and its requests used, limit,
+      remaining and reset time. Remaining is 0 once the provider has turned the app away, whatever
+      the counter says.
+- [x] The unused `price_sources.IsEnabled` column is deleted (migration `DropPriceSourceIsEnabled`).
+- [x] Tests: a controller, handler and validator test file for each endpoint. The paging and
+      sources handlers run against a real database. 277 tests pass in total on 2026-10-15.
+- [x] Check the tests notice when a rule is broken on purpose. Each of these turned a named test red:
+      - history cursor `>` changed to `>=`, or the `Id` half dropped →
+        `Handle_TwoRowsWithTheSameTimeSplitAcrossAPage_NeitherRepeatsNorSkips`
+      - the same two changes in events →
+        `Handle_EventsFromOnePollSplitAcrossAPage_NeitherRepeatNorSkip`
+      - events size filter without `abs` → `Handle_MinPercentMatchesFallsBySize`
+      - the "rejected means 0 remaining" rule removed →
+        `Handle_ProviderRejected_ReportsZeroRemainingAndKeepsTheRealCount`
+      - `PriceTick.Retention` set to 31 days → `PriceTicks_retention_policy_matches_PriceTick_Retention`
+      - the 503 branch removed → `GetLive_WithNoHeldPrice_Returns503WithReason`
+- [x] **D-20 written up**: controllers instead of a second setup method, Application reading the
+      pricing project directly, the hub keeping its direct reads, open endpoints, cursor paging, and
+      the dropped column.
+- [ ] Try the four endpoints by hand against `docker compose up`. Not done yet.
 
 ---
 
@@ -640,7 +651,7 @@ Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/L
 
 - [ ] Real prices arriving from the live API on a schedule (0)
 - [ ] Three services set up, each with its own row in the request counter (2)
-- [ ] Switch off the primary, and `/v1/price/live` keeps serving with `isFallback: true`, with no gap
+- [ ] Switch off the primary, and `/api/v1/price/live` keeps serving with `isFallback: true`, with no gap
       an app would notice (3, 4, 8). How to check it:
       - Use `PriceSources__ApiNinjas__Enabled=false`, not unplugging the network.
       - `api-ninjas` has `Priority: 1`. Switching off a backup changes nothing about which service is
@@ -652,7 +663,7 @@ Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/L
 - [x] An app that subscribes partway through a gap immediately receives the saved price and moves (7).
       Checked by `Subscribe_sends_the_held_price_and_moves_immediately`; not yet tried by hand against
       `docker compose up`.
-- [ ] `curl 'localhost:8080/v1/price/history?from=2020-01-01'` answers 400 and names the 30-day limit (8)
+- [ ] `curl 'localhost:8080/api/v1/price/history?from=2020-01-01T00:00:00Z'` answers 400 and names the 30-day limit (8)
 - [ ] `docker compose down -v && docker compose up --build` from empty still works (9)
 - [ ] D-17 to D-20 written up with the options turned down (each item). D-9 to D-19 are done.
 

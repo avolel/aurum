@@ -240,7 +240,7 @@ public class PricePollingService(
     /// <remarks>
     /// Success leaves the last failure in place; compare <c>LastFailureAt</c> with
     /// <c>LastSuccessAt</c> to tell current from past. A skipped source writes nothing, so the fault
-    /// that opened its circuit is kept. <c>IsEnabled</c> is never written: configuration decides.
+    /// that opened its circuit is kept.
     /// </remarks>
     private async Task ProjectAttemptsAsync(
         AurumDbContext db, IReadOnlyList<SourceAttempt> attempts, CancellationToken ct)

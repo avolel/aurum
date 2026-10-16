@@ -881,10 +881,16 @@ How it works:
 
 1. It counts failures in a row.
 2. At `FailureThreshold` failures (3 by default), it opens and remembers when.
-3. Once `BreakDuration` has passed (15 minutes by default), it closes again, but it leaves the failure
+3. Once `BreakDuration` has passed (45 minutes in `appsettings.json`), it closes again, but it leaves the failure
    count at one below the threshold.
 4. Running out of allowance doesn't touch it at all.
 5. Its state lives only in memory. It's never saved, and never reloaded at startup.
+6. `BreakDuration` must be longer than the check interval, or the app refuses to start. The breaker
+   is only looked at when a check runs, so a break that ends by the next check never skips one. The
+   code's default is 15 minutes, the same as the shipped check interval, so the shipped value used to
+   fail this rule. I set it to 45 minutes, so a failing service sits out two checks.
+   `ShippedConfigurationTests.Shipped_circuit_break_outlasts_the_shipped_cadence` catches the two
+   drifting apart again.
 
 The Polly library that the retry setup uses (`Microsoft.Extensions.Http.Resilience`) comes with a
 circuit breaker. It's one line, and the retry setup is already in place. But it can't see the failure
@@ -1625,7 +1631,7 @@ a method, not what the app receives.
 - The `price_sources.IsEnabled` column is deleted. The sources endpoint reads "switched on" from
   settings.
 
-Started on 2026-10-12.
+Started on 2026-10-12. Built on 2026-10-15.
 
 **Why controllers, not a `MapPricingModule` method.** The Phase 1 todo planned these as minimal-API
 endpoints, meaning routes declared as lambdas in a setup method rather than as controller classes.
@@ -1666,8 +1672,20 @@ written before that rule.
 
 **Why history and events page with a cursor, not a page number.** A cursor is a bookmark: the time
 and `Id` of the last row the caller saw. The next page starts strictly after it. A page number
-re-counts from the top on every request. Ticks arrive every poll, so a new row pushes every later
-row along by one, and a caller paging by number sees a row twice or skips one. The cursor is sent as
+re-counts from the top on every request, which causes two problems:
+
+- Events are listed newest first. Each new event pushes every older row down by one, so a caller
+  paging by number sees a row twice.
+- For both lists, page 50 makes the database count past every row on pages 1 to 49 first. With a
+  cursor, history starts at the bookmark through the `(Symbol, ObservedAt)` index. Events have no
+  such index yet (see "Known limits").
+
+The `Id` half of the bookmark matters. Two services can report the same time, and one poll saves an
+event for every window that fired, all with the same time. With the time alone, a page that ends on
+the first of two such rows would skip the second. The comparison is written out in full, "later
+time, or same time and higher `Id`", because EF Core can't turn a C# pair comparison into SQL. Each
+handler reads one row more than the page size to learn whether another page exists, without a
+separate count. The cursor is sent as
 an opaque string, so callers can't build one by hand and depend on its format. It is base64url, the
 version of base64 that is safe in a web address. Plain base64 can contain `+`, which arrives at the
 server as a space. A bad cursor is answered with 400 ("bad request").
@@ -1683,9 +1701,48 @@ source is used (item 3), and the sources endpoint reads `Enabled` from settings.
 as a copy of settings would mean writing it at startup, and the database and the settings could then
 disagree in the gap. Nothing would ever read it.
 
+**History covers `from` up to but not including `to`.** So two ranges that meet, such as Monday and
+Tuesday, never both return the tick at midnight. When `to` is left out it means now, by the app's
+clock, not the computer's.
+
+**The sources endpoint only asks about the budget of switched-on sources.** A switched-off source may
+sit in settings half-filled-in, on purpose (D-9). If it has a rolling 30-day budget and no start
+date, asking for its budget throws. So a switched-off source shows its settings, its stored row and
+its breaker, and `quota: null`. A source in settings with no code registered to call it shows
+`circuit: null`. "Remaining" is 0 whenever the provider has turned the app away, even if the counter
+says 40 of 100 are used (D-7).
+
+**A caller hanging up is not an error.** When the request's own cancel signal fires, the controller
+lets the cancellation through instead of logging a 500.
+
+**How it's tested.** Each endpoint has a controller, handler and validator test file, as CLAUDE.md
+requires. The controller tests use Moq, a library that builds stand-in objects. I added it because
+CLAUDE.md's testing rules call for `Mock<IMediator>`, and a hand-written stand-in for `IMediator`
+would need about ten methods. The history, events and sources handlers run against a real database.
+I broke each important rule on purpose and checked a named test went red:
+
+- the cursor using "at or after" instead of "after", or the time alone, in history and in events;
+- the size filter on events without taking the absolute value, so falls were missed;
+- the "rejected means 0 remaining" rule removed;
+- `PriceTick.Retention` set to 31 days;
+- the 503 on `/live` removed.
+
+**Known limits.**
+
+- **`price_events` has no index on `DetectedAt`.** Listing events sorts every row for the symbol.
+  That's cheap while the table is small. If it grows, add an index on symbol, time and `Id`, newest
+  first.
+- **A cursor from one range, used with another, is not refused.** It is a bookmark, so the next page
+  starts from that point inside the new range.
+- **A badly written date is turned away before the validator runs.** `from=yesterday` gets ASP.NET
+  Core's own 400 error body, not the app's `ApiResponse`. A `+00:00` time zone must be encoded in the
+  address, or the `+` arrives as a space; `Z` avoids the problem.
+- **No CORS policy and no response caching.** The dashboard work adds them if it needs them.
+
 Turned down:
 
 - **Minimal-API endpoints in a `MapPricingModule` method.** The setup method D-5 removed.
 - **Interfaces redeclared in Application.** Three extra types and a reversed project reference, for
   no behaviour gained.
 - **Moving the hub behind MediatR.** A query handler that only passes the call on.
+- **Keeping `IsEnabled` as a copy of settings.** A column written at startup that nothing reads.
