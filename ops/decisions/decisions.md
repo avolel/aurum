@@ -1746,3 +1746,72 @@ Turned down:
   no behaviour gained.
 - **Moving the hub behind MediatR.** A query handler that only passes the call on.
 - **Keeping `IsEnabled` as a copy of settings.** A column written at startup that nothing reads.
+
+## D-21 — The replay test is written as stretches, and the test API removes the poller and the price services
+
+**DECIDED:**
+
+- `DeltaEngineReplay.csv` lists stretches of prices, not single prices. Each row says: from this
+  minute to that minute, go in a straight line from this price to that one, on this service. A `#`
+  note above each row says what the stretch is for. Minutes no row covers are a gap.
+- `TickReplay` turns the rows into one price per minute and adds up to $0.20 of noise. The noise comes
+  from mulberry32, the same seeded number generator as `app/src/fixture/rng.ts`, ported to C#. A
+  fixed seed gives the same prices every run.
+- The replay test sets its own price-move thresholds instead of reading the shipped
+  `appsettings.json`.
+- `AurumApiFactory` boots the real `Program.cs` against the test database. It removes
+  `PricePollingService`, and it replaces each of the three price services with a stand-in that fails
+  without making a web request.
+- The test project now uses `Microsoft.AspNetCore.Mvc.Testing`, the package that provides
+  `WebApplicationFactory`.
+
+Built on 2026-10-15.
+
+**Why stretches, not a file of prices.** The plan asked for a CSV file of prices, written by hand,
+with a note on each stretch, and with the numbers coming from a fixed seed. A file of single prices
+can't meet all of those at once. Seven hours at one price a minute is about 400 rows, too many to write
+or review by hand. And if a script wrote those numbers, the script, not the file, would be the real
+test data. A stretch row is short enough to write by hand and check against its note. The seed then
+supplies the small wobble on top, so the prices aren't perfectly straight lines.
+
+**Why the test has its own thresholds.** Five of the six shipped thresholds are guesses that will be
+tuned (D-18). If the test read the shipped file, tuning one would break a test that has nothing to do
+with tuning. The test also sets the 15-minute threshold to 0.50% instead of the shipped 0.40%. The
+plan asked for a 0.4% jump, and with a 0.40% threshold that jump would sit exactly on the line, so
+the noise would decide whether it fires. Every threshold in the test is at least $0.80 away from the
+nearest move, and the noise moves two prices by at most $0.40 between them.
+
+**Why the event list has repeats.** The classifier has no waiting period. One jump fires the
+5-minute window on four polls in a row, and the test expects all four. The waiting period is applied
+when an event is saved, in the database (D-18), and `PriceEventSqlTests` covers it. Copying that rule
+into the replay would test a second copy of it, not the real one.
+
+**Why the test API removes the poller and the services.** A poller running inside a test fires when
+its timer says, not when the test says, so results would change from run to run. And it would spend
+real requests from a 100-request month. With the poller gone, nothing fills the price cache. A test
+that needs a held price records one into `ILatestQuoteCache` itself. The three price services are
+swapped for `ScriptedPriceSource` stand-ins, so even something that asks for a price can't reach the
+network.
+
+**Why a new package.** `Microsoft.AspNetCore.TestHost`, already in the test project, runs a web
+server in memory, but it can't start the app from `Program.cs`. `WebApplicationFactory` does that, and
+it's the standard way to do it. Its version, 10.0.10, matches `TestHost`.
+
+**Checked by breaking the code on purpose.** Each of these turned a named test red:
+
+- the cross-source multiplier removed → `Replay_produces_exactly_the_expected_events` and
+  `A_switch_between_services_moves_enough_to_fire_but_does_not`
+- the check on how far the starting price may sit from the window start removed →
+  `Replay_produces_exactly_the_expected_events` and `After_a_gap_every_short_window_gives_no_answer`
+
+Turned down:
+
+- **Recording a real day of prices.** No labels say what should happen, so the test would only lock
+  in whatever the code did on the day it was recorded (Phase 1 plan).
+- **A CSV of single prices, written by a script.** The script would be the real test data, and the
+  file would be too long to review.
+- **The shipped thresholds.** The test would break whenever a placeholder is tuned.
+- **Copying the database's waiting period into the replay.** It would test a copy of the rule, not
+  the rule.
+- **Keeping the poller and pointing it at stand-in services.** Results would still depend on when its
+  timer fires.

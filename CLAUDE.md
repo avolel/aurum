@@ -710,7 +710,25 @@ that wait races the save. `WaitUntilAsync` polls the database for the side effec
 socket — so "nothing arrived" assertions wait 250ms. The fake clock is passed to the cache and engine
 by constructor and **not registered in the container**, so SignalR's own timers stay on real time.
 Messages are received as `JsonElement` so assertions check the wire (camelCase names, nulls inside
-the dictionary), not the record. It does not use `Program.cs`; that is item 10's `AurumApiFactory`.
+the dictionary), not the record. It does not use `Program.cs`; that is `AurumApiFactory`.
+
+`AurumApiFactory` (`WebApplicationFactory<Program>`) boots the real `Program.cs` against the
+collection's Postgres. It **removes `PricePollingService` and replaces every `IPriceSource` with a
+faulting `ScriptedPriceSource`**: a poller in a test fires on its own timer and spends real requests
+against a 100-request month. So nothing fills the cache; a test that needs a held price calls
+`ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not `ConfigureAppConfiguration` —
+`Program.cs` reads the connection string before `Build()`, and only host settings are visible that
+early. API keys are set per config key (`GoldApiIo`, …) because the shipped file leaves them blank and
+D-9 refuses to boot.
+
+`DeltaEngineReplayTests` replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine` and
+`SignificanceClassifier` on a fake clock and asserts the exact event list (D-21). The CSV rows are
+**stretches** (`fromMinute,toMinute,fromMid,toMid,source`), not single prices; `TickReplay` expands
+them to one price a minute and adds seeded mulberry32 noise (a port of `app/src/fixture/rng.ts`).
+Each stretch's `#` note says what it is for and which thresholds it clears, by how much — keep every
+margin above the noise ($0.20 a price) when editing it. The test owns its thresholds rather than
+reading `appsettings.json`, so tuning a placeholder does not break it. The expected list has
+repeats: the classifier has no waiting period; that lives in the insert (D-18).
 
 `QuotaHandlerTests` drives the handler through a real `HttpClient` over a stub inner handler rather
 than calling `SendAsync` directly, because `HttpClient` does its own exception handling on the way

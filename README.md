@@ -206,9 +206,9 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-20** so far. `ops/phase-1-todo.md` lists the remaining work in an
+The decision log has **D-1 to D-21** so far. `ops/phase-1-todo.md` lists the remaining work in an
 order where each item can be checked when it is finished. A decision number is only given out when
-the decision is actually made, so the next one will be D-21.
+the decision is actually made, so the next one will be D-22.
 
 ## Where things are
 
@@ -294,7 +294,7 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 278 tests (counted with `dotnet test --list-tests` on 2026-10-15). Most of them start a
+There are 285 tests (counted with `dotnet test --list-tests` on 2026-10-15). Most of them start a
 real copy of the database in Docker rather than a fake one, because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
@@ -321,6 +321,16 @@ Tests worth knowing about:
   client to it. It needs no database and no Docker, and finishes in under a second. It reads each
   message as raw JSON, so it checks what an app actually receives, including the `null` windows
   (D-19).
+- **`DeltaEngineReplayTests`** feeds seven hours of made-up prices through the price-move feature and
+  checks the exact list of events that comes out. The prices are written by hand in
+  `DeltaEngineReplay.csv`, as stretches with a note on each saying what it's for: a sharp jump that
+  must be flagged, a slow fall that must not, a gap where the short windows must give no answer, and
+  a switch between services that must not look like a move. A small amount of noise is added from a
+  fixed seed, so the prices are the same every run. It needs no Docker (D-21).
+- **`AurumApiFactory`** starts the whole API from `Program.cs` inside a test, against the test
+  database. It removes the price timer and swaps the three price services for stand-ins that never
+  make a web request. A test that used it could otherwise spend real requests from a 100-request
+  month (D-21).
 
 **Some tests guard a decision, not a bug.** For example, the app never gives back a request that failed,
 because the service still counts it. Nothing in the code says so; the rule is simply that there is

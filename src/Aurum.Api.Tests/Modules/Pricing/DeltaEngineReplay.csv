@@ -1,0 +1,32 @@
+# Hand-written replay for DeltaEngineReplayTests. Not recorded data: each stretch says what it is for,
+# and the test checks the exact events that follow from that.
+#
+# fromMinute,toMinute,fromMid,toMid,source
+# One price per minute on a straight line from fromMid to toMid. TickReplay adds up to $0.20 of
+# seeded noise, which is 0.005% at these prices; every threshold below has at least $0.80 of margin.
+# Minutes no row covers are a gap. Thresholds: the test's own, see DeltaEngineReplayTests.Options.
+
+# Quiet start: 30 minutes flat, so every short window has a real starting price before the jump.
+0,29,4000,4000,api-ninjas
+
+# A 0.4% jump in 5 minutes. $4 a minute is 0.1%, under the 1m threshold (0.15%), and 0.4% is
+# under 15m (0.50%), so only 5m fires: at minutes 33, 34, 35 and 36, where the 5-minute rise is
+# 0.30%, 0.40%, 0.40% and 0.30%. At minute 37 it is 0.20%, under 0.25%.
+30,34,4000,4016,api-ninjas
+35,59,4016,4016,api-ninjas
+
+# A slow 1% fall over 3 hours. 0.028% per 5 minutes must not trigger 5m; 0.33% an hour is under 1h
+# (0.75%). The 4h window sees at most the 1.0% from the peak, under 1.25%.
+60,239,4016,3975.84,api-ninjas
+240,299,3975.84,3975.84,api-ninjas
+
+# A 30-minute gap (minutes 300 to 329), then the price comes back 0.3% higher. Measured across the
+# gap that is over the 1m and 5m thresholds, so an engine that used the pre-gap price as a starting
+# price would fire. The short windows must give no answer instead.
+330,389,3987.77,3987.77,api-ninjas
+
+# A switch between services. The market rises $9 on the primary over 4 minutes (0.23% over 5
+# minutes, under 0.25%), then the backup quotes $3 above that. At minute 395 the 5-minute move is
+# $12, 0.30%: over 0.25%, but the start and end come from different services, so it needs 0.50%.
+390,394,3987.77,3996.77,api-ninjas
+395,420,3999.77,3999.77,goldapi.io

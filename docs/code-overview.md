@@ -1159,6 +1159,8 @@ Aurum.Api.Tests/
 │   ├── CountingHandler.cs     ← a fake network that counts requests
 │   ├── ListLogger.cs          ← captures log lines so a test can check them
 │   ├── RecordingBroadcaster.cs ← a fake sender that remembers each send, and can look or throw
+│   ├── TickReplay.cs          ← turns the hand-written replay file into prices and feeds them in
+│   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no price timer and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
 ├── Controllers/               ← one file per controller; the mediator is faked
@@ -1170,7 +1172,7 @@ Aurum.Api.Tests/
 | Needs Docker (real Postgres) | No container, runs in milliseconds |
 |---|---|
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
-| `PricePollingServiceTests`, `PriceEventSqlTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `TickRingBufferTests` |
+| `PricePollingServiceTests`, `PriceEventSqlTests`, `AurumApiFactoryTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `DeltaEngineReplayTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
@@ -1188,6 +1190,22 @@ again and again for new messages, because `TestServer` has no socket for WebSock
 checks a message did *not* arrive waits 250 milliseconds first. The fake clock is handed to the cache
 and the engine directly and kept out of the server's container, so SignalR's own timers keep real
 time.
+
+`AurumApiFactory` is the test version of the whole API. It starts the app from the real `Program.cs`,
+pointed at the test database, but removes the price timer and swaps the three price services for
+stand-ins that fail without making a web request. A timer inside a test fires when it likes, so
+results would change from run to run, and it would spend real requests from a 100-request month.
+Because nothing polls, the saved price starts empty. A test that needs one records it into
+`ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21).
+
+`DeltaEngineReplayTests` checks the price-move feature and the classifier end to end, on seven hours
+of made-up prices. The prices live in `Modules/Pricing/DeltaEngineReplay.csv`. Each row is a stretch,
+not a single price: "from minute 30 to minute 34, go from $4,000 to $4,016 on `api-ninjas`". A note
+above each row says what the stretch is for and how far it sits from each threshold. `TickReplay`
+turns the rows into one price per minute and adds up to $0.20 of noise from a fixed seed, so the
+prices are the same every run. The test checks the exact list of events that comes out. If you edit
+the file, keep every move at least $0.80 away from its threshold, more than the noise can shift
+two prices, or the noise decides the result (D-21).
 
 Four things to know before writing a test:
 

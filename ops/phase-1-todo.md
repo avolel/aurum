@@ -27,7 +27,7 @@ A few terms used below:
 - **Circuit breaker**: the part that stops calling a service after several failures in a row, and
   tries again after a rest.
 
-> **Decision numbers.** D-9 to D-19 are taken and written up:
+> **Decision numbers.** D-9 to D-21 are taken and written up:
 >
 > | Number | Decision | Item |
 > |---|---|---|
@@ -42,6 +42,8 @@ A few terms used below:
 > | D-17 | a price move from two real prices, or "no answer" | 5 |
 > | D-18 | big moves saved as events; the waiting period lives in the database | 6 |
 > | D-19 | live prices through one SignalR sender, set up directly in `Program.cs` | 7 |
+> | D-20 | the read endpoints are controllers; Application reads the pricing code | 8 |
+> | D-21 | the replay test written as stretches; the test API without the timer | 10 |
 >
 > Numbers are handed out when a decision is actually made, not held back for planned work. So the
 > Phase 1 plan's draft list is now off by **five**. The numbers used below are the real ones.
@@ -624,36 +626,72 @@ registration and no order to get wrong. D-19 has the reasoning.*
 
 ---
 
-## 10. Test tools · stands alone, do it alongside 2 and 3
+## 10. Test tools · DONE
 
-Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/ListLogger.cs`,
-`Infrastructure/TestPriceSources.cs`, and the fake web handler (`StubHandler`) approach in
-`QuotaHandlerTests.cs`.
+*Done on 2026-10-15. Most of the tools were already built by earlier items that needed them. This
+item added the last three: `TickReplay`, `AurumApiFactory` and `DeltaEngineReplayTests`. D-21 has the
+reasoning.*
 
-- [ ] `StubPriceSource`: returns a scripted price or error, and counts how often it's called.
-- [ ] `RecordingBroadcaster` (remembers what would have been sent to apps) and `TickReplay` (feeds in a
+Existing pieces reused: `Infrastructure/PostgresFixture.cs`, `Infrastructure/ListLogger.cs`,
+`Infrastructure/TestPriceSources.cs`, and the fake web handler approach in `QuotaHandlerTests.cs`
+(now `Infrastructure/CountingHandler.cs`).
+
+- [x] `StubPriceSource`: returns a scripted price or error, and counts how often it's called.
+      - Built under item 3 as **`ScriptedPriceSource`**, for the fallback list tests. It has ready-made
+        versions that succeed, fail, or are out of requests. `ScriptedPriceFeed` was added beside it
+        at the same time, a stand-in for the whole fallback list, for the poller tests.
+- [x] `RecordingBroadcaster` (remembers what would have been sent to apps) and `TickReplay` (feeds in a
       list of prices).
-      - `RecordingBroadcaster` is done: built early under item 7, which needed it. It can also run a
-        step inside each send, to look at the database at that moment or to throw.
-- [ ] `AurumApiFactory`, a test version of the whole API (`WebApplicationFactory<Program>`). It needs
-      `public partial class Program { }` added at the end of `Program.cs`; letting tests see internal
-      code (`InternalsVisibleTo`) isn't enough. **The test API must swap the price timer and the real
-      services for fakes.** A timer running inside a test would make tests fail at random, and would
-      send real requests against a 100-request month.
-- [ ] `DeltaEngineReplayTests`: feed a CSV file of prices through the price-move feature and the
-      classifier with a fake clock, and check the exact set of events that comes out. **Write the test
-      data by hand, don't record real data.** Free minute-by-minute gold prices aren't available, and a
-      real day's prices come with no labels saying what should happen. The test would just lock in
-      whatever the code did on day one, which looks thorough and checks nothing. Write it by hand, with
-      a note on each stretch saying what it's for:
-      - a 0.4% jump in 5 minutes that must produce an event
-      - a slow 1% drift that must **not** trigger the 5-minute window
-      - a gap where every short window must give no answer
-      - a switch between services partway through, with a $3 difference, that must **not** produce an
-        event
-
-      Generate the actual numbers from a fixed starting value, reusing the approach in
-      `app/src/fixture/rng.ts`, so they come out the same every time.
+      - `RecordingBroadcaster` was built early under item 7, which needed it. It can also run a step
+        inside each send, to look at the database at that moment or to throw.
+      - `TickReplay` reads the replay file below and turns it into one price per minute. It then feeds
+        each price to the price-move feature and the classifier, moving a fake clock to each price's
+        time first, the way a poll would.
+- [x] `AurumApiFactory`, a test version of the whole API (`WebApplicationFactory<Program>`).
+      - `public partial class Program` was already at the end of `Program.cs`, added under item 3 for
+        `ResilienceWiringTests`.
+      - It runs the real `Program.cs` against the test database. It removes the price timer
+        (`PricePollingService`) and swaps the three price services for stand-ins that fail without
+        making a web request. So no test can spend a real request, and nothing runs on a timer that
+        the test doesn't control.
+      - With the timer gone, nothing fills the saved price. A test that needs one records it into
+        `ILatestQuoteCache` itself.
+      - Needed one new package, `Microsoft.AspNetCore.Mvc.Testing`, which provides
+        `WebApplicationFactory`.
+      - `AurumApiFactoryTests`, 3 tests: no timer and no real price service in the test API; `/live`
+        answers 503 until a price is held, then serves it; `/sources` lists all three services in
+        priority order.
+- [x] `DeltaEngineReplayTests`: feeds seven hours of hand-written prices through the price-move
+      feature and the classifier with a fake clock, and checks the exact set of events that comes out.
+      **The test data is written by hand, not recorded.** Free minute-by-minute gold prices aren't
+      available, and a real day's prices come with no labels saying what should happen. The test
+      would just lock in whatever the code did on day one, which looks thorough and checks nothing.
+      - **Changed from the plan:** the file, `Modules/Pricing/DeltaEngineReplay.csv`, lists stretches,
+        not single prices. Each row says "from this minute to that one, go in a straight line from this
+        price to that one, on this service". A file of 400 single prices is too long to write or check
+        by hand. D-21 says why.
+      - Each stretch has a note saying what it's for:
+        - a 0.4% jump in 5 minutes that must produce an event. It produces exactly four 5-minute
+          events, one per poll that still sees the jump. The classifier has no waiting period; that's
+          applied when saving, in the database (D-18).
+        - a slow 1% fall over 3 hours that must **not** trigger the 5-minute window
+        - a 30-minute gap where every short window must give no answer, followed by a 0.3% step that
+          *would* fire if a window were measured across the gap
+        - a switch between services partway through, with a $3 difference. The 5-minute move at the
+          switch is 0.30%, over the 0.25% threshold. It must **not** produce an event, because a move
+          across two services needs twice the threshold.
+      - The noise on each price comes from a fixed seed, using a C# copy of mulberry32 from
+        `app/src/fixture/rng.ts`, so the prices come out the same every time.
+      - The test uses its own thresholds, not the shipped ones, because five of those are placeholders
+        that will be tuned.
+- [x] Check the tests notice when a rule is broken on purpose. Each of these turned a named test red:
+      - the cross-service multiplier removed → `Replay_produces_exactly_the_expected_events`,
+        `A_switch_between_services_moves_enough_to_fire_but_does_not`
+      - the check on how far a starting price may sit from the window start removed →
+        `Replay_produces_exactly_the_expected_events`, `After_a_gap_every_short_window_gives_no_answer`
+- [x] 285 tests pass in total on 2026-10-15.
+- [x] **D-21 written up**: stretches instead of single prices, the test's own thresholds, and what the
+      test API removes.
 
 ---
 
@@ -669,7 +707,8 @@ Existing pieces to reuse: `Infrastructure/PostgresFixture.cs`, `Infrastructure/L
       - Switching off the primary makes `goldapi.io`, with its 100 requests a month, the primary. So in
         the same command, raise `PricePolling__PollInterval` above the startup check's minimum, or the
         app refuses to start before the fallback is ever reached.
-- [ ] The hand-written test data produces exactly the expected set of `PriceEvent`s (5, 6, 10)
+- [x] The hand-written test data produces exactly the expected set of `PriceEvent`s (5, 6, 10).
+      Checked by `DeltaEngineReplayTests.Replay_produces_exactly_the_expected_events`.
 - [x] An app that subscribes partway through a gap immediately receives the saved price and moves (7).
       Checked by `Subscribe_sends_the_held_price_and_moves_immediately`; not yet tried by hand against
       `docker compose up`.
