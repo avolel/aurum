@@ -697,9 +697,9 @@ Existing pieces reused: `Infrastructure/PostgresFixture.cs`, `Infrastructure/Lis
 
 ## Done when
 
-- [ ] Real prices arriving from the live API on a schedule (0)
-- [ ] Three services set up, each with its own row in the request counter (2)
-- [ ] Switch off the primary, and `/api/v1/price/live` keeps serving with `isFallback: true`, with no gap
+- [x] Real prices arriving from the live API on a schedule (0)
+- [x] Three services set up, each with its own row in the request counter (2)
+- [x] Switch off the primary, and `/api/v1/price/live` keeps serving with `isFallback: true`, with no gap
       an app would notice (3, 4, 8). How to check it:
       - Use `PriceSources__ApiNinjas__Enabled=false`, not unplugging the network.
       - `api-ninjas` has `Priority: 1`. Switching off a backup changes nothing about which service is
@@ -712,9 +712,9 @@ Existing pieces reused: `Infrastructure/PostgresFixture.cs`, `Infrastructure/Lis
 - [x] An app that subscribes partway through a gap immediately receives the saved price and moves (7).
       Checked by `Subscribe_sends_the_held_price_and_moves_immediately`; not yet tried by hand against
       `docker compose up`.
-- [ ] `curl 'localhost:8080/api/v1/price/history?from=2020-01-01T00:00:00Z'` answers 400 and names the 30-day limit (8)
-- [ ] `docker compose down -v && docker compose up --build` from empty still works (9)
-- [ ] D-17 to D-20 written up with the options turned down (each item). D-9 to D-19 are done.
+- [x] `curl 'localhost:8080/api/v1/price/history?from=2020-01-01T00:00:00Z'` answers 400 and names the 30-day limit (8)
+- [x] `docker compose down -v && docker compose up --build` from empty still works (9)
+- [x] D-17 to D-20 written up with the options turned down (each item). D-9 to D-19 are done.
 
 **Deliberately not in this batch:** the dashboard app and its under-1.5-seconds goal, logins, limiting
 how often people can call the API, paid tiers, economic and news data, and the paid GoldAPI plan. The
