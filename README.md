@@ -3,8 +3,10 @@
 Aurum tracks the price of gold. It asks outside price services for the current price on a regular
 schedule, stores every answer, and will later show those prices in an app.
 
-**Where things stand: the groundwork is done, and Phase 1 items 0 to 8 are built.** Item 9 hooks
-the new settings into `docker compose`. What is left is listed in `ops/phase-1-todo.md`.
+**Where things stand: Phase 1, the server side, is finished.** All eleven items (0 to 10) in
+`ops/phase-1-todo.md` are done, and so is its "done when" list. Phase 2 is planned but not started.
+It adds an explanation for each big price move, written by an AI model running on my own machine.
+The plan is in `ops/phase-2-todo.md`. The app screens for both phases come later, as one batch.
 
 What has been built and checked by hand:
 
@@ -206,9 +208,9 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-21** so far. `ops/phase-1-todo.md` lists the remaining work in an
-order where each item can be checked when it is finished. A decision number is only given out when
-the decision is actually made, so the next one will be D-22.
+The decision log has **D-1 to D-21** so far. `ops/phase-2-todo.md` lists the next work in an order
+where each item can be checked when it is finished. Its first item closes D-6. A decision number is
+only given out when the decision is actually made, so the next one will be D-22.
 
 ## Where things are
 
@@ -216,6 +218,8 @@ the decision is actually made, so the next one will be D-22.
 docker-compose.yml                 starts the database, Ollama (a local AI model) and the API
 ops/db/init/                       one-time database setup, runs only on an empty database
 ops/decisions/                     the decision log (D-1 onward; the code refers to these numbers)
+ops/phase-1-todo.md                Phase 1's work list, all done
+ops/phase-2-todo.md                Phase 2's work list: AI explanations for big price moves
 docs/                              guides on how the code is organised
 src/Aurum.App.SharedKernel/        small pieces every project uses
 src/Aurum.App.Infrastructure.Data/ the database: tables, changes to them, saving
@@ -281,6 +285,11 @@ PriceSources__ApiNinjas__Enabled=false PricePolling__PollInterval=1.00:00:00 doc
 ```
 
 `/api/v1/price/live` should then show `isFallback: true`.
+
+**`docker compose down -v` also deletes the downloaded AI models**, about 10 GB. The `-v` removes
+every storage volume the compose file declares, the models' one included, even though the comment in
+`docker-compose.yml` says it survives. Use `docker compose down` without `-v` unless you mean to
+start from an empty database and download the models again.
 
 **Only run one copy of the API.** If two copies ran, both would check prices and spend the allowance
 twice, and both would try to update the database at the same moment.
