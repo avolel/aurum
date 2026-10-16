@@ -25,7 +25,7 @@ public sealed record PriceUpdate(
                 window => deltas?.Windows.GetValueOrDefault(window) is { } delta ? WindowMessage.From(delta) : null));
 }
 
-/// <remarks><c>AttemptedSources</c> stays on the server; item 8's sources endpoint serves it.</remarks>
+/// <remarks><c>AttemptedSources</c> is left out; <c>/api/v1/price/live</c> serves it.</remarks>
 public sealed record QuoteMessage(
     decimal Mid,
     decimal? Bid,

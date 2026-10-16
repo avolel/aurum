@@ -507,7 +507,8 @@ one implementation, a singleton registered directly in `Program.cs`.
   and sender. Takes `symbol` because both snapshots can be null. `Windows` is keyed by
   `DeltaWindow.Code` and always has all six keys; no answer is a `null` value, never a zero record or
   a missing key (`A_window_with_no_answer_arrives_as_null_not_zero` reads raw JSON). `Quote` null =
-  "no price yet", still sent. `AttemptedSources` stays server-side.
+  "no price yet", still sent. `AttemptedSources` is not sent over the hub; `/api/v1/price/live`
+  serves it.
 - **The hub reads `ILatestQuoteCache`/`IDeltaEngine` directly, not via MediatR** — a cache-only query
   would be a pass-through handler. D-20 kept it that way.
 - Typed client methods take no `CancellationToken`; `PublishAsync`'s `ct` is unused by the SignalR
@@ -520,6 +521,10 @@ one implementation, a singleton registered directly in `Program.cs`.
 Four controller actions, all `GET`, all open in Phase 1 (no login method is registered, so
 `[Authorize]` would refuse everything). **None of them calls a price service** — every provider
 request spends part of a 100-request month, and these can be reloaded freely.
+
+**They needed no new registration.** `Program.cs` already called `AddControllers()` and
+`MapControllers()`, so the planned `MapPricingModule` setup method was dropped along with the other
+module methods (D-5, D-20). A new controller is picked up by those two lines.
 
 | Route | Reads | Notes |
 |---|---|---|
@@ -576,6 +581,16 @@ The `PriceSources` section binds to a **map of sources**, not a property per pro
 as `SourceCode`). Values come from `appsettings.json` and are overridden by environment variables
 using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLimit`), which is how
 `docker-compose.yml` and `.env` set them.
+
+- **Compose has no `env_file`; it forwards only the variables listed under `api.environment`.** A
+  setting added to `.env` without a line in `docker-compose.yml` never reaches the container, and
+  nothing reports it. Today that list is the connection string, the three API keys, each source's
+  `Enabled`, GoldAPI's `MonthlyRequestLimit` (the one limit expected to change, D-8),
+  `PollInterval`, `MaxAttempts` and `Ollama__BaseUrl`.
+  The fallback check depends on `PriceSources__ApiNinjas__Enabled` being on it.
+- **The app reads `ConnectionStrings:DefaultConnection`.** Compose fills it from `.env`'s
+  `ConnectionStrings__Aurum`, which `AurumDbContextFactory` also reads for `dotnet ef`.
+  `appsettings.json` has no connection string; without one the app refuses to start.
 
 - **Look sources up with `RequireByCode`, never with a `switch` on the code.** A
   switch needs a fall-through arm, and a fall-through arm is a fabricated configuration —

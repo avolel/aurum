@@ -17,8 +17,8 @@ It sits beside the other documents like this:
 
 Numbers in brackets, like (D-7), point to entries in the decision log.
 
-Everything here was checked against the code on 2026-10-08, after item 7 (live updates) was built on
-top of commit `0628b34`. If you change how a piece works, update its section here too.
+Everything here was checked against the code on 2026-10-15, after item 8 (the read endpoints) was
+built on top of commit `9280ea4`. If you change how a piece works, update its section here too.
 
 ---
 
@@ -34,10 +34,10 @@ price and its moves to every connected app that subscribed to that symbol. It al
 request it sends to each price service, in the database, so it never goes over a service's free
 monthly allowance.
 
-**Apps can listen for prices, but nobody can ask for one over an ordinary web request yet.** The
-live connection is at `/hubs/price` (section 9). Apart from that, the only web addresses that answer
-are the two health checks, `/health` and `/health/ready`. The endpoints for the price, its history
-and the events are item 8 in `ops/phase-1-todo.md`.
+**Apps can listen for prices, or ask for them.** The live connection is at `/hubs/price` (section
+9). Four ordinary web addresses under `/api/v1` serve the held price, saved prices, saved events and
+the state of each price service (section 12). None of them asks a price service for anything. The
+two health checks are `/health` and `/health/ready`.
 
 This is one poll. **`PricePollingService` drives every step.** Each solid arrow is one call the
 poller makes, numbered in order. The label says what goes in and what comes out. An arrow with a head
@@ -111,7 +111,7 @@ aurum/
     ├── Aurum.App.SharedKernel/            ← small types every project can use
     ├── Aurum.App.Infrastructure.Data/     ← the database: tables, migrations, saving
     ├── Aurum.App.Infrastructure.Pricing/  ← fetching, counting, caching and measuring prices
-    ├── Aurum.App.Application/             ← request handling plumbing and app logging
+    ├── Aurum.App.Application/             ← the read endpoints' logic, request plumbing, app logging
     ├── Aurum.Api/                         ← the program that starts; wires everything together
     └── Aurum.Api.Tests/                   ← every test, run against a real Postgres
 ```
@@ -123,7 +123,7 @@ An arrow means "can use code from".
 ```mermaid
 flowchart TD
     Api[Aurum.Api<br/>starts the app, registers everything]
-    App[Aurum.App.Application<br/>request pipeline, app logs]
+    App[Aurum.App.Application<br/>read endpoints' handlers, request pipeline, app logs]
     Pricing[Aurum.App.Infrastructure.Pricing<br/>price services, counter, cache, moves]
     Data[Aurum.App.Infrastructure.Data<br/>DbContext, tables, migrations]
     Kernel[Aurum.App.SharedKernel<br/>ApiResponse, constants, base entity]
@@ -133,6 +133,7 @@ flowchart TD
     Api --> Data
     Api --> Kernel
     App --> Data
+    App --> Pricing
     Pricing --> Data
     Data --> Kernel
 ```
@@ -141,7 +142,8 @@ flowchart TD
 app needs (see section 3). `Aurum.App.Infrastructure.Pricing` is a fifth project the layer table in
 `docs/best-practices-api.md` does not list. It exists because calling outside web services and
 running a background timer are neither "database code" nor "business rules", which are the only two
-boxes that table offers.
+boxes that table offers. `Aurum.App.Application` uses it so the endpoint handlers can read the
+latest-price cache, the circuit breakers, the request counter and the service settings (D-20).
 
 ### What is in each project
 
@@ -149,9 +151,11 @@ boxes that table offers.
 
 | File | What it is |
 |---|---|
-| `Common/ApiResponse.cs` | The single wrapper every future endpoint returns: `Success`, `Data`, `Message`, `StatusCode`, `Errors`. |
-| `Common/Pagination.cs` | `PageResult<T>`, for future list endpoints. |
-| `Constants/SupportedSymbol.cs` | The price symbols: `XAUUSD` (gold in US dollars) and `XAGUSD` (silver). `All` lists both. |
+| `Common/ApiResponse.cs` | The single wrapper every endpoint returns: `Success`, `Data`, `Message`, `StatusCode`, `Errors`. |
+| `Common/Pagination.cs` | `PaginationHelper.ClampPageSize` (50 rows by default, at most 500), and `PageResult<T>`, for page-number lists. Nothing uses `PageResult<T>` yet. |
+| `Common/CursorPage.cs` | `CursorPage<T>` (one page plus `NextCursor`) and `Cursor`, the bookmark the history and events endpoints page with. |
+| `Constants/ErrorMessages.cs` | Messages the endpoints send back, such as the 503 "no price yet" text. |
+| `Constants/SupportedSymbol.cs` | The price symbols: `XAUUSD` (gold in US dollars) and `XAGUSD` (silver). `All` lists both. `Find` matches a symbol typed in any case and returns the stored spelling. |
 | `Constants/PriceEventDirection.cs` | `"Up"` and `"Down"`, for the `price_events` table. |
 | `Entities/AuditableEntity.cs` | Base class that gives every table `CreatedAt` and `UpdatedAt`. |
 
@@ -165,7 +169,7 @@ boxes that table offers.
 | `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. Tables exist; nothing reads or writes them yet (Phase 2). |
 | `Entities/Logging/AppLog.cs` | One row of the app's own durable log. |
 | `Repositories/IUnitOfWork.cs` | `IUnitOfWork` and `UnitOfWork`: save changes, or run work inside one database transaction. |
-| `Migrations/` | Four migrations: initial schema, extra price-service rows, app logs, price events. |
+| `Migrations/` | Five migrations: initial schema, extra price-service rows, app logs, price events, and dropping the unused `price_sources.IsEnabled` column. |
 
 **`Aurum.App.Infrastructure.Pricing`** — almost all of the real logic lives here.
 
@@ -208,10 +212,13 @@ Aurum.App.Infrastructure.Pricing/
     └── PriceEventSql.cs                ← saves an event, unless one was saved too recently
 ```
 
-**`Aurum.App.Application`** — the plumbing for future endpoints. No feature uses it yet.
+**`Aurum.App.Application`** — the logic behind the endpoints, and the steps every request passes
+through.
 
 | Folder | What it is |
 |---|---|
+| `Prices/` | The one feature so far: four queries, their handlers, input checks (validators) and the records they return (section 12). |
+| `Validation/ValidationErrors.cs` | Turns a failed input check into the `Errors` list of an `ApiResponse`. |
 | `Common/CQRS/` | `ICommand<T>` (a request that changes data) and `IQuery<T>` (a request that only reads). CQRS stands for "command query responsibility segregation", which here just means reads and writes are separate request types. |
 | `Common/Behaviors/` | Three steps every request passes through before its handler: logging, validation, and a database transaction for commands. |
 | `AppLogs/` | `IAppLogService<T>`: writes log rows to the `app_logs` table without slowing the request down. |
@@ -222,14 +229,14 @@ Aurum.App.Infrastructure.Pricing/
 |---|---|
 | `Program.cs` | Creates and registers every object the app uses, sets up health checks, runs migrations, starts the web server. |
 | `HttpRequestContextAccessor.cs` | Reads the user, address and request id from the current web request, for log rows. |
+| `Controllers/PricesController.cs` | `/api/v1/price/live`, `/history` and `/sources` (section 12). |
+| `Controllers/PriceEventsController.cs` | `/api/v1/events` (section 12). |
 | `Hubs/PriceHub.cs` | The live connection apps subscribe to, at `/hubs/price` (section 9). |
 | `Hubs/IPriceClient.cs` | The one message the server sends: `PriceUpdated`. |
 | `Hubs/PriceUpdate.cs` | The message records (`PriceUpdate`, `QuoteMessage`, `WindowMessage`) and the one method that builds them. |
 | `Hubs/SignalRPriceBroadcaster.cs` | The real `IPriceBroadcaster`: sends to a symbol's group from outside the hub. |
 | `appsettings.json` | Default settings. Environment variables override them. |
 | `Dockerfile` | How the `api` container is built. |
-
-There is no `Controllers/` folder yet. The first controller comes with item 8.
 
 ---
 
@@ -242,31 +249,35 @@ asks for them) which class to create for each interface, and how long each one l
 it goes in this file.
 
 1. **Logging.** Serilog writes JSON lines to the console.
-2. **The clock.** `TimeProvider.System` is registered once. Every timestamp the app writes comes
+2. **Controllers.** `AddControllers()` finds every controller in `Aurum.Api`, and after the app is
+   built `MapControllers()` gives each one its web address. A new controller needs no other
+   registration (D-20).
+3. **The clock.** `TimeProvider.System` is registered once. Every timestamp the app writes comes
    from it, which lets tests swap in a fake clock.
-3. **The database.** Reads `ConnectionStrings:Aurum`. **If it is empty, the app refuses to start.**
-   Registers `AurumDbContext` and `IUnitOfWork`.
-4. **The request pipeline.** Registers MediatR (the library that routes a request object to its
+4. **The database.** Reads `ConnectionStrings:DefaultConnection`. **If it is empty, the app refuses
+   to start.** `docker-compose.yml` fills it from `.env`'s `ConnectionStrings__Aurum`. Registers
+   `AurumDbContext` and `IUnitOfWork`.
+5. **The request pipeline.** Registers MediatR (the library that routes a request object to its
    handler), every FluentValidation validator, and the three pipeline steps. The order of those
    three lines is the order a request passes through them.
-5. **App logging.** Registers the log queue (one for the whole app), the log service, and the
+6. **App logging.** Registers the log queue (one for the whole app), the log service, and the
    background job that writes queued rows to `app_logs`.
-6. **Settings.** Binds six settings sections and registers the checks for each. `ValidateOnStart()`
+7. **Settings.** Binds six settings sections and registers the checks for each. `ValidateOnStart()`
    means a bad setting stops the app at startup, with a message naming the setting, instead of
    failing later.
-7. **Pricing objects.** The circuit store, latest-price cache and price-move engine are created once
+8. **Pricing objects.** The circuit store, latest-price cache and price-move engine are created once
    for the whole app, because they hold state between polls. The request counter and the failover
    feed are created fresh for each poll.
-8. **The three price services.** `Program.AddPriceSource<T>` is called once per service. It sets up
+9. **The three price services.** `Program.AddPriceSource<T>` is called once per service. It sets up
    that service's web client with timeouts, retries, the request counter and the login header
    (section 6).
-9. **The poller.** `PricePollingService` is registered as a background job.
-10. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
+10. **The poller.** `PricePollingService` is registered as a background job.
+11. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
-11. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
+12. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
     There is no do-nothing stand-in to replace (D-19). After the app is built, `MapHub<PriceHub>`
     puts the hub at `/hubs/price`.
-12. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
+13. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
     starts. This is only safe with one copy of the app running; two copies migrating at once would
     clash.
 
@@ -931,8 +942,8 @@ Rules worth knowing:
   look like "this window isn't supported".
 - **The hub reads the cache and the engine directly**, not through MediatR. A hub call is not a web
   request with a database transaction, and a query that only read the cache would be a handler that
-  just passes the call on. Item 8 may change this.
-- **The list of services tried is not sent.** Item 8's sources endpoint will serve it.
+  just passes the call on. Item 8 kept it that way (D-20).
+- **The list of services tried is not sent.** `/api/v1/price/live` serves it (section 12).
 
 Not handled yet: logins (anyone can connect), a CORS policy for browsers on another address, sending
 events, and more than one server. Rarely, the subscribe message and a poll's message can arrive in
@@ -944,16 +955,22 @@ either order; an app should keep the one with the newer `observedAt`.
 
 Settings come from `src/Aurum.Api/appsettings.json`, overridden by environment variables. A double
 underscore in a variable name stands for a nested section, so
-`PriceSources__GoldApiIo__ApiKey` sets `PriceSources:GoldApiIo:ApiKey`. `docker-compose.yml` passes
-these through from `.env`.
+`PriceSources__GoldApiIo__ApiKey` sets `PriceSources:GoldApiIo:ApiKey`.
+
+**`docker-compose.yml` passes on only the variables it lists**, not everything in `.env`. A setting
+put in `.env` without a matching line there never reaches the app, and nothing warns you. The list
+is: the connection string, the three API keys, each service's `Enabled`, GoldAPI's
+`MonthlyRequestLimit`, `PricePolling__PollInterval`, `PriceFeed__Resilience__MaxAttempts` and
+`Ollama__BaseUrl`. Anything else is changed in `appsettings.json`, or by adding a line to
+`docker-compose.yml`.
 
 | Section | Key settings | Default | What it controls |
 |---|---|---|---|
-| `ConnectionStrings` | `Aurum` | empty — **must be set** | The database. |
+| `ConnectionStrings` | `DefaultConnection` | not set — **must be set** | The database. Compose fills it from `.env`'s `ConnectionStrings__Aurum`. `appsettings.json` has no connection string. |
 | `PriceSources:<Name>` | `SourceCode`, `ApiKey`, `BaseUrl`, `Priority`, `Enabled`, `MonthlyRequestLimit`, `QuotaPeriod`, `RequestTimeout`, `TotalTimeout` | see `appsettings.json` | One entry per service. `<Name>` is a friendly key (`GoldApiIo`); `SourceCode` is what the code matches on. |
 | `PricePolling` | `PollInterval`, `StaleAfter` | 15 min, unset (= 30 min) | How often to poll; when the cached price counts as old. |
 | `PriceFeed:Resilience` | `MaxAttempts`, `RetryBackoffBase` | 3, 2 seconds | Tries per request, and the first wait between them. |
-| `PriceFeedCircuit` | `FailureThreshold`, `BreakDuration` | 3, 15 min | The circuit breaker. |
+| `PriceFeedCircuit` | `FailureThreshold`, `BreakDuration` | 3, 45 min (`appsettings.json`; the code's own default is 15 min) | The circuit breaker. |
 | `DeltaEngine` | `MaxSamplesPerSymbol`, `ToleranceFraction`, `MinSamplesForVolatility` | 8,640, 0.5, 5 | Price-move memory size and rules. |
 | `Significance` | `ThresholdProfile`, `CrossSourceMagnitudeMultiplier`, `Windows:<code>:MinPercent`, `Windows:<code>:Cooldown` | `default-v1`, 2.0, see below | Which moves become events, and how long a window stays quiet after one. |
 | `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2. **Nothing reads it yet.** |
@@ -1011,10 +1028,10 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 
 | Table | One row is | Written by | Read by |
 |---|---|---|---|
-| `price_ticks` | One price from one service. Key is `(ObservedAt, Id)`. Kept 30 days. | `PricePollingService` | Cache and delta warm-up at startup |
-| `price_sources` | One price service: name, last success, last failure and why. | Seeded in migrations; `PricePollingService` updates the times | Nothing in code — for people looking at the database |
-| `api_quota_windows` | One service's request count for one month. | `PostgresQuotaGovernor` | `PostgresQuotaGovernor` |
-| `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check. Nothing else yet (item 8) |
+| `price_ticks` | One price from one service. Key is `(ObservedAt, Id)`. Kept 30 days. | `PricePollingService` | Cache and delta warm-up at startup; `/api/v1/price/history` |
+| `price_sources` | One price service: name, last success, last failure and why. | Seeded in migrations; `PricePollingService` updates the times | `/api/v1/price/sources`, and people looking at the database |
+| `api_quota_windows` | One service's request count for one month. | `PostgresQuotaGovernor` | `PostgresQuotaGovernor`, which `/api/v1/price/sources` also asks |
+| `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check; `/api/v1/events` |
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
 | `macro_series`, `macro_observations` | Economic data series and their values. | Nothing yet (Phase 2) | Nothing yet |
 
@@ -1022,8 +1039,9 @@ Things that will catch you out:
 
 - **`price_ticks` has a two-column key, `(ObservedAt, Id)`.** TimescaleDB refuses any unique index
   that leaves out the time column it splits on.
-- **`price_sources.IsEnabled` and `Priority` do nothing.** Settings decide which services run and in
-  what order. Changing the table changes nothing.
+- **`price_sources.Priority` does nothing.** Settings decide which services run and in what order,
+  and `/api/v1/price/sources` reports the order from the settings too. Changing the table changes
+  nothing. The table's `IsEnabled` column was deleted in item 8 for the same reason (D-20).
 - **`price_events` is an ordinary table on purpose (D-18).** Do not turn it into a TimescaleDB table
   or give it the 30-day deletion. Events are the app's history and must outlive the prices.
 - **The first migration does more than create tables.** It also turns `price_ticks` into a
@@ -1035,10 +1053,9 @@ Things that will catch you out:
 
 ---
 
-## 12. The request pipeline and app logging (ready, not used yet)
+## 12. The read endpoints, the request pipeline and app logging
 
-This part is built and registered but has no endpoints using it. It is the path every future
-endpoint will follow:
+Every web request to a controller takes this path:
 
 ```
 Web request
@@ -1053,21 +1070,53 @@ Web request
 The three middle steps are in `src/Aurum.App.Application/Common/Behaviors/`. They run in the order
 `Program.cs` registers them.
 
-A sketch of what the first feature will look like, using the `PriceSources` feature planned for
-item 8 (these files do not exist yet):
+### The four read endpoints (item 8, D-20)
+
+All four only read what the app already holds. **None of them asks a price service for anything**,
+because every request to a service spends part of a monthly allowance and anyone can reload these.
+Anyone can call them: Phase 1 has no logins, so `[Authorize]` would refuse every call. `symbol` is
+optional everywhere and means `XAUUSD` when left out.
+
+| Address | Handler reads | Answer |
+|---|---|---|
+| `GET /api/v1/price/live?symbol=` | `ILatestQuoteCache` | `LivePriceDto`: the price, `AgeSeconds`, `IsStale`, `IsFallback`, and the services tried (empty for a price loaded at startup). **503** with `ErrorMessages.NoPriceMessage` when nothing is held. |
+| `GET /api/v1/price/history?symbol=&from=&to=&limit=&cursor=` | `price_ticks` | Saved prices, oldest first, from `from` up to but not including `to` (`to` left out means now). **400** when `from` is older than `PriceTick.Retention` (30 days). |
+| `GET /api/v1/events?symbol=&window=&minPercent=&limit=&cursor=` | `price_events` | Saved events, newest first. `minPercent` is compared with the size of the move, so a fall counts the same as a rise. |
+| `GET /api/v1/price/sources` | settings, `price_sources`, `SourceCircuitStore`, `IQuotaGovernor` | Every configured service in priority order, switched-off ones included, with its breaker and requests used, limit, remaining and reset time. |
+
+The handlers are in `Aurum.App.Application/Prices/`. The live price follows the same rule as
+the hub: the controller only passes the request on, and the handler reads the cache.
 
 ```csharp
-// src/Aurum.App.Application/PriceSources/Queries/GetPriceSourcesQuery.cs  (planned)
-public sealed record GetPriceSourcesQuery : IQuery<IReadOnlyList<PriceSourceDto>>;
+// src/Aurum.Api/Controllers/PricesController.cs — GetLive, trimmed
+symbol ??= SupportedSymbol.Gold;                                // no symbol means gold
+var price = await mediator.Send(new GetLivePriceQuery(symbol), ct);
 
-// src/Aurum.Api/Controllers/PriceSourcesController.cs  (planned)
-[HttpGet]
-public async Task<ActionResult<ApiResponse<IReadOnlyList<PriceSourceDto>>>> Get(CancellationToken ct)
-{
-    var sources = await _mediator.Send(new GetPriceSourcesQuery(), ct);
-    return Ok(ApiResponse<IReadOnlyList<PriceSourceDto>>.CreateSuccess(sources));
-}
+var response = price is null
+    ? ApiResponse<LivePriceDto>.CreateError(ErrorMessages.NoPriceMessage, StatusCodes.Status503ServiceUnavailable)
+    : ApiResponse<LivePriceDto>.CreateSuccess(price);
+return StatusCode(response.StatusCode, response);
 ```
+
+Rules worth knowing:
+
+- **Long lists come in pages, using a bookmark rather than a page number.** The bookmark (`Cursor`)
+  is the last row's time and id, sent as a text string. The next page starts strictly after it,
+  comparing the time first and the id when two rows share a time. A page holds 50 rows by default
+  and never more than 500; a bigger `limit` is cut down, not refused. `NextCursor` is null on the
+  last page. A page number would skip or repeat rows whenever a new row arrives between two pages.
+- **"Remaining" is 0 once a service has turned the app away**, whatever the count says (section 7).
+- **`/sources` only asks the request counter about switched-on services.** A switched-off one may be
+  half set up, so its `Quota` is null. `Circuit` is null for a service in the settings with no code
+  behind it.
+- **The symbol is matched with `SupportedSymbol.Find`**, ignoring case, and then compared exactly
+  in the database so the `(Symbol, ObservedAt)` index is used.
+- **A request the caller cancels is not logged as an error.** The controllers let the cancellation
+  through instead of answering 500.
+- **Not handled:** CORS (letting a web page on another address call the API), caching responses, a
+  bookmark reused with a different symbol or range (it starts from that point), and a malformed
+  date such as `from=yesterday`, which gets the web framework's own error format instead of
+  `ApiResponse`.
 
 `CLAUDE.md` holds the full rules for controllers, handlers, validators and their tests.
 
@@ -1111,7 +1160,11 @@ Aurum.Api.Tests/
 │   ├── ListLogger.cs          ← captures log lines so a test can check them
 │   ├── RecordingBroadcaster.cs ← a fake sender that remembers each send, and can look or throw
 │   └── …
-└── Modules/Pricing/           ← one test class per production class, roughly
+├── Modules/Pricing/           ← one test class per production class, roughly
+├── Controllers/               ← one file per controller; the mediator is faked
+├── Handlers/                  ← one file per query handler
+├── Validators/                ← one file per input check
+└── Common/                    ← the paging bookmark and page-size rules
 ```
 
 | Needs Docker (real Postgres) | No container, runs in milliseconds |
@@ -1119,6 +1172,7 @@ Aurum.Api.Tests/
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
 | `PricePollingServiceTests`, `PriceEventSqlTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
+| `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 
 Run one class, or a set of fast tests:
@@ -1166,7 +1220,8 @@ is planned after the API endpoints exist.
 |---|---|
 | Change how often prices are fetched | `PricePolling:PollInterval` in `appsettings.json` or `.env`. The startup check tells you if the first service can't afford it. |
 | Add a fourth price service | Write a class implementing `IPriceSource` (copy `ApiNinjasSource`), add a `Program.AddPriceSource<T>` call in `Program.cs`, add a `PriceSources` entry, and add a migration that inserts its `price_sources` row (the tick table's foreign key needs it). |
-| Turn a service off | Set `PriceSources__<Name>__Enabled=false`. Not the database column. |
+| Turn a service off | Set `PriceSources__<Name>__Enabled=false` in `.env` (compose passes it on). Switching off the first service needs a longer `PricePolling__PollInterval` too, or the next one can't afford it and the app won't start. |
+| Check the services from outside | `GET /api/v1/price/sources`: breaker state, last failure, and requests left for each one. |
 | See why prices stopped | `SELECT * FROM price_sources;` for the last failure per service, then `SELECT * FROM api_quota_windows ORDER BY "UpdatedAt" DESC;` for allowance. |
 | See how many requests are left this month | `api_quota_windows`: `RequestLimit - RequestsUsed`, **and zero if `ProviderRejectedAt` is set**. |
 | Change the circuit breaker | `PriceFeedCircuit:FailureThreshold` / `BreakDuration`, logic in `SourceCircuit.cs`. |
@@ -1176,7 +1231,7 @@ is planned after the API endpoints exist.
 | See recent events | `SELECT "WindowCode", "Direction", "DeltaPercent", "TriggeredRule", "WindowEndedAt" FROM price_events ORDER BY "WindowEndedAt" DESC;` |
 | Add a new table | A new entity in `Entities/`, its setup in `AurumDbContext.OnModelCreating`, then `dotnet ef migrations add <Name> --project src/Aurum.App.Infrastructure.Data`. |
 | Register a new class | `src/Aurum.Api/Program.cs`. Nowhere else (D-5). |
-| Add the first endpoint | `CLAUDE.md` → "Feature Folder Structure" and "Controller Rules". |
+| Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 
 ---
 
@@ -1189,7 +1244,8 @@ come from another project, and their names do not exist here. The main gaps:
 
 | The docs describe | In this repository |
 |---|---|
-| Controllers, feature repositories | None written yet. The first ones come with item 8. |
+| Controllers | Two, serving four read endpoints (section 12). |
+| Commands, feature repositories, the generic repository | None yet. The only feature, `Prices`, only reads, so its handlers query the database directly. |
 | Redux, Expo Router, `components/` | None installed. The app is an empty shell, and these are the target for Phase 4. |
 | Mapping between database rows and DTOs (the plain classes the API sends) | Done by hand in each handler. AutoMapper is not used, because every version has an unfixed security advisory. |
 

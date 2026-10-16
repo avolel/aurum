@@ -2,8 +2,10 @@
 
 > Where to put your code, what each layer does, and the rules every change should follow.
 
-This guide describes the target shape of the API. Some of it isn't built yet: there are no controllers,
-no feature repositories, no generic repository and no `ValidateUserId` helper so far. Where a rule
+This guide describes the target shape of the API. Some of it isn't built yet. There are two
+controllers serving four read-only endpoints, with their logic in
+`src/Aurum.App.Application/Prices/`, but no
+commands, no feature repositories, no generic repository and no `ValidateUserId` helper so far. Where a rule
 refers to something that doesn't exist yet, it says so. For what exists today, see CLAUDE.md.
 
 A few terms used throughout:
@@ -29,14 +31,15 @@ breaking a rule below usually won't compile.
 | Layer | Project | What it does | Uses | Never does |
 |-------|---------|--------------|------|------------|
 | **Web** | `Aurum.Api` | Receives web requests, checks logins, wraps answers in `ApiResponse<T>`, hands work to MediatR | Application, SharedKernel | Business rules, database access, calls to outside web services |
-| **Application** | `Aurum.App.Application` | Commands, queries, handlers, validators, turning entities into DTOs | Infrastructure.Data, SharedKernel | Anything to do with web requests or controllers |
+| **Application** | `Aurum.App.Application` | Commands, queries, handlers, validators, turning entities into DTOs | Infrastructure.Data, Infrastructure.Pricing, SharedKernel | Anything to do with web requests or controllers |
 | **Database** | `Aurum.App.Infrastructure.Data` | Database queries, repositories, the database context (`AurumDbContext`) | SharedKernel | DTOs, business rules, turning entities into DTOs |
 | **Shared** | `Aurum.App.SharedKernel` | Small types every layer uses (`ApiResponse<T>`, `PageResult<T>`) | Nothing | Anything specific to one feature |
 
 Two differences in this repository, explained in D-5 of `ops/decisions/decisions.md`:
 
 - There's a fifth project, `Aurum.App.Infrastructure.Pricing`, for the outside price services and the
-  price timer. It doesn't fit any row above.
+  price timer. It doesn't fit any row above. The Application layer uses it so the price handlers can
+  read the latest price, the circuit breakers and the request counter (D-20).
 - `Aurum.Api` actually uses all four other projects, because `Program.cs` is where everything is set
   up and it has to name everything. The "Uses" rule above still applies to the code in
   `Controllers/`: a controller must never go around MediatR to reach database or pricing code.
@@ -74,8 +77,9 @@ Each "behavior" is a step every request passes through before reaching its handl
 
 ### Writing a request
 
-Examples use `PriceSources`, the first feature planned for item 8. The names are illustrative; none of
-these files exist yet.
+Examples use a made-up `PriceSources` feature with a command, to show the full shape. The names are
+illustrative; none of these files exist. For a real, read-only feature, see
+`src/Aurum.App.Application/Prices/`.
 
 ```csharp
 // Query: reads only, no transaction

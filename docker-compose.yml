@@ -63,6 +63,11 @@ services:
       PriceSources__ApiNinjas__ApiKey: ${PriceSources__ApiNinjas__ApiKey:-}
       PriceSources__MetalpriceApi__ApiKey: ${PriceSources__MetalpriceApi__ApiKey:-}
       PriceSources__GoldApiIo__MonthlyRequestLimit: ${PriceSources__GoldApiIo__MonthlyRequestLimit:-100}
+      # Compose forwards only the variables listed here, so a switch in .env does nothing without
+      # its line. These are how the fallback check switches off the primary.
+      PriceSources__GoldApiIo__Enabled: ${PriceSources__GoldApiIo__Enabled:-true}
+      PriceSources__ApiNinjas__Enabled: ${PriceSources__ApiNinjas__Enabled:-true}
+      PriceSources__MetalpriceApi__Enabled: ${PriceSources__MetalpriceApi__Enabled:-true}
       PricePolling__PollInterval: ${PricePolling__PollInterval:-00:15:00}
       PriceFeed__Resilience__MaxAttempts: ${PriceFeed__Resilience__MaxAttempts:-3}
     ports:

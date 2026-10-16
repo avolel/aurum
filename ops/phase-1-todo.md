@@ -567,7 +567,7 @@ registration and no order to get wrong. D-19 has the reasoning.*
 
 ---
 
-## 8. Endpoints · 1 day
+## 8. Endpoints · 1 day · DONE
 
 - [x] ~~`MapPricingModule(this IEndpointRouteBuilder)`.~~ Dropped: D-5 removed setup methods. The
       endpoints are ordinary controllers, and `Program.cs` already calls `app.MapControllers()`, so
@@ -601,16 +601,26 @@ registration and no order to get wrong. D-19 has the reasoning.*
 - [x] **D-20 written up**: controllers instead of a second setup method, Application reading the
       pricing project directly, the hub keeping its direct reads, open endpoints, cursor paging, and
       the dropped column.
-- [x] Try the four endpoints by hand against `docker compose up`. Not done yet.
+- [x] Try the four endpoints by hand against `docker compose up`. Done.
 
 ---
 
-## 9. Hook up deployment · half a day
+## 9. Hook up deployment · DONE
 
-- [ ] `docker-compose.yml` and `.env.example` include the new per-service settings.
-- [ ] Update CLAUDE.md with: the setup change from item 8, the fallback list in the request counter
-      section, and the "no answer, not zero" rule from item 5.
-- [ ] Run `dotnet format`.
+- [x] `docker-compose.yml` and `.env.example` include the new per-service settings. The one that was
+      missing is `Enabled` for each service. Compose passes on only the variables it lists, so before
+      this, `PriceSources__ApiNinjas__Enabled=false` in `.env` never reached the app, and the
+      fallback check under "Done when" could not be run as written. The other new settings since
+      item 2 (the price-move and event thresholds, `StaleAfter`, the circuit breaker) stay in
+      `appsettings.json` only, like the other two services' limits.
+- [x] Update CLAUDE.md with: the setup change from item 8, the fallback list in the request counter
+      section, and the "no answer, not zero" rule from item 5. The last two were already there (the
+      request chain diagram, and the price-move and live-update sections). Added: controllers need no
+      registration beyond `MapControllers()`, which variables compose passes on, and which connection
+      string key the app reads.
+- [x] Run `dotnet format`. It changed nothing.
+- [x] README and every guide in `docs/` brought up to item 8: the four endpoints, the deleted
+      `IsEnabled` column, the test count, and the compose rule above.
 
 ---
 

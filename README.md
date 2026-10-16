@@ -3,7 +3,8 @@
 Aurum tracks the price of gold. It asks outside price services for the current price on a regular
 schedule, stores every answer, and will later show those prices in an app.
 
-**Where things stand: the groundwork is done, and Phase 1 items 0 to 7 are finished.**
+**Where things stand: the groundwork is done, and Phase 1 items 0 to 8 are built.** Item 9 hooks
+the new settings into `docker compose`. What is left is listed in `ops/phase-1-todo.md`.
 
 What has been built and checked by hand:
 
@@ -109,11 +110,10 @@ Two smaller changes:
 memory first, then to the database. At startup it reloads the newest saved price, so a restart doesn't
 leave it empty. How old the price is gets worked out when it's read, from the time the service says
 the price was taken. A price counts as out of date after twice the check interval, which the
-`PricePolling:StaleAfter` setting can change. Nothing serves it over the web yet; that's item 8.
+`PricePolling:StaleAfter` setting can change. `GET /api/v1/price/live` serves it (item 8).
 
-**The `IsEnabled` column in the `price_sources` table does nothing.** Nothing reads it and nothing
-writes it. The settings file decides which services are on. Item 8 will either hook the column up
-or delete it. Don't change it in the database and expect anything to happen.
+**Only the settings decide which services are on.** The `price_sources` table used to have an
+`IsEnabled` column that nothing read or wrote. Item 8 deleted it (D-20).
 
 ## How much the price moved, and which moves are saved (items 5 and 6, done)
 
@@ -171,8 +171,32 @@ What a message looks like with two prices 15 minutes apart (other fields left ou
 Phase 1. The list of who is listening lives in the API's memory, which fits the rule below about
 running one copy.
 
-**Not built yet:** the web endpoints. Nothing can read past prices or the events over ordinary web
-requests yet. That is item 8 onward in `ops/phase-1-todo.md`.
+## Reading prices over the web (item 8, done)
+
+Four ordinary web addresses read what the app already holds (D-20). **None of them asks a price
+service for anything.** Every request to a service uses up part of a monthly allowance, and anyone
+can reload these pages as often as they like.
+
+| Address | What it returns |
+|---|---|
+| `GET /api/v1/price/live?symbol=XAUUSD` | The price held in memory, with its age, whether it is stale, whether a backup supplied it, and which services were tried. Answers 503 ("unavailable") with a reason when the app has no price yet. |
+| `GET /api/v1/price/history?symbol=XAUUSD&from=…&to=…` | Saved prices, oldest first, from `from` up to but not including `to`. Leaving out `to` means "now". |
+| `GET /api/v1/events?symbol=XAUUSD&window=5m&minPercent=0.3` | Saved price events, newest first. `window` and `minPercent` are optional. `minPercent` is a size, so a 0.4% fall passes 0.3. |
+| `GET /api/v1/price/sources` | Every service in the settings, in the order tried, including switched-off ones: its last success and failure, its circuit breaker, and its requests used, limit, remaining and reset time. |
+
+- **Every answer has the same outer shape**: `success`, `data`, `message`, `statusCode`, and
+  `errors` for bad input.
+- **A `from` older than 30 days is refused with 400 ("bad request")**, naming the limit. The database
+  deletes prices after 30 days, so quietly returning a shorter range would mislead.
+- **Long lists come in pages.** A page holds 50 rows by default and never more than 500. A larger
+  `limit` is cut down, not refused. Each page carries a `nextCursor`, a bookmark to pass back as
+  `cursor` for the next page. It is empty on the last page.
+- **"Remaining" is 0 once a service has turned the app away**, whatever the count says (see "Why the
+  request counter matters" below).
+- **`symbol` can be left out**, and then means gold (`XAUUSD`). It can be typed in any case.
+- **Anyone can call them.** Logins are out of scope for Phase 1.
+- **Dates must be full timestamps**, such as `2026-10-15T00:00:00Z`. A value like `from=yesterday`
+  is refused with the web framework's own error format, not the shape above.
 
 ## Decisions that were made without testing
 
@@ -182,9 +206,9 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-19** so far. `ops/phase-1-todo.md` lists the remaining work in an
+The decision log has **D-1 to D-20** so far. `ops/phase-1-todo.md` lists the remaining work in an
 order where each item can be checked when it is finished. A decision number is only given out when
-the decision is actually made, so the next one will be D-20.
+the decision is actually made, so the next one will be D-21.
 
 ## Where things are
 
@@ -203,7 +227,9 @@ src/Aurum.App.Infrastructure.Pricing/
   Jobs/                            the timer that checks the price
   Realtime/                        the interface the timer uses to send prices to apps
 src/Aurum.App.Application/         the rules for handling requests, and logging
+  Prices/                          the four read endpoints' queries, input checks and answers
 src/Aurum.Api/                     the web API; Program.cs sets everything up
+  Controllers/                     the web addresses; each one passes the request on and wraps the answer
   Hubs/                            the live connection apps subscribe to, and its messages
 src/Aurum.Api.Tests/               tests, run against a real database
 app/                               the start of the mobile app; nothing much in it yet
@@ -239,6 +265,23 @@ the app at startup. Without that, the app would start fine and then be turned aw
 on every request for a month, and every turned-away request still counts against the allowance. A
 fake key in the settings file would bring that problem back.
 
+**A setting in `.env` only reaches the API if `docker-compose.yml` lists it.** Compose passes on
+the variables named under the `api` service and nothing else, and it gives no warning about the
+rest. The list covers the three API keys, switching each service on or off
+(`PriceSources__ApiNinjas__Enabled=false`), GoldAPI's monthly limit, the check interval and the
+number of tries. Anything else is changed in `src/Aurum.Api/appsettings.json`, or by adding a line
+to `docker-compose.yml`.
+
+To watch the fallback work, switch off the first service, API Ninjas. GoldAPI then goes first, and
+its 100 requests a month can't pay for a check every 15 minutes, so the app would refuse to start.
+Raise the check interval at the same time, for example:
+
+```bash
+PriceSources__ApiNinjas__Enabled=false PricePolling__PollInterval=1.00:00:00 docker compose up
+```
+
+`/api/v1/price/live` should then show `isFallback: true`.
+
 **Only run one copy of the API.** If two copies ran, both would check prices and spend the allowance
 twice, and both would try to update the database at the same moment.
 
@@ -251,8 +294,8 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 191 tests (counted with `dotnet test --list-tests` on 2026-10-08). Most of them start a real copy of the database in Docker rather than a fake one,
-because the special table types the app uses behave differently from a plain database and a fake would
+There are 278 tests (counted with `dotnet test --list-tests` on 2026-10-15). Most of them start a
+real copy of the database in Docker rather than a fake one, because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
 Tests worth knowing about:
@@ -322,7 +365,7 @@ same step, while the row is locked. Doing it in two steps (read the count, then 
 where two requests can both see "one left" and both go through.
 
 **When a service turns the app away for going over.** The app records the time it happened on that month's row
-(`ProviderRejectedAt`) and leave the count alone. So a row can say "0 used out of 10,000, turned
+(`ProviderRejectedAt`) and leaves the count alone. So a row can say "0 used out of 10,000, turned
 away", and that mismatch is the point: it's the only sign the app's count and theirs have drifted apart.
 It also means "limit minus used" is **not** how many requests are left. Once a row is marked as
 turned away, none are left.

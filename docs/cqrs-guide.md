@@ -7,8 +7,9 @@ This project keeps requests that **read** data (queries) apart from requests tha
 MediatR takes each command or query and passes it to the one class that handles it, called its
 handler. Every new endpoint should follow this pattern.
 
-Examples in this guide use `PriceSources`, the first feature planned for item 8. None of these files
-exist yet, and the names are illustrative. Terms used here (controller, DTO, entity, repository) are
+Examples in this guide use a made-up `PriceSources` feature, so they can show a command as well as a
+query. None of these files exist, and the names are illustrative. The one real feature,
+`src/Aurum.App.Application/Prices/`, has four queries and no commands. Terms used here (controller, DTO, entity, repository) are
 explained at the top of `docs/best-practices-api.md`.
 
 ### What happens to a request
@@ -164,9 +165,9 @@ public class SetPriceSourceEnabledCommandHandler(IPriceSourceRepository reposito
 }
 ```
 
-`PriceSourceDto`'s fields and `IPriceSourceRepository.GetByCodeAsync` are made up for the example.
-Note also that `PriceSource.IsEnabled` currently does nothing. The settings file decides which
-services are switched on, and item 8 has to either hook the column up or delete it (see CLAUDE.md).
+`PriceSourceDto`'s fields, `IPriceSourceRepository.GetByCodeAsync` and `entity.IsEnabled` are made up
+for the example. The real `price_sources` table has no `IsEnabled` column: item 8 deleted it,
+because the settings file alone decides which services are switched on (D-20).
 
 **Handler rules:**
 
