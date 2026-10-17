@@ -243,6 +243,23 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
         Assert.Equal(DateTimeOffset.Parse(expectedEnd), endsAt);
     }
 
+    [Theory]
+    [InlineData("2026-07-01T00:00:00Z", "2026-07-01T00:00:00Z", "2026-07-31T00:00:00Z", "r30-2026-07-01")] // on the anchor
+    [InlineData("2026-07-01T00:00:00Z", "2026-07-30T23:59:59Z", "2026-07-31T00:00:00Z", "r30-2026-07-01")] // last second of the first period
+    [InlineData("2026-07-01T00:00:00Z", "2026-07-31T00:00:00Z", "2026-08-30T00:00:00Z", "r30-2026-07-31")] // exactly 30 days starts the next
+    [InlineData("2026-07-01T00:00:00Z", "2026-06-30T12:00:00Z", "2026-07-01T00:00:00Z", "r30-2026-06-01")] // before the anchor floors, not truncates
+    [InlineData("2026-07-01T14:37:00-04:00", "2026-07-31T18:36:59Z", "2026-07-31T18:37:00Z", "r30-2026-07-01")] // signup time of day, non-UTC offset
+    [InlineData("2026-07-01T14:37:00-04:00", "2026-07-31T18:37:00Z", "2026-08-30T18:37:00Z", "r30-2026-07-31")]
+    public void ResolvePeriod_rolls_every_thirty_days_from_the_anchor(
+        string anchor, string now, string expectedEnd, string expectedKey)
+    {
+        var (key, _, endsAt) = PostgresQuotaGovernor.ResolvePeriod(
+            QuotaPeriodKind.RollingThirtyDays, DateTimeOffset.Parse(now), DateTimeOffset.Parse(anchor));
+
+        Assert.Equal(expectedKey, key);
+        Assert.Equal(DateTimeOffset.Parse(expectedEnd), endsAt);
+    }
+
     private async Task SeedWindowAsync(int requestLimit)
     {
         var (periodKey, startsAt, endsAt) =
