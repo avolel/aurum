@@ -7,7 +7,8 @@ disable-model-invocation: true
 # Repository audit
 
 The audit reads the whole repository, writes down every problem it can prove, and turns each one
-into a GitHub issue that the owner fixes by hand. The audit itself changes no code.
+into a GitHub issue with a proposed fix. The owner decides whether to use the fix and applies it by
+hand. The audit itself changes no code.
 
 ## Hard rules
 
@@ -154,6 +155,10 @@ Then, for every finding:
    class or setting name.
 3. Merge findings that share one cause into a single issue that lists every place.
 4. Drop anything that is a guess. Put it under "Not filed: unconfirmed" in the final report.
+5. Write the proposed fix. It must keep every invariant in `CLAUDE.md` and every recorded decision,
+   and follow the K.I.S.S. policy: the smallest change that removes the problem. If the only fix
+   would break a recorded decision, say so in the issue and propose updating the decision instead.
+   If a fix is a real design choice, give two options with the tradeoff of each and recommend one.
 
 ## Step 7: File the issues
 
@@ -204,7 +209,7 @@ Title: `[High|Medium|Low]` and a plain sentence that says what is wrong, not whe
 Body template. The issues are for the owner to read, so the repository's plain-English policy
 applies: everyday words, short sentences, no "we", every acronym spelled out the first time.
 
-```markdown
+````markdown
 ## What is wrong
 One or two sentences.
 
@@ -219,12 +224,29 @@ poll and the ledger records one."
 ## Evidence
 The doc line and the code line that disagree, quoted. Or the build or audit output.
 
-## Direction
-One or two sentences on what a fix would need to do. No patch and no code: the owner writes the fix.
+## Proposed fix
+<details>
+<summary>Open after forming your own view</summary>
+
+What to change and why, in two to four sentences. Then a before-and-after snippet for each place,
+with the file path and enough lines around it to find the spot:
+
+```csharp
+// src/Aurum.Api/Program.cs — lines 140-144
+// BEFORE
+...
+// AFTER
+...
+```
+
+For a doc fix, quote the old sentence and the new one. Name any test that should be added or that
+will change. Say what the fix does not cover. End with "Not applied or compiled."
+
+</details>
 
 ---
 Found by `/audit` on <date> at commit `<short sha>`.
-```
+````
 
 Use `git rev-parse HEAD` for `<commit>` so the links keep pointing at the lines that were audited.
 
