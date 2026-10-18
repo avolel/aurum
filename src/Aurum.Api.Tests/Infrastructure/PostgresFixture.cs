@@ -17,8 +17,9 @@ public class PostgresFixture : IAsyncLifetime
         .WithDatabase("aurum_test")
         .WithUsername("aurum")
         .WithPassword("aurum")
-        // Wait for the container to be ready by checking if we can run a simple SQL command.    
-        .WithWaitStrategy(Wait.ForUnixContainer().UntilCommandIsCompleted("psql -U aurum -d aurum_test -c 'SELECT 1'"))
+        // Over TCP, not the socket: the image's temporary bootstrap server answers on the socket
+        // only, then shuts down mid-setup ("terminating connection due to administrator command").
+        .WithWaitStrategy(Wait.ForUnixContainer().UntilCommandIsCompleted("psql -h 127.0.0.1 -U aurum -d aurum_test -c 'SELECT 1'"))
         .Build();
 
     public string ConnectionString => _container.GetConnectionString();
