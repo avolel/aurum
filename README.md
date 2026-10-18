@@ -60,9 +60,20 @@ others buy time during an outage, not faster updates.
 
 I checked GoldAPI's limit on the account page itself: **100 requests per calendar month, reset at
 midnight UTC on the 1st.** If you set a check interval that the first service can't afford for a
-whole month, the app refuses to start and tells you the shortest interval that would work. Moving to
-a paid plan later means changing two settings and restarting. No code depends on the number 100
-(D-8, D-9).
+whole month, the app refuses to start and tells you the shortest interval that would work. No code
+depends on the number 100 (D-8, D-9).
+
+Moving to a paid plan means changing two settings and restarting, but **the new limit only applies
+from the next period.** The counter keeps the limit each period started with in that period's
+database row, and never rewrites it. Raise GoldAPI to 10,000 on the 10th, and the app still stops
+asking GoldAPI after October's 100th request. Lowering a limit has the same catch the other way: the
+app keeps spending against the old, higher number until the period ends. To change the current
+period too, update its row by hand. For a calendar-month service, `PeriodKey` is the year and month:
+
+```sql
+UPDATE api_quota_windows SET "RequestLimit" = 10000
+WHERE "SourceCode" = 'goldapi.io' AND "PeriodKey" = '2026-10';
+```
 
 > **The other two limits come from each service's published documentation. Nobody has checked them
 > on an account page.** That matters most for API Ninjas, because the whole schedule depends on its

@@ -486,8 +486,21 @@ is.
 Waiting is safe because the plan's limit is a number in the settings, not an assumption buried in the
 code. `MonthlyRequestLimit` and `QuotaPeriod` come from each service's settings and can be changed per
 environment. The settings checker recalculates the shortest safe check interval from whatever limit it
-is given. Moving to a paid plan is two settings and a restart. If the free limit had been built into
-the timer code, this decision would have had to be made then.
+is given. If the free limit had been built into the timer code, this decision would have had to be
+made then.
+
+Moving to a paid plan means changing two settings and restarting, but the new limit only applies
+from the next period. Each period's row in `api_quota_windows` keeps the limit it started with, so a
+later change does not rewrite what that period was allowed (D-7). Raising the limit mid-month therefore
+still cuts the service off at the old number until the 1st. Lowering it lets the app keep spending
+against the old, higher number. I kept that behaviour rather than making the counter follow the
+setting, because that would change the one statement D-7 says to leave alone, and the row would stop
+recording what the period started with. To change the current period too, update its row by hand:
+
+```sql
+UPDATE api_quota_windows SET "RequestLimit" = 10000
+WHERE "SourceCode" = 'goldapi.io' AND "PeriodKey" = '2026-10';
+```
 
 *Updated by D-9:* "no code depends on the number 100" wasn't true when this was first written. The
 counter had a built-in default of 100 that any service without its own case fell back to. It's true
