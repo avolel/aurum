@@ -346,11 +346,6 @@ because the service still counts it. Nothing in the code says so; the rule is si
 no code to give it back. `Transport_failure_still_spends_the_lease` is what makes adding that code
 fail loudly. If you delete a test like that because "it tests nothing", you remove the guard.
 
-**Known random failure.** The tests sometimes start before the test database has finished being
-created. When that happens, every test in the group fails with `database "aurum_test" does not
-exist`. Running them again works. The fix is to wait for the database itself, not just the database
-server.
-
 ## Why the request counter matters
 
 Every service the app uses limits how many requests it gets per month, and the smallest limit is 100. A
