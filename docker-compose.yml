@@ -17,7 +17,7 @@ services:
       - aurum-postgres-data:/home/postgres/pgdata/data
       - ./ops/db/init:/docker-entrypoint-initdb.d:ro
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aurum} -d ${POSTGRES_DB:-aurum}"]
       interval: 5s
@@ -34,7 +34,7 @@ services:
       # model weights. Remove it explicitly if you really mean to.
       - aurum-ollama-models:/root/.ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     healthcheck:
       # ollama's image has no curl; its own CLI is the reliable probe.
       test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
@@ -71,7 +71,7 @@ services:
       PricePolling__PollInterval: ${PricePolling__PollInterval:-00:15:00}
       PriceFeed__Resilience__MaxAttempts: ${PriceFeed__Resilience__MaxAttempts:-3}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
