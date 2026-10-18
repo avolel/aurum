@@ -27,23 +27,36 @@ public sealed class AppLogDrainService(
 
         try
         {
-            await foreach (var entry in queue.ReadAllAsync(stoppingToken))
+            while (await queue.WaitToReadAsync(stoppingToken))
             {
-                batch.Add(entry);
-
-                if (batch.Count >= MaxBatchSize)
-                {
-                    await FlushAsync(batch, stoppingToken);
-                }
+                await DrainAsync(batch, stoppingToken);
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
-            // Shutdown: fall through and flush what is in hand.
+            // Shutdown: fall through and write what is still queued.
         }
 
-        // The shutdown token is already cancelled and would cancel this last write.
-        await FlushAsync(batch, CancellationToken.None);
+        // The shutdown token is already cancelled and would cancel these last writes.
+        await DrainAsync(batch, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Writes everything queued right now, in batches. The last batch is written even when short:
+    /// waiting for a full one would hold a quiet API's rows in memory indefinitely.
+    /// </summary>
+    private async Task DrainAsync(List<AppLog> batch, CancellationToken ct)
+    {
+        while (queue.TryRead(out var entry))
+        {
+            batch.Add(entry);
+            if (batch.Count >= MaxBatchSize)
+            {
+                await FlushAsync(batch, ct);
+            }
+        }
+
+        await FlushAsync(batch, ct);
     }
 
     private async Task FlushAsync(List<AppLog> batch, CancellationToken ct)

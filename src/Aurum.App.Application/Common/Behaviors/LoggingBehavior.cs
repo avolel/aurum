@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Aurum.App.Application.AppLogs;
+using FluentValidation;
 using MediatR;
 using Microsoft.Extensions.Logging;
 
@@ -47,7 +48,8 @@ public sealed class LoggingBehavior<TRequest, TResponse>(
         }
         catch (Exception ex)
         {
-            await appLog.LogErrorAsync(action, ex, ct: cancellationToken);
+            var statusCode = ex is ValidationException ? 400 : 500;
+            await appLog.LogErrorAsync(action, ex, statusCode, ct: cancellationToken);
             throw;
         }
     }

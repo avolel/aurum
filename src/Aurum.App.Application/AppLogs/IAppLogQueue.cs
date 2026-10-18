@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Threading.Channels;
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Microsoft.Extensions.Logging;
@@ -14,7 +15,11 @@ public interface IAppLogQueue
     /// <returns><see langword="false"/> when the row was dropped.</returns>
     bool TryEnqueue(AppLog entry);
 
-    IAsyncEnumerable<AppLog> ReadAllAsync(CancellationToken ct);
+    /// <summary>Waits until a row is queued. <see langword="false"/> once the queue is closed.</summary>
+    ValueTask<bool> WaitToReadAsync(CancellationToken ct);
+
+    /// <summary>Takes a row if one is queued. <see langword="false"/> means empty right now.</summary>
+    bool TryRead([MaybeNullWhen(false)] out AppLog entry);
 }
 
 /// <inheritdoc />
@@ -56,8 +61,11 @@ public sealed class AppLogQueue(ILogger<AppLogQueue> logger) : IAppLogQueue
         return false;
     }
 
-    public IAsyncEnumerable<AppLog> ReadAllAsync(CancellationToken ct) =>
-        _channel.Reader.ReadAllAsync(ct);
+    public ValueTask<bool> WaitToReadAsync(CancellationToken ct) =>
+        _channel.Reader.WaitToReadAsync(ct);
+
+    public bool TryRead([MaybeNullWhen(false)] out AppLog entry) =>
+        _channel.Reader.TryRead(out entry);
 
     private static bool IsPowerOfTen(long value)
     {

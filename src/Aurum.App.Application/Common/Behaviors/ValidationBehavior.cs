@@ -25,10 +25,10 @@ public sealed class ValidationBehavior<TRequest, TResponse>(
             return await next();
         }
 
-        var context = new ValidationContext<TRequest>(request);
-
+        // A context per validator: a context collects failures, and each result shares its list,
+        // so one shared context reports every failure once per validator.
         var results = await Task.WhenAll(
-            applicable.Select(validator => validator.ValidateAsync(context, cancellationToken)));
+            applicable.Select(validator => validator.ValidateAsync(request, cancellationToken)));
 
         var failures = results.SelectMany(result => result.Errors)
             .Where(failure => failure is not null)
