@@ -17,9 +17,8 @@ public class PostgresFixture : IAsyncLifetime
         .WithDatabase("aurum_test")
         .WithUsername("aurum")
         .WithPassword("aurum")
-        // The HA image bootstraps via Patroni and is slow to accept connections; the default
-        // "port is open" wait strategy lets tests start against a database that then vanishes.
-        .WithWaitStrategy(Wait.ForUnixContainer().UntilCommandIsCompleted("pg_isready -U aurum -d aurum_test"))
+        // Wait for the container to be ready by checking if we can run a simple SQL command.    
+        .WithWaitStrategy(Wait.ForUnixContainer().UntilCommandIsCompleted("psql -U aurum -d aurum_test -c 'SELECT 1'"))
         .Build();
 
     public string ConnectionString => _container.GetConnectionString();
