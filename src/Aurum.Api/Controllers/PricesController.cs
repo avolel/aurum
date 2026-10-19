@@ -20,7 +20,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
     /// <summary>The held price. 503 when the app has none yet; never calls a price service.</summary>
     [HttpGet("live")]
     public async Task<ActionResult<ApiResponse<LivePriceDto>>> GetLive(
-        [FromQuery] string? symbol, CancellationToken ct)
+        [FromQuery] string? symbol, CancellationToken ct = default)
     {
         const string action = nameof(GetLive);
         symbol ??= SupportedSymbol.Gold;
@@ -30,15 +30,16 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
             var price = await mediator.Send(new GetLivePriceQuery(symbol), ct);
 
             var response = price is null
-                ? ApiResponse<LivePriceDto>.CreateError(ErrorMessages.NoPriceMessage, StatusCodes.Status503ServiceUnavailable)
+                ? ApiResponse<LivePriceDto>.CreateError(ErrorMessages.NoPriceMessage,
+                StatusCodes.Status503ServiceUnavailable)
                 : ApiResponse<LivePriceDto>.CreateSuccess(price);
 
-            await appLogService.LogAsync(LogType.ActionLog, action, $"symbol={symbol}", response.StatusCode);
+            await appLogService.LogAsync(LogType.ActionLog, action, $"symbol={symbol}", response.StatusCode, ct: ct);
             return StatusCode(response.StatusCode, response);
         }
         catch (ValidationException ex)
         {
-            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest);
+            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct);
             return BadRequest(ApiResponse<LivePriceDto>.CreateValidationError(ex.ToErrors()));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -48,7 +49,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
         }
         catch (Exception ex)
         {
-            await appLogService.LogErrorAsync(action, ex);
+            await appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None);
             return StatusCode(
                 StatusCodes.Status500InternalServerError,
                 ApiResponse<LivePriceDto>.CreateError(ErrorMessages.UnexpectedErrorMessage));
@@ -63,7 +64,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
         [FromQuery] DateTimeOffset? to,
         [FromQuery] int? limit,
         [FromQuery] string? cursor,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         const string action = nameof(GetHistory);
         symbol ??= SupportedSymbol.Gold;
@@ -74,12 +75,12 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
 
             await appLogService.LogAsync(
                 LogType.ActionLog, action, $"symbol={symbol} from={from:O} to={to:O} rows={page.Items.Count}",
-                StatusCodes.Status200OK);
+                StatusCodes.Status200OK, ct: ct);
             return Ok(ApiResponse<CursorPage<PriceTickDto>>.CreateSuccess(page));
         }
         catch (ValidationException ex)
         {
-            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest);
+            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct);
             return BadRequest(ApiResponse<CursorPage<PriceTickDto>>.CreateValidationError(ex.ToErrors()));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -88,7 +89,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
         }
         catch (Exception ex)
         {
-            await appLogService.LogErrorAsync(action, ex);
+            await appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None);
             return StatusCode(
                 StatusCodes.Status500InternalServerError,
                 ApiResponse<CursorPage<PriceTickDto>>.CreateError(ErrorMessages.UnexpectedErrorMessage));
@@ -97,7 +98,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
 
     /// <summary>Every configured price source: priority, health, circuit and quota. Never calls a source.</summary>
     [HttpGet("sources")]
-    public async Task<ActionResult<ApiResponse<IReadOnlyList<PriceSourceStatusDto>>>> GetSources(CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<PriceSourceStatusDto>>>> GetSources(CancellationToken ct = default)
     {
         const string action = nameof(GetSources);
 
@@ -105,7 +106,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
         {
             var sources = await mediator.Send(new GetPriceSourcesQuery(), ct);
 
-            await appLogService.LogAsync(LogType.ActionLog, action, $"sources={sources.Count}", StatusCodes.Status200OK);
+            await appLogService.LogAsync(LogType.ActionLog, action, $"sources={sources.Count}", StatusCodes.Status200OK, ct: ct);
             return Ok(ApiResponse<IReadOnlyList<PriceSourceStatusDto>>.CreateSuccess(sources));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -114,7 +115,7 @@ public sealed class PricesController(IMediator mediator, IAppLogService<PricesCo
         }
         catch (Exception ex)
         {
-            await appLogService.LogErrorAsync(action, ex);
+            await appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None);
             return StatusCode(
                 StatusCodes.Status500InternalServerError,
                 ApiResponse<IReadOnlyList<PriceSourceStatusDto>>.CreateError(ErrorMessages.UnexpectedErrorMessage));

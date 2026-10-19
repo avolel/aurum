@@ -25,7 +25,7 @@ public sealed class PriceEventsController(IMediator mediator, IAppLogService<Pri
         [FromQuery] decimal? minPercent,
         [FromQuery] int? limit,
         [FromQuery] string? cursor,
-        CancellationToken ct)
+        CancellationToken ct = default)
     {
         const string action = nameof(GetEvents);
         symbol ??= SupportedSymbol.Gold;
@@ -36,12 +36,12 @@ public sealed class PriceEventsController(IMediator mediator, IAppLogService<Pri
 
             await appLogService.LogAsync(
                 LogType.ActionLog, action, $"symbol={symbol} window={window} rows={page.Items.Count}",
-                StatusCodes.Status200OK);
+                StatusCodes.Status200OK, ct: ct);
             return Ok(ApiResponse<CursorPage<PriceEventDto>>.CreateSuccess(page));
         }
         catch (ValidationException ex)
         {
-            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest);
+            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct);
             return BadRequest(ApiResponse<CursorPage<PriceEventDto>>.CreateValidationError(ex.ToErrors()));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -51,7 +51,7 @@ public sealed class PriceEventsController(IMediator mediator, IAppLogService<Pri
         }
         catch (Exception ex)
         {
-            await appLogService.LogErrorAsync(action, ex);
+            await appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None);
             return StatusCode(
                 StatusCodes.Status500InternalServerError,
                 ApiResponse<CursorPage<PriceEventDto>>.CreateError(ErrorMessages.UnexpectedErrorMessage));

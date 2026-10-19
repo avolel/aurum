@@ -98,15 +98,17 @@ public class PriceEventsControllerTests
     [Fact]
     public async Task GetEvents_WhenHandlerThrows_Returns500AndLogsError()
     {
-        var failure = new InvalidOperationException("boom");
-        _mediator.Setup(m => m.Send(It.IsAny<GetPriceEventsQuery>(), It.IsAny<CancellationToken>())).ThrowsAsync(failure);
+        var failure = new InvalidOperationException("BOOM!!");
+        // A live token, so forwarding it and swapping in None are distinguishable.
+        using var request = new CancellationTokenSource();
+        _mediator.Setup(m => m.Send(It.IsAny<GetPriceEventsQuery>(), request.Token)).ThrowsAsync(failure);
 
-        var (status, body) = Unwrap(await CreateController().GetEvents(null, null, null, null, null, CancellationToken.None));
+        var (status, body) = Unwrap(await CreateController().GetEvents(null, null, null, null, null, request.Token));
 
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message);
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PriceEventsController.GetEvents), failure, 500, It.IsAny<CancellationToken>()),
+            l => l.LogErrorAsync(nameof(PriceEventsController.GetEvents), failure, 500, CancellationToken.None),
             Times.Once);
     }
 }

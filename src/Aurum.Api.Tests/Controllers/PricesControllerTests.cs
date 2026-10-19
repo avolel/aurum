@@ -94,15 +94,17 @@ public class PricesControllerTests
     [Fact]
     public async Task GetLive_WhenHandlerThrows_Returns500AndLogsError()
     {
-        var failure = new InvalidOperationException("boom");
-        _mediator.Setup(m => m.Send(It.IsAny<GetLivePriceQuery>(), It.IsAny<CancellationToken>())).ThrowsAsync(failure);
+        var failure = new InvalidOperationException("BOOM!!");
+        // A live token, so forwarding it and swapping in None are distinguishable.
+        using var request = new CancellationTokenSource();
+        _mediator.Setup(m => m.Send(It.IsAny<GetLivePriceQuery>(), request.Token)).ThrowsAsync(failure);
 
-        var (status, body) = Unwrap(await CreateController().GetLive(SupportedSymbol.Gold, CancellationToken.None));
+        var (status, body) = Unwrap(await CreateController().GetLive(SupportedSymbol.Gold, request.Token));
 
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message); // never the exception's own text
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PricesController.GetLive), failure, 500, It.IsAny<CancellationToken>()),
+            l => l.LogErrorAsync(nameof(PricesController.GetLive), failure, 500, CancellationToken.None),
             Times.Once);
     }
 
@@ -193,16 +195,17 @@ public class PricesControllerTests
     [Fact]
     public async Task GetHistory_WhenHandlerThrows_Returns500AndLogsError()
     {
-        var failure = new InvalidOperationException("boom");
-        _mediator.Setup(m => m.Send(It.IsAny<GetPriceHistoryQuery>(), It.IsAny<CancellationToken>())).ThrowsAsync(failure);
+        var failure = new InvalidOperationException("BOOM!!");
+        using var request = new CancellationTokenSource();
+        _mediator.Setup(m => m.Send(It.IsAny<GetPriceHistoryQuery>(), request.Token)).ThrowsAsync(failure);
 
         var (status, body) = Unwrap(await CreateController()
-            .GetHistory(SupportedSymbol.Gold, HistoryFrom, null, null, null, CancellationToken.None));
+            .GetHistory(SupportedSymbol.Gold, HistoryFrom, null, null, null, request.Token));
 
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message);
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PricesController.GetHistory), failure, 500, It.IsAny<CancellationToken>()),
+            l => l.LogErrorAsync(nameof(PricesController.GetHistory), failure, 500, CancellationToken.None),
             Times.Once);
     }
 
@@ -246,15 +249,16 @@ public class PricesControllerTests
     [Fact]
     public async Task GetSources_WhenHandlerThrows_Returns500AndLogsError()
     {
-        var failure = new InvalidOperationException("boom");
-        _mediator.Setup(m => m.Send(It.IsAny<GetPriceSourcesQuery>(), It.IsAny<CancellationToken>())).ThrowsAsync(failure);
+        var failure = new InvalidOperationException("BOOM!!");
+        using var request = new CancellationTokenSource();
+        _mediator.Setup(m => m.Send(It.IsAny<GetPriceSourcesQuery>(), request.Token)).ThrowsAsync(failure);
 
-        var (status, body) = Unwrap(await CreateController().GetSources(CancellationToken.None));
+        var (status, body) = Unwrap(await CreateController().GetSources(request.Token));
 
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message);
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PricesController.GetSources), failure, 500, It.IsAny<CancellationToken>()),
+            l => l.LogErrorAsync(nameof(PricesController.GetSources), failure, 500, CancellationToken.None),
             Times.Once);
     }
 }

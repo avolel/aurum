@@ -100,7 +100,7 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
     [InlineData(5)]
     [InlineData(2)]
     [InlineData(3)]
-    [InlineData(1)] 
+    [InlineData(1)]
     public async Task Each_retry_attempt_spends_its_own_lease(int maxAttempts)
     {
         // 500 is retryable, so the pipeline makes all three attempts and gives up.
