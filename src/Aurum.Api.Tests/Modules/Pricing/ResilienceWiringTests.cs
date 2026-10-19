@@ -96,13 +96,17 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
         return (window?.RequestsUsed ?? 0, window?.ProviderRejectedAt);
     }
 
-    [Fact]
-    public async Task Each_retry_attempt_spends_its_own_lease()
+    [Theory]
+    [InlineData(5)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(1)] 
+    public async Task Each_retry_attempt_spends_its_own_lease(int maxAttempts)
     {
         // 500 is retryable, so the pipeline makes all three attempts and gives up.
         var transport = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
 
-        await using var provider = BuildProvider(transport);
+        await using var provider = BuildProvider(transport, maxAttempts: maxAttempts);
         using var scope = provider.CreateScope();
         var source = scope.ServiceProvider.GetRequiredService<WiringProbeSource>();
 
@@ -113,10 +117,10 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
 
         // MaxRetryAttempts = 2, so three calls leave the process. Each one is a request the
         // provider bills, so each one must be a lease.
-        Assert.Equal(3, transport.CallCount);
+        Assert.Equal(maxAttempts, transport.CallCount);
 
         var (used, _) = await LedgerAsync();
-        Assert.Equal(3, used);
+        Assert.Equal(maxAttempts, used);
     }
 
     [Fact]

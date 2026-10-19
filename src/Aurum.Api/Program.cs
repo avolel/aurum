@@ -230,28 +230,32 @@ public partial class Program
             // Outermost: caps the whole retry sequence.
             pipeline.AddTimeout(options.TotalTimeout);
 
-            pipeline.AddRetry(new HttpRetryStrategyOptions
+            //Polly refuses zero retries, so one attempt means no retry step (D-15)
+            if (resilience.MaxAttempts > 1)
             {
-                // PriceSourceException is thrown above this pipeline, so it can never be seen here
-                // (D-14). QuotaExhaustedException is a failover signal, not a retry signal.
-                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
-                    .Handle<TimeoutRejectedException>()
-                    .Handle<HttpRequestException>()
+                pipeline.AddRetry(new HttpRetryStrategyOptions
+                {
+                    // PriceSourceException is thrown above this pipeline, so it can never be seen here
+                    // (D-14). QuotaExhaustedException is a failover signal, not a retry signal.
+                    ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                        .Handle<TimeoutRejectedException>()
+                        .Handle<HttpRequestException>()
 
-                    // A failing status is a result, not an exception; without this a 503 is never
-                    // retried. 429/402 arrive as QuotaExhaustedException via QuotaHandler.
-                    .HandleResult(response =>
-                        response.StatusCode is HttpStatusCode.RequestTimeout
-                                            or >= HttpStatusCode.InternalServerError),
-                // Polly counts retries, the setting counts attempts. Convert here and nowhere else (D-15).
-                MaxRetryAttempts = resilience.MaxAttempts - 1,
-                BackoffType = DelayBackoffType.Exponential,
-                Delay = resilience.RetryBackoffBase,
+                        // A failing status is a result, not an exception; without this a 503 is never
+                        // retried. 429/402 arrive as QuotaExhaustedException via QuotaHandler.
+                        .HandleResult(response =>
+                            response.StatusCode is HttpStatusCode.RequestTimeout
+                                                or >= HttpStatusCode.InternalServerError),
+                    // Polly counts retries, the setting counts attempts. Convert here and nowhere else (D-15).
+                    MaxRetryAttempts = resilience.MaxAttempts - 1,
+                    BackoffType = DelayBackoffType.Exponential,
+                    Delay = resilience.RetryBackoffBase,
 
-                // Must stay false: this options type defaults it to true, and jitter breaks the
-                // schedule MinimumTotalTimeout models (D-15).
-                UseJitter = false,
-            });
+                    // Must stay false: this options type defaults it to true, and jitter breaks the
+                    // schedule MinimumTotalTimeout models (D-15).
+                    UseJitter = false,
+                });
+            }
 
             // Innermost: a fresh budget per attempt. A timed-out attempt has still spent its lease (D-7).
             pipeline.AddTimeout(options.RequestTimeout);
