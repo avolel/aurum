@@ -176,7 +176,7 @@ What a message looks like with two prices 15 minutes apart (other fields left ou
 
 ```json
 { "symbol": "XAUUSD",
-  "quote": { "mid": 4010, "sourceCode": "goldapi.io", "isFallback": false, "isStale": false },
+  "quote": { "mid": 4010, "sourceCode": "api-ninjas", "isFallback": false, "isStale": false },
   "windows": { "1m": null, "5m": null, "15m": { "deltaPercent": 0.25 }, "1h": null, "4h": null, "1d": null } }
 ```
 

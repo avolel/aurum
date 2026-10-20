@@ -11,14 +11,15 @@ It sits beside the other documents like this:
 | `README.md` | What the app is for and where the project stands. |
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
-| `ops/phase-1-todo.md` | The work still to do in Phase 1. |
+| `ops/phase-1-todo.md` | Phase 1's work list, all done. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
 Numbers in brackets, like (D-7), point to entries in the decision log.
 
 Everything here was checked against the code on 2026-10-15, after item 8 (the read endpoints) was
-built on top of commit `9280ea4`. If you change how a piece works, update its section here too.
+built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audit found had drifted
+from the code since then. If you change how a piece works, update its section here too.
 
 ---
 
@@ -104,7 +105,7 @@ aurum/
 ├── ops/
 │   ├── db/init/01-extensions.sql  ← turns on TimescaleDB and pgvector, once, on an empty database
 │   ├── decisions/decisions.md     ← the decision log
-│   └── phase-1-todo.md            ← remaining Phase 1 work
+│   └── phase-1-todo.md            ← Phase 1's work list, all done
 ├── docs/                          ← this file and the best-practice guides
 ├── app/                           ← the mobile/web app: an empty Expo shell for now
 └── src/
@@ -715,8 +716,8 @@ failing.
 ```
 
 - Settings: `PriceFeedCircuit:FailureThreshold` (default 3) and `PriceFeedCircuit:BreakDuration`
-  (default 15 minutes). Neither is in `appsettings.json`, so the defaults in
-  `PriceFeedCircuitOptions` apply.
+  (default 15 minutes). `appsettings.json` sets `BreakDuration` to 45 minutes. It does not set
+  `FailureThreshold`, so the code's default of 3 applies.
 - After a break, the next normal poll is the test. One more failure re-opens it at once.
 - Only failures the feed sees count: bad answers, network errors, timeouts. Running out of allowance
   does not count.
@@ -729,8 +730,7 @@ failing.
 
 ### The latest price (`LatestQuoteCache`)
 
-Holds the newest price per symbol so a future `/v1/price/live` endpoint can answer without reading
-the database.
+Holds the newest price per symbol so `/api/v1/price/live` can answer without reading the database.
 
 ```csharp
 // What a reader gets back from cache.Get("XAUUSD")
@@ -921,7 +921,7 @@ with a small letter; some fields left out):
 {
   "symbol": "XAUUSD",
   "quote": { "mid": 4010, "bid": null, "ask": null, "observedAt": "2026-06-01T12:00:00+00:00",
-             "sourceCode": "goldapi.io", "isFallback": false, "age": "00:00:00", "isStale": false },
+             "sourceCode": "api-ninjas", "isFallback": false, "age": "00:00:00", "isStale": false },
   "windows": {
     "1m": null, "5m": null,
     "15m": { "deltaPercent": 0.25, "deltaAbsolute": 10, "sampleCount": 2, "crossSource": false },
@@ -996,7 +996,7 @@ fix.
 
 | Check | Where |
 |---|---|
-| `ConnectionStrings:Aurum` is empty. | `Program.cs` |
+| `ConnectionStrings:DefaultConnection` is empty. | `Program.cs` |
 | An enabled service has no `ApiKey`, no `BaseUrl`, or a `MonthlyRequestLimit` below 1. | `PriceSourcesOptionsValidator` |
 | A registered service has no settings entry, or two entries share a `SourceCode`. | `PriceSourcesOptionsValidator` |
 | No service is enabled, or two share the lowest `Priority`. | `PriceSourcesOptionsValidator` |
@@ -1227,8 +1227,8 @@ Four things to know before writing a test:
 
 An empty Expo shell (Expo is a toolkit for building React Native apps for phones and the web).
 `App.tsx` shows a placeholder screen with a summary of fake prices from `src/fixture/generateTicks.ts`.
-The chart library is chosen (`lightweight-charts`, D-2) but not installed or used. The real dashboard
-is planned after the API endpoints exist.
+The chart library is chosen (`lightweight-charts`, D-2) and listed in `app/package.json`, but no code
+uses it yet. The API endpoints the dashboard needs exist; the dashboard itself is planned for Phase 4.
 
 ---
 
