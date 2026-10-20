@@ -6,7 +6,7 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 /// </summary>
 public interface IPriceSource
 {
-    /// <summary>Stable code matching <see cref="Entities.PriceSource.Code"/> and the options key.</summary>
+    /// <summary>Stable code matching <see cref="Entities.PriceSource.Code"/> and <see cref="PriceSourceOptions.SourceCode"/>.</summary>
     string Code { get; }
 
     /// <summary>

@@ -1,10 +1,8 @@
 /**
  * Deterministic RNG for the D-2 fixture.
  *
- * The three chart candidates have to be measured against byte-identical data or the frame times
- * are not comparable. `Math.random()` would reseed per reload, so every run would be measuring a
- * slightly different series — and path-simplification cost in Skia is sensitive to the shape of
- * the series, not just its length.
+ * Deterministic so the same seed gives the same prices on every platform. `TickReplay.cs` ports it
+ * to C#.
  *
  * mulberry32: a 32-bit PRNG that is a few lines long and has good enough distribution for
  * synthetic price data. Not cryptographic, and it does not need to be.

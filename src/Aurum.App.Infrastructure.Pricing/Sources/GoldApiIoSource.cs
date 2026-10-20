@@ -4,7 +4,7 @@ using Aurum.App.SharedKernel.Constants;
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
 /// <summary>
-/// GoldAPI.io free tier (§12's primary spot source).
+/// GoldAPI.io free tier, the second source tried.
 /// </summary>
 public class GoldApiIoSource(
     HttpClient http,

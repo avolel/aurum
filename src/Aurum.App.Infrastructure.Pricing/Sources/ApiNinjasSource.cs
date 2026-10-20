@@ -3,7 +3,7 @@ using Aurum.App.SharedKernel.Constants;
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
 /// <summary>
-/// API Ninjas' gold endpoint (§12's secondary source).
+/// API Ninjas' gold endpoint, the primary source.
 /// </summary>
 /// <remarks>
 /// <para><b>Gold only</b>: /v1/goldprice takes no symbol, so without the guard below XAGUSD would

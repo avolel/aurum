@@ -12,12 +12,9 @@
          the build — it fails the first Send() in production. Raising it is a procurement decision,
          not a dependency bump.
 
-         AutoMapper is deliberately ABSENT, although docs/best-practices-api.md and cqrs-guide.md
-         both assume it. Every published version, 15.0.1 included, carries the unpatched
-         high-severity advisory GHSA-rvv3-g6hj-g44x — there is no version to upgrade to. Handlers
-         map entity to DTO by hand until that advisory has a fix; CLAUDE.md's handler rule already
-         says "via AutoMapper or manual", so nothing downstream depends on which. Re-add it here,
-         with AddAutoMapper in Program.cs beside AddMediatR, once a fixed version ships. -->
+         AutoMapper is deliberately ABSENT: every published version, 15.0.1 included, carries the
+         unpatched high-severity advisory GHSA-rvv3-g6hj-g44x. Handlers map entity to DTO by hand
+         (CLAUDE.md). -->
     <PackageReference Include="MediatR" Version="12.5.0" />
     <PackageReference Include="FluentValidation" Version="11.11.0" />
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />

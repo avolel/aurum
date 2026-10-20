@@ -96,7 +96,6 @@ internal sealed class LatestQuoteCache(
 
             Record(new PriceFeedResult(quote, primary, Attempts: []));
 
-            // Information: until item 8 this is the only sign a restart picked up a price.
             logger.LogInformation(
                 "Warmed {Symbol} from stored tick: {SourceCode}, observed {ObservedAt:o}, {Age} old.",
                 symbol, tick.SourceCode, tick.ObservedAt, clock.GetUtcNow() - tick.ObservedAt);

@@ -1,7 +1,6 @@
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Aurum.App.Infrastructure.Data.Entities.Macro;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
-using Aurum.App.Infrastructure.Pricing.Quota;
 using Aurum.App.SharedKernel.Entities;
 using Microsoft.EntityFrameworkCore;
 

@@ -8,8 +8,8 @@ namespace Aurum.App.Infrastructure.Pricing.Deltas;
 /// </summary>
 /// <remarks>
 /// A window's move comes from two real prices spaced close enough to its length, or it is null.
-/// Null means "unknown" and must never be shown as zero (D-17). Public for the same item 8 reason
-/// as <c>ILatestQuoteCache</c>.
+/// Null means "unknown" and must never be shown as zero (D-17). Public because Application reads
+/// it (D-20).
 /// </remarks>
 public interface IDeltaEngine
 {

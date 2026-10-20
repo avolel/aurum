@@ -1,8 +1,7 @@
 import { mulberry32, normalSampler } from './rng';
 
 /**
- * Canonical tick shape. Every candidate renders from this array; per-library shapes are derived
- * in `adapters.ts` outside the measured window.
+ * Canonical tick shape.
  *
  * `ts` is epoch milliseconds UTC. `price` is XAUUSD, one troy ounce in USD.
  */

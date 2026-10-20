@@ -1,5 +1,6 @@
 using System.Globalization;
 using Aurum.App.Infrastructure.Data;
+using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;

@@ -1,6 +1,7 @@
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Quota;
 using Aurum.App.Infrastructure.Data;
+using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.Api.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;

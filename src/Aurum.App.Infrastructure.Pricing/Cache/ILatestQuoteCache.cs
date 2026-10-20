@@ -7,7 +7,7 @@ namespace Aurum.App.Infrastructure.Pricing.Cache;
 /// a database read (D-16).
 /// </summary>
 /// <remarks>
-/// Public so item 8 can still choose to reference this project from Application.
+/// Public because <c>GetLivePriceQueryHandler</c> in Application reads it (D-20).
 /// </remarks>
 public interface ILatestQuoteCache
 {

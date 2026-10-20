@@ -188,6 +188,53 @@ namespace Aurum.App.Infrastructure.Data.Migrations
                     b.ToTable("macro_series", (string)null);
                 });
 
+            modelBuilder.Entity("Aurum.App.Infrastructure.Data.Entities.Pricing.ApiQuotaWindow", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("PeriodEndsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PeriodKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("PeriodStartsAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("ProviderRejectedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("RequestLimit")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("RequestsUsed")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SourceCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceCode", "PeriodKey")
+                        .IsUnique();
+
+                    b.ToTable("api_quota_windows", (string)null);
+                });
+
             modelBuilder.Entity("Aurum.App.Infrastructure.Data.Entities.Pricing.PriceEvent", b =>
                 {
                     b.Property<long>("Id")
@@ -373,53 +420,6 @@ namespace Aurum.App.Infrastructure.Data.Migrations
                         .IsDescending(false, true);
 
                     b.ToTable("price_ticks", (string)null);
-                });
-
-            modelBuilder.Entity("Aurum.App.Infrastructure.Pricing.Quota.ApiQuotaWindow", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("PeriodEndsAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("PeriodKey")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTimeOffset>("PeriodStartsAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("ProviderRejectedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("RequestLimit")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("RequestsUsed")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("SourceCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SourceCode", "PeriodKey")
-                        .IsUnique();
-
-                    b.ToTable("api_quota_windows", (string)null);
                 });
 
             modelBuilder.Entity("Aurum.App.Infrastructure.Data.Entities.Macro.MacroObservation", b =>

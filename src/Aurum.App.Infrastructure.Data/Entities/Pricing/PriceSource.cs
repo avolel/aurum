@@ -8,7 +8,7 @@ namespace Aurum.App.Infrastructure.Data.Entities.Pricing;
 /// </summary>
 public class PriceSource : AuditableEntity
 {
-    /// <summary>Natural key, e.g. <c>goldapi.io</c>. Matches the options key under PriceSources.</summary>
+    /// <summary>Natural key, e.g. <c>goldapi.io</c>. Matches <c>PriceSourceOptions.SourceCode</c>.</summary>
     public string Code { get; set; } = null!;
 
     public string DisplayName { get; set; } = null!;

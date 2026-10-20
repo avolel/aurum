@@ -10,7 +10,7 @@ namespace Aurum.Api.Hubs;
 /// </summary>
 /// <remarks>
 /// Reads the cache and the delta engine directly, not through MediatR: a read-only query would be a
-/// pass-through handler. Item 8 decides whether that changes (D-19).
+/// pass-through handler (D-19, kept by D-20).
 /// </remarks>
 public sealed class PriceHub(ILatestQuoteCache cache, IDeltaEngine deltas) : Hub<IPriceClient>
 {

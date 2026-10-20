@@ -1,6 +1,6 @@
 using Aurum.App.SharedKernel.Entities;
 
-namespace Aurum.App.Infrastructure.Pricing.Quota;
+namespace Aurum.App.Infrastructure.Data.Entities.Pricing;
 
 /// <summary>
 /// Durable per-source, per-period request counter. One row per
