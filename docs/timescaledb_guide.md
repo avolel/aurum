@@ -1,161 +1,89 @@
-# TimescaleDB: Overview, Migration, and Advanced Features
+# TimescaleDB in this app
 
-## What is TimescaleDB and What is it Used For?
+TimescaleDB is an add-on for Postgres. It changes how one table, `price_ticks`, is stored on disk.
+Queries against that table are ordinary SQL, and the app reads and writes it through EF Core like
+any other table.
 
-At its core, **TimescaleDB is PostgreSQL on steroids for time-series data**. It isn't a separate database engine; it is a native extension that transforms standard Postgres into a powerhouse capable of handling millions of data points per second. 
+The database image is `timescale/timescaledb-ha:pg17` (decision D-3). It ships with TimescaleDB and
+with pgvector, a second add-on kept for the AI search planned in Phase 2.
 
-### What is "Time-Series Data"?
-Time-series data is any information where **time is the most critical component**, and you are constantly appending new data rather than updating old data. Instead of asking *"What is the user's current address?"*, you are tracking *"How has this value changed over time?"*
+## What it does for `price_ticks`
 
-### Real-World Use Cases
-TimescaleDB is built specifically for systems that look like this:
-* 🏢 **IoT & Smart Sensors:** Tracking temperature, pressure, or energy consumption from thousands of devices every second.
-* 📈 **Financial Tech:** Storing stock prices, crypto ticks, or foreign exchange rates for algorithmic trading and charting.
-* 🖥️ **DevOps & Monitoring:** Logging CPU usage, memory load, and server metrics across cloud infrastructure.
-* 🚚 **Logistics & Fleet Tracking:** Recording GPS coordinates, speed, and fuel levels of delivery vehicles in real-time.
-* 🕵️‍♂️ **Security & Analytics:** Tracking user clickstreams, application errors, or network traffic patterns to detect anomalies.
+`price_ticks` holds every price the app fetches. It is a hypertable: a table that TimescaleDB splits
+into one hidden piece, called a chunk, for each day of `ObservedAt`. The app still sees one table.
 
-### The Problem It Solves: The "Postgres Wall"
-Standard PostgreSQL is amazing, but it has a major weakness with massive time-series datasets. As tables grow to tens of millions of rows, the database indexes become too large to fit into RAM. When this happens, Postgres has to read from the hard drive for every new insert or query, causing performance to crater (often called hitting the "Postgres Wall").
+The split matters because of the retention policy, a TimescaleDB background job that deletes old
+rows. Here it deletes prices older than 30 days. Because each day is its own chunk, the job removes
+whole days at once instead of deleting rows one by one.
 
-### How TimescaleDB Fixes This: Hypertables
-TimescaleDB completely eliminates this bottleneck using **Hypertables**. 
-
-To you and your applications, a hypertable looks and acts like a single, standard Postgres table. You use the exact same SQL queries. However, under the hood, TimescaleDB automatically slices that table up into hidden, smaller time-based chunks (e.g., one chunk per day). 
-
-This architecture guarantees:
-1. **Blazing Fast Inserts:** New data is always written to the most recent chunk, which easily fits inside RAM. Your write speeds stay flat and fast, even as the database grows to billions of rows.
-2. **Instant Queries:** If you query data from "last Tuesday," TimescaleDB instantly ignores 99% of the database and only scans the specific chunk for that day.
-3. **Massive Storage Savings:** Because data is split into chunks, TimescaleDB can compress old chunks automatically, reducing your storage footprint by up to 90%.
-
-### Core Architecture: Hypertables
-At the heart of TimescaleDB is the concept of **Hypertables**. 
-* To the user, a hypertable looks and acts like a single, standard PostgreSQL table.
-* Behind the scenes, TimescaleDB automatically partitions the hypertable into smaller, time-based components called **chunks**.
-* Each chunk contains data for a specific time interval. This architecture ensures that recent data inserts and queries stay in memory, preventing performance degradation as the database grows to millions or billions of rows.
-
----
-
-## Enabling TimescaleDB on a Table
-
-To enable TimescaleDB on an existing PostgreSQL table, you must turn it into a hypertable. 
-
-### Prerequisites
-1. **Time Column:** The target table must have a column with a time-based data type (`TIMESTAMP`, `TIMESTAMPTZ`, `DATE`) or an integer representing Unix time.
-2. **Unique Constraints:** Any primary key or unique index on the table **must include the time column**. If it does not, the command will fail because TimescaleDB enforces uniqueness across its distributed time chunks.
-
-### Step 1: Ensure the Extension is Active
-Run the following SQL command to activate TimescaleDB in your database:
-```sql
-CREATE EXTENSION IF NOT EXISTS timescaledb;
-```
-
-### Step 2: Convert an Empty Table
-If your table is **empty**, pass your table name as the first argument and your time column name as the second argument:
-```sql
-SELECT create_hypertable('your_table_name', 'your_time_column');
-```
-
----
-
-## Migrating a Table That Already Has Data
-
-If your table is not empty, running `create_hypertable` directly will fail. Choose one of the two strategies below:
-
-### Strategy A: In-Place Migration (Best for smaller tables)
-Pass the `migrate_data => true` flag. This converts the table and copies existing records into chunks automatically. 
-
-*⚠️ Note: This can lock the table for a long period on large datasets.*
+Both are set up by hand-written SQL in the first migration,
+`Migrations/20260730032630_InitialSchema.cs`:
 
 ```sql
-SELECT create_hypertable('your_table_name', 'your_time_column', migrate_data => true);
+SELECT create_hypertable('price_ticks', 'ObservedAt',
+    chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+
+SELECT add_retention_policy('price_ticks', INTERVAL '30 days', if_not_exists => TRUE);
 ```
 
-### Strategy B: New Table Method (Best for large production tables)
-For large datasets, use this method to minimize locks and retain control over batch inserts:
+Three things follow from this:
 
-1. **Rename the old table:**
-   ```sql
-   ALTER TABLE metrics RENAME TO metrics_old;
-   ```
-2. **Create a new, empty table** with the original name and structure.
-3. **Turn the new table into a hypertable:**
-   ```sql
-   SELECT create_hypertable('metrics', 'time_col');
-   ```
-4. **Copy data over in batches:**
-   ```sql
-   INSERT INTO metrics SELECT * FROM metrics_old;
-   ```
-5. **Drop the old table** once verified.
+- **It lives in the first migration on purpose (D-4).** Turning an empty table into a hypertable is
+  quick. Turning a table that already holds months of prices into one means moving all that data.
+- **EF Core knows nothing about it.** Its model snapshot has no idea the table is a hypertable, so a
+  later migration will not undo it. `SchemaTests` checks that the daily chunks and the 30-day policy
+  are still there.
+- **The 30 days are written in two places.** The migration says `INTERVAL '30 days'`, and the code
+  says `PriceTick.Retention`. The history endpoint refuses dates older than `PriceTick.Retention`.
+  If the two drift apart, the endpoint serves gaps without saying so.
+  `SchemaTests.PriceTicks_retention_policy_matches_PriceTick_Retention` reads the job and compares
+  them.
 
----
+## Why the key is `(ObservedAt, Id)`
 
-## Advanced Feature: Continuous Aggregates
+`price_ticks` is identified by two columns together, `ObservedAt` and `Id`, not by `Id` alone.
+TimescaleDB refuses any "must be unique" rule that leaves out the time column, because it cannot
+check uniqueness across chunks. A key on `Id` alone makes `create_hypertable` fail (D-4).
 
-Continuous aggregates are TimescaleDB's equivalent of materialized views, but they are **automatically and incrementally refreshed** as new data comes in. They are ideal for computing metrics like hourly, daily, or weekly averages over massive datasets without recomputing the entire history.
+## Which tables are not hypertables
 
-### 1. Create a Continuous Aggregate View
-Use the `time_bucket` function to define the time window (e.g., `'1 hour'`) and append the required `WITH (timescaledb.continuous)` parameter:
+`price_events` and `app_logs` are ordinary Postgres tables.
+
+`price_events` holds the big price moves the app detects. It gets a few dozen rows a day, so it gains
+nothing from chunks. More importantly, events are the product's history and must last longer than
+30 days. A second hypertable would invite someone to add the same 30-day deletion "for consistency",
+which would quietly wipe that history (D-18). The `AddPriceEvents` migration says this in a comment
+at the top.
+
+## The trap in tests
+
+The retention job runs on the database server's real clock. It ignores the fake clock the tests use.
+
+So a test that stores a tick dated more than 30 days before today can lose that row whenever the job
+runs mid-test. The test then fails only sometimes, which is hard to trace. Every test class that
+stores ticks dates them from `PostgresFixture.RecentMinute`, which is the real time cut down to the
+whole minute.
+
+## How to check it in a running database
+
+Connect to the database (Compose publishes it on `localhost:5432`) and run:
 
 ```sql
-CREATE MATERIALIZED VIEW hourly_metrics
-WITH (timescaledb.continuous) AS
-SELECT 
-    time_bucket('1 hour', time_col) AS hour,
-    device_id,
-    AVG(temperature) AS avg_temp,
-    MAX(temperature) AS max_temp
-FROM metrics
-GROUP BY hour, device_id;
+-- Which tables are hypertables. Expect one row: price_ticks.
+SELECT hypertable_name, num_chunks FROM timescaledb_information.hypertables;
+
+-- The chunk size. Expect 1 day on ObservedAt.
+SELECT column_name, time_interval FROM timescaledb_information.dimensions
+ WHERE hypertable_name = 'price_ticks';
+
+-- The retention job. Expect drop_after of 30 days.
+SELECT job_id, schedule_interval, config FROM timescaledb_information.jobs
+ WHERE proc_name = 'policy_retention';
 ```
 
-### 2. Add a Refresh Policy
-By default, the view won't update itself automatically. You must define a policy that specifies how frequently to refresh and what time window to look back at:
+## What the app does not use
 
-```sql
-SELECT add_continuous_aggregate_policy('hourly_metrics',
-    start_offset => INTERVAL '1 month',
-    end_offset => INTERVAL '1 hour',
-    schedule_interval => INTERVAL '1 hour');
-```
-* `start_offset`: How far back in time to look for data changes to refresh (handles delayed data).
-* `end_offset`: The point where the refresh window ends (stops right before the current raw data bucket closes).
-* `schedule_interval`: How often the background refresh job runs.
-
----
-
-## Advanced Feature: Data Retention Policies
-
-Time-series data scales fast. TimescaleDB lets you automatically drop old data chunks to save disk space without writing custom `DELETE` cron jobs.
-
-### 1. Add a Retention Policy
-To automatically drop chunks that contain data older than a specific threshold (e.g., 90 days), use `add_retention_policy`:
-
-```sql
-SELECT add_retention_policy('metrics', INTERVAL '90 days');
-```
-
-### 2. Manual Data Dropping (Optional)
-If you need to instantly purge data older than a specific time without waiting for the automated background policy engine, call `drop_chunks`:
-
-```sql
-SELECT drop_chunks('metrics', INTERVAL '90 days');
-```
-
----
-
-## Verifying the Configuration
-
-To check your hypertables, continuous aggregates, and active background policies, query the built-in informational views:
-
-```sql
--- Check hypertables
-SELECT * FROM timescaledb_information.hypertables;
-
--- Check active continuous aggregates
-SELECT * FROM timescaledb_information.continuous_aggregates;
-
--- Check active data retention policies
-SELECT * FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention';
-```
+The app does not use compression, continuous aggregates (summary tables that TimescaleDB keeps up to
+date by itself), or the steps for converting a table that already has data. If one of those is ever
+needed, the TimescaleDB documentation covers it, and the decision belongs in
+`ops/decisions/decisions.md`.
