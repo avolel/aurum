@@ -225,10 +225,9 @@ Aurum.App.Application/Validation/ValidationErrors.cs   ← ValidationException �
 - Must be thin: receive request → `_mediator.Send()` → return `ApiResponse<T>`
 - Inject `IMediator` + `IAppLogService<TController>` (for error logging in catch blocks)
 - Required attributes: `[ApiController]`, `[Authorize]`, `[Route("api/v1/{feature}")]`, `[Produces("application/json")]`
-- Do NOT add `[Authorize(Roles = "Admin")]` to Fields, Modules, or Screens controllers — the permissions system queries these for all users
 - Every action must have try/catch — catch logs via `_appLogService.LogErrorAsync()` and returns `ApiResponse<T>.CreateError()`
-- **Check first whether the action is on the security-configuration surface.** If it is, it logs **failures only** — do NOT add a success row (see "AppLog is failure-only on the security-configuration surface" below; a governance test enforces
- this). Otherwise: every action must log success via `_appLogService.LogAsync(LogType.ActionLog, ...)`, not just errors
+- **Check first whether the action is on the security-configuration surface.** If it is, it logs **failures only** — do NOT add a success row. No security-configuration endpoints exist yet; when the first one lands,
+  add the test that enforces this. Otherwise: every action must log success via `_appLogService.LogAsync(LogType.ActionLog, ...)`, not just errors
 - Catch `FluentValidation.ValidationException` on command endpoints → return 400
 - `CancellationToken` on every async action method
 - No business logic, no DB access, no external HTTP calls, no `async void`
@@ -828,8 +827,10 @@ first try should be checked for whether it is actually racing before it is belie
  
 #### Handler Tests
  
-- **Command handlers**: Mock `IUnitOfWork` and `IRepository<T>`. Test success path (entity saved, correct return), not-found path (returns false/null), and verify `SaveChangesAsync` called.
-- **Query handlers**: Mock `IRepository` or use in-memory EF Core (`UseInMemoryDatabase`). Test data returned, empty result, null for missing ID.
+- **Command handlers**: Mock `IUnitOfWork` and the feature's repository. Test success path (entity saved, correct return), not-found path (returns false/null), and verify `SaveChangesAsync` called.
+- **Query handlers**: ones that read only memory mock what they read (`GetLivePriceQueryHandlerTests`). Ones that read the
+  database use the Postgres collection (`GetPriceHistoryQueryHandlerTests`); never an in-memory provider. Test data returned,
+  empty result, null for missing ID.
 - Test file: `Handlers/{Feature}CommandHandlerTests.cs` and `Handlers/{Feature}QueryHandlerTests.cs`
  
 #### Validator Tests

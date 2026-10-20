@@ -300,7 +300,7 @@ public class PriceSourcesController(
 - Keep controllers thin: no business rules, only passing the request on and dealing with the web side.
 
 **Check first whether the action changes security settings.** If it does, it logs **failures only**.
-Don't add a success row: CLAUDE.md explains why, and a test enforces it.
+Don't add a success row. No test checks this yet, so it is up to review.
 
 ### 6. Nothing to register
 

@@ -199,8 +199,8 @@ the generic row can't know: IDs, row counts, whether something came from memory.
 usually produces two rows. That's on purpose. **Keep the explicit `_appLogService.LogAsync(...)` calls
 for success and error in every action.**
 
-The one exception is actions that change security settings: those log **failures only**. Check
-CLAUDE.md before adding a success log to one.
+The one exception is actions that change security settings: those log **failures only**. Don't add
+a success log to one. No test checks this yet, so it is up to review.
 
 ### What a controller does NOT do
 
