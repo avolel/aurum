@@ -1646,6 +1646,10 @@ a method, not what the app receives.
 - Routes start with `/api/v1`, not the `/v1` the Phase 1 todo used.
 - The `price_sources.IsEnabled` column is deleted. The sources endpoint reads "switched on" from
   settings.
+- *Added 2026-10-22:* the `price_sources.Priority` column is deleted for the same reason. Nothing
+  read it, and it had already drifted. It listed GoldAPI first while the settings put API Ninjas
+  first. I turned down correcting the three values instead: they would drift again the next time
+  the order changed, and nothing would notice.
 
 Started on 2026-10-12. Built on 2026-10-15.
 

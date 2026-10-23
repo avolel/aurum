@@ -3,8 +3,8 @@ using Aurum.App.SharedKernel.Entities;
 namespace Aurum.App.Infrastructure.Data.Entities.Pricing;
 
 /// <summary>
-/// Registry of upstream quote providers. <see cref="Priority"/> is descriptive only: configuration
-/// decides the failover order and whether a source is used (D-20 removed <c>IsEnabled</c>).
+/// Registry of upstream quote providers. Configuration decides the failover order and whether a
+/// source is used (D-20 removed <c>IsEnabled</c> and <c>Priority</c>).
 /// </summary>
 public class PriceSource : AuditableEntity
 {
@@ -12,8 +12,6 @@ public class PriceSource : AuditableEntity
     public string Code { get; set; } = null!;
 
     public string DisplayName { get; set; } = null!;
-
-    public int Priority { get; set; }
 
     /// <summary>Last time a poll of this source succeeded — the input to freshness reporting.</summary>
     public DateTimeOffset? LastSuccessAt { get; set; }

@@ -347,8 +347,9 @@ Related invariants:
   configuration and joins it to the registered sources, so a disabled or unconfigured source is not
   called. Before item 3 the poller selected straight off `IEnumerable<IPriceSource>`, which has no
   `Enabled` to filter on, and setting it shortened the startup log while changing nothing.
-- **`price_sources` has no `IsEnabled` column.** It had no reader and no writer; D-20 dropped it.
-  Configuration alone says whether a source is used, and `/api/v1/price/sources` reads it from there.
+- **`price_sources` has no `IsEnabled` or `Priority` column.** Neither had a reader; D-20 dropped
+  both. Configuration alone says whether a source is used and in what order, and
+  `/api/v1/price/sources` reads both from there.
 - The cadence is one feed-wide value, `PricePolling:PollInterval`, and it is coupled to the
   **primary** source's `MonthlyRequestLimit` — the enabled entry with the lowest `Priority` — **and
   to `PriceFeed:Resilience:MaxAttempts`**. A poll is not a request: every attempt re-enters

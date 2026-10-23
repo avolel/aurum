@@ -63,4 +63,22 @@ public class SchemaTests(PostgresFixture fixture)
 
         Assert.True(installed, "D-3 chose timescaledb-ha specifically so pgvector ships with the image.");
     }
+
+    [Fact]
+    public async Task PriceSources_has_no_Priority_column()
+    {
+        await using var db = fixture.CreateDbContext();
+
+        // Settings decide the order (D-20); a copy in the table can only drift.
+        var columns = await db.Database
+            .SqlQuery<string>($"""
+                SELECT column_name AS "Value"
+                  FROM information_schema.columns
+                 WHERE table_name = 'price_sources'
+                """)
+            .ToListAsync();
+
+        Assert.DoesNotContain("Priority", columns);
+        Assert.Contains("LastSuccessAt", columns); // guards against querying the wrong table
+    }
 }

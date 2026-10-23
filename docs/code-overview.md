@@ -170,7 +170,7 @@ latest-price cache, the circuit breakers, the request counter and the service se
 | `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. Tables exist; nothing reads or writes them yet (Phase 2). |
 | `Entities/Logging/AppLog.cs` | One row of the app's own durable log. |
 | `Repositories/IUnitOfWork.cs` | `IUnitOfWork` and `UnitOfWork`: save changes, or run work inside one database transaction. |
-| `Migrations/` | Five migrations: initial schema, extra price-service rows, app logs, price events, and dropping the unused `price_sources.IsEnabled` column. |
+| `Migrations/` | Six migrations: initial schema, extra price-service rows, app logs, price events, and dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns, one migration each. |
 
 **`Aurum.App.Infrastructure.Pricing`** — almost all of the real logic lives here.
 
@@ -1039,9 +1039,10 @@ Things that will catch you out:
 
 - **`price_ticks` has a two-column key, `(ObservedAt, Id)`.** TimescaleDB refuses any unique index
   that leaves out the time column it splits on.
-- **`price_sources.Priority` does nothing.** Settings decide which services run and in what order,
-  and `/api/v1/price/sources` reports the order from the settings too. Changing the table changes
-  nothing. The table's `IsEnabled` column was deleted in item 8 for the same reason (D-20).
+- **`price_sources` does not say which services run or in what order.** Settings decide both, and
+  `/api/v1/price/sources` reports them from the settings. The table used to have `IsEnabled` and
+  `Priority` columns that copied the settings. Nothing read them, and `Priority` had drifted to the
+  wrong order, so both were deleted (D-20).
 - **`price_events` is an ordinary table on purpose (D-18).** Do not turn it into a TimescaleDB table
   or give it the 30-day deletion. Events are the app's history and must outlive the prices.
 - **The first migration does more than create tables.** It also turns `price_ticks` into a
