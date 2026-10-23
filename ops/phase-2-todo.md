@@ -1,19 +1,24 @@
 # Phase 2 — AI explanations, the server side
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
-`ops/decisions/decisions.md` for what's already decided.
+`ops/decisions/decisions.md` for what's already decided. Nothing in this list has been started yet.
+I last checked it against the code on 2026-10-23.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
-AI models locally). It gives the likely causes, a confidence for each, a short explanation, and 3 to
-5 supporting news links. One that fails its check is published as "Awaiting Confirmation", not hidden.
+AI models locally). It names one main cause and any other causes, gives a confidence for each, a 2 to
+4 sentence explanation, and 3 to 5 supporting news links (BR-04). One that fails its check is
+published as "Awaiting Confirmation", not hidden.
 
 **This is server-side only**, the same split as Phase 1. The explanation feed screen goes into one
 later batch of app work, together with the Phase 1 dashboard.
 
-The items are in order. Item 0 comes first and can stop the phase: if the model can't come near the
-quality target, the pipeline isn't worth building as planned. Items 1, 2 and 3 don't depend on each
-other. Item 6 needs all of 1 to 5.
+**Order.** Item 0 comes first and can stop the phase: if the model can't come near the quality
+target, the rest isn't worth building as planned. After that:
+
+- Items 1, 2, 3 and 4 don't depend on each other.
+- Item 5 needs item 1 (economic figures for past dates) and item 3 (embeddings).
+- Item 6 needs 1 to 5. Items 7 and 8 need 6.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
 New numbers start at D-22. Item 0 closes D-6, which was put off until now.
@@ -22,14 +27,17 @@ A few terms used below:
 
 - **Move**: one price move, made of every `PriceEvent` it fired. One sharp move can fire a 5-minute,
   a 15-minute and a 1-hour event. They are grouped and explained once.
-- **Explanation**: the AI's answer for one move: causes, confidences, a 2 to 4 sentence explanation,
-  and links.
+- **Explanation**: the AI's answer for one move: a main cause and other causes, confidences, a 2 to 4
+  sentence explanation, and links.
 - **Check**: a second pass by the AI that scores whether the explanation is backed by the facts it
   was given.
+- **Background**: everything the model is given to write from: economic releases, news, the latest
+  daily figures and similar past moves.
 - **Embedding**: a list of numbers an AI model makes from text, so two pieces of text can be compared
   by meaning. pgvector stores them in PostgreSQL.
-- **Scored test set**: about 20 past moves, each with a cause written by me, used to grade the AI's
-  explanations.
+- **Scored test set**: about 20 past moves, each with a cause written by me and the background saved
+  with it, used to grade the AI's explanations.
+- **Context window**: how much text the model reads at once. Anything past it is cut off.
 
 ---
 
@@ -54,9 +62,10 @@ These come from reading the code and the requirements against the original plan 
    (`WindowStartedAt`), not from when it was detected. The 5-minute target still counts from
    detection.
 5. **"The current dollar index" isn't available free in real time.** FRED's dollar index, 10-year
-   yield and VIX figures are daily, and the dollar index runs about a week behind. The explanation
-   gets the latest daily figure with its date. The instructions to the model must say how old each
-   figure is, or it will treat a week-old number as today's.
+   yield and VIX figures are daily, and the dollar index runs about a week behind. FRED's dollar
+   index is the Federal Reserve's broad index (`DTWEXBGS`), not the ICE index (DXY) that markets
+   quote. The explanation gets the latest daily figure with its date. The instructions to the model
+   must say how old each figure is, or it will treat a week-old number as today's.
 6. **No priority queue yet.** The original plan has explanations jumping ahead of summaries.
    Summaries arrive in Phase 4, so in Phase 2 there's nothing to jump ahead of. One queue, oldest
    first. Phase 4 adds priority when it adds summaries.
@@ -67,6 +76,19 @@ These come from reading the code and the requirements against the original plan 
 8. **Tests never call Ollama**, for the same reason they never call the price services.
    `AurumApiFactory` gets a stand-in Ollama client. A separate set of tests, run by hand, calls the
    real model.
+9. **A bigger model is not the way out if quality misses.** The phased plan says to move to bigger
+   local models (§10) if the 70% target isn't met. D-6 found nothing bigger fits the card. If
+   quality misses, the fix is better instructions and better background.
+10. **Past news can't be fetched later.** RSS feeds only show recent articles. So the scored test set
+    must store each move's news and figures with it, typed in or saved by hand. The real pipeline
+    can't gather background for a move from months ago.
+11. **Ollama cuts off long prompts without saying so.** Its default context window is small (a few
+    thousand word-pieces). Eight hours of headlines from three feeds, plus figures and past moves,
+    can be longer than that. The model then answers from part of the background, and nothing
+    reports it. The window size has to be set explicitly, and the background has to fit it.
+12. **Explanations must not give advice.** The requirements (§13) rule out financial advice, price
+    targets, and buy or sell signals. The model's instructions must say so, and the check must look
+    for it.
 
 ### The main design choice: where moves wait to be explained
 
@@ -80,22 +102,33 @@ period between events moved into the database because memory doesn't survive a r
 few seconds is well inside a 5-minute target. There is one worker only, the same single-copy
 assumption the price timer already makes.
 
+Because item 4 is what queues a move, the `explanations` table is created in item 4 with only what
+the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
+
 ---
 
-## 0. Measure the models, and build the scored test set · must pass before item 6
+## 0. Measure the models, and build the scored test set · must pass before items 1 to 6
 
-- [ ] Fix the Ollama version in `docker-compose.yml` to an exact release instead of `latest`.
+- [ ] Fix the Ollama version in `docker-compose.yml` to an exact release instead of `latest`. It
+      must be new enough to accept a JSON schema in the `format` option (item 3).
 - [ ] Make the models' volume survive `docker compose down -v`: mark it `external` and create it once
       by hand. Correct the comment that says it already survives.
+      **Keep the existing name.** Compose put the project name in front, so today the volume is
+      called `aurum_aurum-ollama-models`. An `external` volume is looked up by its exact name, so
+      `name: aurum_aurum-ollama-models` keeps the models already downloaded. Without it, compose
+      looks for a volume that doesn't exist and refuses to start.
 - [ ] Download 2 or 3 candidate models of about 14 billion settings, plus `nomic-embed-text` for
       embeddings.
 - [ ] Measure each model's speed and memory use on the real card, against D-6's estimates (about 9
-      GB, 40 to 60 word-pieces a second).
-- [ ] Write the scored test set: about 20 past moves, each with the cause written by me. It's the
-      only thing that notices quality dropping when a model or the instructions change.
+      GB, 40 to 60 word-pieces a second). Measure at the context window size the pipeline will
+      actually use: a bigger window takes more of the card's memory (finding 11).
+- [ ] Measure a cold start: how long the first answer takes when the model isn't loaded yet.
+- [ ] Write the scored test set: about 20 past moves, each with the cause written by me and the
+      background saved beside it (finding 10). It's the only thing that notices quality dropping
+      when a model or the instructions change. It lives in the repository so item 8 can reuse it.
 - [ ] Early read on quality: a quick hand-written prompt against the scored test set, for each
       candidate model. The target is 70% passing the check first time, at 60% confidence or more.
-      **If the best result is far below that, stop and rethink before building item 6.**
+      **If the best result is far below that, stop and rethink before building anything else.**
 - [ ] **D-6 closed** with the measured numbers and the chosen main and embedding models.
 - [ ] Decision written up: one model writes and checks (finding 1).
 
@@ -104,16 +137,24 @@ assumption the price timer already makes.
 ## 1. Economic data · BR-07
 
 - [ ] FRED client: consumer prices (CPI), PCE inflation, the Fed's rate, 10-year and 2-year Treasury
-      yields, the dollar index, VIX.
+      yields, the dollar index (finding 5), VIX.
 - [ ] BLS client: detailed consumer prices, the jobs report.
 - [ ] Treasury FiscalData client: Treasury yields.
 - [ ] All three fill the existing `MacroSeries` and `MacroObservation` tables
-      (`src/Aurum.App.Infrastructure.Data/Entities/Macro/`).
+      (`src/Aurum.App.Infrastructure.Data/Entities/Macro/`). Nothing writes to them yet.
+- [ ] Load past figures too, not only the latest, back as far as item 5's seed needs. Without them
+      the seed has prices but no economic background.
 - [ ] A release calendar, so a new figure is fetched right after its known publish time (8:30 New
-      York time for most) instead of at the next scheduled check. `MacroObservation.ReleasedAt` is
-      what the 4-hour background window searches on, so it must be the real publish time.
+      York time for most; the Fed's rate decisions come out at 14:00) instead of at the next
+      scheduled check. `MacroObservation.ReleasedAt` is what the 4-hour background window searches
+      on, so it must be the real publish time. FRED gives a release date but no time of day, so the
+      time comes from the calendar.
+- [ ] Daily market figures (yields, VIX, the dollar index) are not releases. They leave `ReleasedAt`
+      empty and are used only as "the latest daily figure".
 - [ ] Check each provider's limits. FRED and FiscalData have no monthly allowance. BLS has a daily
-      one: decide whether it goes through `IQuotaGovernor`, like the price services.
+      one (about 500 requests with a free key, about 25 without; confirm on the BLS site). Decide
+      whether it goes through `IQuotaGovernor`, like the price services.
+- [ ] FRED and BLS need free API keys. FiscalData needs none.
 - [ ] Each figure keeps its date, so an explanation can say how old it is (finding 5).
 - [ ] `/api/v1/macro/snapshot`, with controller, handler and validator tests.
 - [ ] Decision written up: the release calendar, and how old figures are presented.
@@ -124,25 +165,44 @@ assumption the price timer already makes.
 
 Only enough news for explanations to cite. Scoring, tagging and the other sources are Phase 3.
 
-- [ ] RSS readers for 3 feeds: Kitco, MarketWatch, CNBC.
+- [ ] RSS readers for 3 feeds: Kitco, MarketWatch, CNBC. Check each feed's address still works and
+      its terms allow saving headlines and links (§12).
 - [ ] A `news_articles` table storing only the headline, link, a short extract, publish time and
       source (FR-3.7).
 - [ ] Duplicates removed by link only. Text fingerprints (SimHash) are Phase 3.
 - [ ] Each feed is read in its own try, so one broken feed can't stop the others.
+- [ ] Decide how often the feeds are read. Eight hours of news is searched back from a move's start,
+      so a feed read too rarely can miss articles that fell off it.
+- [ ] Decide what counts as gold-related news (FR-2.1). MarketWatch and CNBC cover everything, and
+      tagging is Phase 3. The simplest rule is a short keyword list. Without one, most of the eight
+      hours is unrelated news that fills the context window (finding 11).
 
 ---
 
 ## 3. Connecting to Ollama
 
-- [ ] `IOllamaClient`: chat and embeddings, a time limit per request, retries.
+- [ ] `IOllamaClient`: chat and embeddings, a time limit per request, retries. It reads the existing
+      `Ollama:BaseUrl` setting, which is already in `appsettings.json` and `docker-compose.yml` but
+      read by nothing yet.
 - [ ] One request at a time. The card holds one model, and two at once would only queue inside
       Ollama.
 - [ ] A settings map from *job* (write, check, embed) to model name. No model name written in code,
-      so the model review every three months (§9.4) is a settings change.
+      so the model review every three months (§9.4) is a settings change. That's true for the
+      writing model only: changing the embedding model means rebuilding the store of past moves
+      (item 5).
+- [ ] The context window size set on every request, not left to Ollama's default (finding 11).
+- [ ] The model kept loaded between moves, so a move doesn't wait for a cold start (item 0's
+      measurement). Ollama unloads an idle model after a few minutes by default.
+- [ ] A fixed temperature and seed on every request, saved with each explanation. Even then, a
+      graphics card doesn't always give the exact same answer twice. "Recreated" means the same
+      inputs and settings, and that limit gets written down.
+- [ ] The model's exact version read from Ollama (its digest, a fingerprint of the model file), not
+      only its name. A name like `qwen2.5:14b` can point to a different file after a new download.
 - [ ] Answers forced into a fixed JSON shape with Ollama's `format` option, then checked against that
       shape before use. An answer that doesn't fit is a failure, not something to guess at.
 - [ ] Instructions to the model (prompt templates) kept as versioned files in `ops/prompts/`, not as
       text inside the code.
+- [ ] A missing model is reported clearly when the app starts, not on the first move.
 - [ ] A stand-in Ollama client for tests, used by `AurumApiFactory` (finding 8).
 - [ ] Decision written up: the job-to-model map and the fixed answer shape.
 
@@ -151,12 +211,24 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
 ## 4. Grouping events into moves
 
 - [ ] A `price_moves` table, and a `MoveId` on `price_events`.
+- [ ] `PriceEventSql.InsertAsync` returns the new event's `Id`. Today it returns only whether a row
+      was written, and grouping needs the row.
 - [ ] An event joins the open move for its symbol when their time spans overlap. Otherwise it starts
-      a new move.
-- [ ] A move is queued for explanation when it's first created. Events that join it later are
-      attached, but don't trigger a second explanation. That limit is written down, not hidden.
+      a new move. The rule must also settle:
+      - **When a move closes.** Without an end, one long trend chains every event into one move, and
+        a day's moves get one explanation.
+      - **Long windows.** A 4-hour or 1-day event spans hours, so it can overlap a move that ended
+        long ago. A fresh move would then join the old one and never be explained.
+      - **Direction.** A rise followed by a fall should probably be two moves.
+      Each case gets a test.
+- [ ] A move is queued for explanation when it's first created, by writing a waiting `explanations`
+      row (the design choice above). Events that join it later are attached, but don't trigger a
+      second explanation. That limit is written down, not hidden.
 - [ ] Grouping runs in `PricePollingService.SaveEventsAsync`, after the events are saved. The poll
       order stays: memory, then the price saved, then apps told, then events.
+- [ ] The event, its move and the waiting row are saved together, or not at all. Today a failure
+      after an event is saved falls into the poll's catch. If grouping were separate, that event
+      would be saved with no move, and never explained.
 - [ ] Decision written up: one explanation per move, and the rule for when events belong together.
 
 ---
@@ -165,8 +237,13 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
 
 - [ ] A `move_embeddings` table with a `vector` column and an HNSW index (a fast index for finding
       nearest matches), compared by cosine distance (how closely two lists of numbers point the same
-      way).
-- [ ] Seed it from daily price history plus the economic figures for those dates.
+      way). The column's length is fixed by the embedding model (768 numbers for
+      `nomic-embed-text`). Each row records which model made it.
+- [ ] One way of turning a move into text, used for both the seed and live moves. If the two are
+      written differently, the distances compare the wording, not the moves.
+- [ ] Get the daily price history. Nothing in the repository reads Stooq yet. Check it still offers
+      the download free, and decide whether this is a one-off import or a client.
+- [ ] Seed it from daily price history plus the economic figures for those dates (item 1).
 - [ ] Write down how many moves the seed holds, and that they're daily only (finding 7).
 - [ ] Decision written up: what the seed holds and what it can't do.
 
@@ -177,19 +254,44 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
 - [ ] One background worker takes the oldest waiting move and:
       1. gathers the background: economic releases from the previous 4 hours, news from the previous
          8 hours, the latest dated daily figures, and similar past moves from item 5. "Previous" is
-         counted from the move's start (finding 4).
+         counted from the move's start (finding 4). The background is cut to fit the context window,
+         and what was cut is logged.
       2. writes the explanation.
       3. checks it.
       4. saves it.
+- [ ] Gathering is separate from writing and checking, so item 8 can feed the scored test set's
+      saved background straight into steps 2 and 3 (finding 10).
+- [ ] The model cites news by the number it was given for each article, and the app fills in the
+      link. A number it wasn't given fails the shape check. This stops it making up links.
+- [ ] Decide what happens when fewer than 3 articles are found. BR-04 asks for 3 to 5 links. The
+      simplest answer is to write the explanation anyway and mark it "Awaiting Confirmation", with
+      the reason.
+- [ ] The cause categories from FR-2.5 kept as named constants, not loose text: Fed and interest
+      rates, inflation data, dollar strength, Treasury yields, geopolitical risk, central bank
+      buying, appetite for risk, economic surprises, chart breakouts, gold fund flows. Exactly one
+      factor is marked as the main cause (BR-04).
+- [ ] The instructions forbid advice, price targets and buy or sell signals, and the check looks for
+      them (finding 12).
 - [ ] Tables:
-      - `explanations`: status, model name and version, Ollama version, prompt version, confidence,
-        and check score (§8).
-      - `explanation_factors`: the cause categories from FR-2.5, each with a confidence.
+      - `explanations`: status, model name and version, Ollama version, prompt version, temperature
+        and seed, confidence, check score, the full prompt that was sent, and when the row was
+        queued and finished (§8).
+      - `explanation_factors`: the cause categories from FR-2.5, each with a confidence, one marked
+        as the main cause.
       - `explanation_sources`: 3 to 5 links (BR-04).
 - [ ] A failed check sets the status to "Awaiting Confirmation". The explanation is still published,
-      clearly marked (BR-13).
-- [ ] Moves still waiting after a restart are picked up again (the design choice above).
-- [ ] After saving, apps connected to `PriceHub` are told "explanation ready".
+      clearly marked (BR-13). The score below which a check fails is a setting.
+- [ ] A move that can't be explained after its retries (Ollama down, an answer that never fits the
+      shape) is marked "Failed" with the reason, and the worker moves on. It isn't retried forever,
+      and it isn't silently dropped.
+- [ ] Moves still waiting after a restart are picked up again (the design choice above). A row only
+      leaves "waiting" when its result is saved, so a move half-done at a crash is picked up again
+      too.
+- [ ] After saving, the move's embedding is added to the store of past moves (item 5). Otherwise the
+      store stays the daily seed forever.
+- [ ] After saving, apps connected to `PriceHub` are told "explanation ready", in the move's symbol
+      group. D-19 lists "events over SignalR" as not handled, so this is the first message on the
+      hub that isn't a price.
 - [ ] Decision written up: the queue in the database, and the explanation's statuses.
 
 ---
@@ -206,8 +308,11 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
 
 Both of these are run by hand against the real model, and kept out of `dotnet test`.
 
-- [ ] Run the scored test set from item 0 through the real pipeline. Report the first-pass rate.
-- [ ] Replay a busy week of moves and confirm every one is explained within 5 minutes.
+- [ ] Run the scored test set from item 0 through the real write and check steps, using its saved
+      background. Report the first-pass rate.
+- [ ] Replay a busy week of moves and confirm every one is explained within 5 minutes, measured from
+      detection to the row's finish time. The week must come from after the news feeds started
+      collecting, or there's no news to gather.
 
 ---
 
@@ -215,6 +320,9 @@ Both of these are run by hand against the real model, and kept out of `dotnet te
 
 - [ ] New settings and API keys in `appsettings.json`, `.env.example` and `docker-compose.yml`.
       Compose passes on only the variables it lists, so a new key in `.env` needs its line there too.
+      Known so far: the FRED and BLS keys, and the job-to-model map.
+- [ ] The README's setup steps say to create the models' volume once, and to download the models.
+      A fresh clone can't start without the volume (item 0).
 - [ ] `CLAUDE.md`, README and `docs/` brought up to date.
 - [ ] Run `dotnet format`.
 
@@ -228,11 +336,19 @@ Both of these are run by hand against the real model, and kept out of `dotnet te
 - [ ] With the real model: a move made by hand is explained, checked and saved within 5 minutes, and
       appears at `/api/v1/explanations` and through `PriceHub` (6, 7).
 - [ ] The scored test set reaches 70% passing the check first time at 60% confidence or more (8). If
-      it doesn't, the result is written up, not hidden.
-- [ ] Any explanation can be recreated from its saved prompt version, model version and Ollama
-      version (3, 6).
+      it doesn't, the result is written up, not hidden. The fix is better instructions or background,
+      not a bigger model (finding 9).
+- [ ] Any explanation can be recreated from its saved prompt, prompt version, model version, Ollama
+      version, temperature and seed (3, 6), within the limit item 3 writes down.
 - [ ] Every decision from this phase written up with the options turned down, and D-6 closed.
 
-**Deliberately not in this batch:** the app screens, a priority queue, re-explaining a move that keeps
-growing, more than 3 news feeds, scoring or tagging news, and running more than one price timer or
-explanation worker.
+**Deliberately not in this batch:**
+
+- the app screens, and answers sent in pieces as the model writes them (only the screen needs that);
+- a priority queue;
+- re-explaining a move that keeps growing;
+- skipping moves that are already past the 5-minute target when the queue is behind;
+- more than 3 news feeds, and scoring or tagging news;
+- deleting old news and explanations. §11 keeps news 60 days and explanations 90 days in the
+  database. At three feeds, the tables stay small for months. This needs doing before launch;
+- running more than one price timer or explanation worker.
