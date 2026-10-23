@@ -94,7 +94,8 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
             new SignificanceWindowOptions { MinPercent = 0.25m, Cooldown = TimeSpan.FromMinutes(5) };
 
         var poller = new PricePollingService(
-            scopes, sources, clock, polling, cache, deltas, Options.Create(significance),
+            scopes, sources, clock, polling, Options.Create(new PriceFeedResilienceOptions()),
+            cache, deltas, Options.Create(significance),
             broadcaster ?? new RecordingBroadcaster(), NullLogger<PricePollingService>.Instance);
 
         return (poller, clock, cache, deltas);

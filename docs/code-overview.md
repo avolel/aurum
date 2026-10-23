@@ -466,9 +466,9 @@ while (await timer.WaitForNextTickAsync(stoppingToken));
 What a healthy poll prints to the console (Serilog writes JSON; the message text is shown here):
 
 ```
-Primary api-ninjas at 00:15:00 (2976 of 10000 requests per period).
-Backup goldapi.io: 100 requests = 1.0 days of full outage coverage.
-Backup metalprice-api: 1000 requests = 10.4 days of full outage coverage.
+Primary api-ninjas at 00:15:00: 2976 polls, up to 8928 of 10000 requests per period.
+Backup goldapi.io: 100 requests = 1.0 days of full outage coverage at one try per poll, 0.3 at 3.
+Backup metalprice-api: 1000 requests = 10.4 days of full outage coverage at one try per poll, 3.5 at 3.
 Warmed XAUUSD from stored tick: api-ninjas, observed 2026-10-06T14:00:00Z, 00:12:31 old.
 Warmed XAUUSD price history: 144 of 144 stored ticks since 2026-10-05T02:12:31Z.
 Tick XAUUSD mid=4412.30 from api-ninjas, 812ms stale.

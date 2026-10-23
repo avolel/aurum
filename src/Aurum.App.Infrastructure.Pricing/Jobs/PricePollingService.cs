@@ -21,6 +21,7 @@ public class PricePollingService(
     IOptions<PriceSourcesOptions> options,
     TimeProvider clock,
     IOptions<PricePollingOptions> polling,
+    IOptions<PriceFeedResilienceOptions> resilience,
     ILatestQuoteCache cache,
     IDeltaEngine deltas,
     IOptions<SignificanceOptions> significance,
@@ -119,12 +120,16 @@ public class PricePollingService(
     /// </remarks>
     private void LogBudgetCoverage(TimeSpan pollInterval)
     {
+        // Every attempt is charged, so a poll costs up to MaxAttempts requests (D-15).
+        var attempts = resilience.Value.MaxAttempts;
         var primary = _enabled[0];
+        var polls = PriceSourcesOptionsValidator.LongestPeriod / pollInterval;
         logger.LogInformation(
-            "Primary {Source} at {Interval} ({Polls:F0} of {Limit} requests per period).",
+            "Primary {Source} at {Interval}: {Polls:F0} polls, up to {Requests:F0} of {Limit} requests per period.",
             primary.SourceCode,
             pollInterval,
-            PriceSourcesOptionsValidator.LongestPeriod / pollInterval,
+            polls,
+            polls * attempts,
             primary.MonthlyRequestLimit);
 
         foreach (var backup in _enabled.Skip(1))
@@ -132,8 +137,12 @@ public class PricePollingService(
             // Worst case: everything above it is down.
             var coverage = pollInterval * backup.MonthlyRequestLimit;
             logger.LogInformation(
-                "Backup {Source}: {Limit} requests = {Days:F1} days of full outage coverage.",
-                backup.SourceCode, backup.MonthlyRequestLimit, coverage.TotalDays);
+                "Backup {Source}: {Limit} requests = {Days:F1} days of full outage coverage at one try per poll, {WorstDays:F1} at {Attempts}.",
+                backup.SourceCode,
+                backup.MonthlyRequestLimit,
+                coverage.TotalDays,
+                coverage.TotalDays / attempts,
+                attempts);
         }
     }
 
