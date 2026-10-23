@@ -142,13 +142,13 @@ public class GetPriceHistoryQueryHandlerTests(PostgresFixture fixture) : IAsyncL
     [Fact]
     public async Task Handle_WithNoLimit_UsesTheDefaultPageSize()
     {
-        await fixture.SeedTicksAsync(Enumerable.Range(1, PaginationQuery.DefaultPageSize + 1)
+        await fixture.SeedTicksAsync(Enumerable.Range(1, PaginationHelper.DefaultPageSize + 1)
             .Select(i => (SupportedSymbol.Gold, From.AddSeconds(i), (decimal)i, GoldApi))
             .ToArray());
 
         var page = await HandleAsync(limit: null);
 
-        Assert.Equal(PaginationQuery.DefaultPageSize, page.Items.Count);
+        Assert.Equal(PaginationHelper.DefaultPageSize, page.Items.Count);
         Assert.NotNull(page.NextCursor);
     }
 

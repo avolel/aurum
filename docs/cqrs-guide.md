@@ -106,7 +106,7 @@ public record SetPriceSourceEnabledCommand(string SourceCode, bool Enabled) : IC
 - Use `record` types. They can't be changed after they're created, and two with the same values count
   as equal, with no extra code.
 - A lookup for one item returns a type that can be empty (`PriceSourceDto?`), for when nothing is found.
-- Queries that return pages of results return `PageResult<T>`.
+- Queries that return pages of results return `CursorPage<T>`. See "Queries that return pages" below.
 - Commands return whatever the result is (`PriceSourceDto`, `bool`, and so on).
 
 ### 3. Write the handler
@@ -350,16 +350,24 @@ little wasted work.
 
 ### Queries that return pages
 
+Lists page with a cursor, not a page number. A cursor is a bookmark: the time and `Id` of the last
+row the caller saw. The next page starts right after it. Page numbers repeat or skip rows when new
+rows arrive between two requests, which is why D-20 in `ops/decisions/decisions.md` turned them down.
+
 ```csharp
-public record GetPriceSourcesQuery(
-    PaginationQuery? Pagination,
-    PriceSourceFilterDto? Filter
-) : IQuery<PageResult<PriceSourceDto>>;
+public sealed record GetPriceHistoryQuery(
+    string Symbol,
+    DateTimeOffset? From,
+    DateTimeOffset? To,
+    int? Limit,
+    string? Cursor) : IQuery<CursorPage<PriceTickDto>>;
 ```
 
-In the handler, use `PaginationHelper.GetEffectivePagination()` to get the page number and size, and
-build the result with `new PageResult<T>(items, page, pageSize, totalCount)`. Both types are in
-`src/Aurum.App.SharedKernel/Common/Pagination.cs`.
+In the handler, pass `Limit` through `PaginationHelper.ClampPageSize()`. It gives 50 rows when the
+caller sends nothing and never more than 500. Read one row more than that to find out whether
+another page exists. If it does, `NextCursor` is the last row of the page being returned, turned
+into a `Cursor` and encoded. On the last page it is null. `GetPriceHistoryQueryHandler` is the example to copy.
+`CursorPage<T>` and `Cursor` are in `src/Aurum.App.SharedKernel/Common/CursorPage.cs`.
 
 ### Exception: a controller calling an outside-system client directly
 
@@ -715,6 +723,7 @@ public async Task Validate_SourceCodeOneOverMaxLength_HasError()
 | `src/Aurum.App.Application/Common/Behaviors/ValidationBehavior.cs` | The validation step |
 | `src/Aurum.App.Application/Common/Behaviors/TransactionBehavior.cs` | The transaction step |
 | `src/Aurum.App.Infrastructure.Data/Repositories/IUnitOfWork.cs` | Saving, and running work in one transaction |
-| `src/Aurum.App.SharedKernel/Common/Pagination.cs` | `PageResult<T>` and the paging helpers |
+| `src/Aurum.App.SharedKernel/Common/CursorPage.cs` | `CursorPage<T>` and `Cursor`, for lists that come back one page at a time |
+| `src/Aurum.App.SharedKernel/Common/Pagination.cs` | `PaginationHelper.ClampPageSize`, which keeps a page size between 1 and 500 |
 | `src/Aurum.App.Application/AppLogs/` | App logging. It's not a command/query feature, and there are no converted controllers yet. |
 | `src/Aurum.Api/Program.cs` | Where MediatR and FluentValidation are set up |

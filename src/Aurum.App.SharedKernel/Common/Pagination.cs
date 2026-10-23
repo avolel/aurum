@@ -1,7 +1,6 @@
 namespace Aurum.App.SharedKernel.Common;
 
-/// <summary>Page request. Bound from the query string on list endpoints.</summary>
-public sealed class PaginationQuery
+public static class PaginationHelper
 {
     public const int DefaultPageSize = 50;
 
@@ -10,39 +9,11 @@ public sealed class PaginationQuery
     /// </summary>
     public const int MaxPageSize = 500;
 
-    public int Page { get; set; } = 1;
-
-    public int PageSize { get; set; } = DefaultPageSize;
-}
-
-/// <summary>One page of results plus what the caller needs to ask for the next one.</summary>
-public sealed record PageResult<T>(
-    IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount)
-{
-    public int TotalPages => PageSize <= 0 ? 1 : (int)Math.Ceiling(TotalCount / (double)PageSize);
-
-    public bool HasNextPage => Page < TotalPages;
-}
-
-public static class PaginationHelper
-{
-    /// <summary>
-    /// Clamps a caller-supplied page request into the allowed range.
-    /// </summary>
+    /// <summary>Missing or non-positive → the default; above the ceiling → the ceiling.</summary>
     /// <remarks>
     /// Clamps rather than rejects: bad values are usually an uninitialised client, and the ceiling
     /// protects the database, not the caller.
     /// </remarks>
-    public static (int Page, int PageSize) GetEffectivePagination(PaginationQuery? pagination)
-    {
-        var page = Math.Max(1, pagination?.Page ?? 1);
-
-        return (page, ClampPageSize(pagination?.PageSize));
-    }
-
-    /// <summary>Missing or non-positive → the default; above the ceiling → the ceiling.</summary>
     public static int ClampPageSize(int? requested) =>
-        requested is null or <= 0
-            ? PaginationQuery.DefaultPageSize
-            : Math.Min(requested.Value, PaginationQuery.MaxPageSize);
+        requested is null or <= 0 ? DefaultPageSize : Math.Min(requested.Value, MaxPageSize);
 }

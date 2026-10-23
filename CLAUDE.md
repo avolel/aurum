@@ -118,7 +118,7 @@ one lives and what is actually in it today.
 
 ```
 src/
-├── Aurum.App.SharedKernel/            ApiResponse<T>, PageResult<T>, AuditableEntity, SupportedSymbol
+├── Aurum.App.SharedKernel/            ApiResponse<T>, CursorPage<T>, AuditableEntity, SupportedSymbol
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
 ├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/

@@ -33,7 +33,7 @@ breaking a rule below usually won't compile.
 | **Web** | `Aurum.Api` | Receives web requests, checks logins, wraps answers in `ApiResponse<T>`, hands work to MediatR | Application, SharedKernel | Business rules, database access, calls to outside web services |
 | **Application** | `Aurum.App.Application` | Commands, queries, handlers, validators, turning entities into DTOs | Infrastructure.Data, Infrastructure.Pricing, SharedKernel | Anything to do with web requests or controllers |
 | **Database** | `Aurum.App.Infrastructure.Data` | Database queries, repositories, the database context (`AurumDbContext`) | SharedKernel | DTOs, business rules, turning entities into DTOs |
-| **Shared** | `Aurum.App.SharedKernel` | Small types every layer uses (`ApiResponse<T>`, `PageResult<T>`) | Nothing | Anything specific to one feature |
+| **Shared** | `Aurum.App.SharedKernel` | Small types every layer uses (`ApiResponse<T>`, `CursorPage<T>`) | Nothing | Anything specific to one feature |
 
 Two differences in this repository, explained in D-5 of `ops/decisions/decisions.md`:
 
@@ -92,7 +92,8 @@ public record SetPriceSourceEnabledCommand(string SourceCode, bool Enabled) : IC
 - Use `record` types. They can't be changed after they're created, and two with the same values count
   as equal.
 - A lookup for one item returns a type that can be empty (`PriceSourceDto?`), for when nothing is found.
-- Queries that return pages of results return `PageResult<T>`.
+- Queries that return pages of results return `CursorPage<T>`. The next page starts after a
+  bookmark, not at a page number (D-20).
 
 ### Nothing to register
 

@@ -153,7 +153,7 @@ latest-price cache, the circuit breakers, the request counter and the service se
 | File | What it is |
 |---|---|
 | `Common/ApiResponse.cs` | The single wrapper every endpoint returns: `Success`, `Data`, `Message`, `StatusCode`, `Errors`. |
-| `Common/Pagination.cs` | `PaginationHelper.ClampPageSize` (50 rows by default, at most 500), and `PageResult<T>`, for page-number lists. Nothing uses `PageResult<T>` yet. |
+| `Common/Pagination.cs` | `PaginationHelper.ClampPageSize`: 50 rows when the caller asks for none, at most 500. |
 | `Common/CursorPage.cs` | `CursorPage<T>` (one page plus `NextCursor`) and `Cursor`, the bookmark the history and events endpoints page with. |
 | `Constants/ErrorMessages.cs` | Messages the endpoints send back, such as the 503 "no price yet" text. |
 | `Constants/SupportedSymbol.cs` | The price symbols: `XAUUSD` (gold in US dollars) and `XAGUSD` (silver). `All` lists both. `Find` matches a symbol typed in any case and returns the stored spelling. |
