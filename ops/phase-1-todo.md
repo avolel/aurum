@@ -1,6 +1,7 @@
 # Phase 1 — the server side
 
-This is my list of the remaining Phase 1 work. The groundwork is in place and its tests pass. See
+This is my list of the Phase 1 work. All of it is done except one box in item 7, which stays open on
+purpose: nothing tests the order of the two steps inside `Subscribe`. See
 `ops/decisions/decisions.md` for what's already decided and what still hasn't been checked.
 
 The items are in an order where each one can be checked when it's finished, following the Phase 1
@@ -61,9 +62,8 @@ A few terms used below:
 > **Since D-5 (2026-09-26):** every service is now set up in `src/Aurum.Api/Program.cs`. The
 > `PricingModule`, `AddPricingModule`, `AddRealtimeModule` and `Add<Module>Module` methods mentioned in
 > items 2, 3, 7 and 8 no longer exist. Items 7 and 8 were planned around them. Item 7 was replanned
-> and built (D-19); the bullets it dropped are struck through below with the reason. Item 8 still
-> needs replanning before it starts, and its notes are left as originally written, so the plan's
-> reasoning isn't lost.
+> and built (D-19); the bullets it dropped are struck through below with the reason. Item 8 was
+> replanned and built (D-20).
 
 ---
 
@@ -404,7 +404,8 @@ no data". Mixing the two up is the purest form of the risk in §14, "delayed dat
         price is older than "now minus one day", so a one-day read skipped it and left the 1-day
         window empty for a day after every restart.
 - [x] Startup loading is a method, **`EnsureWarmAsync(ct)`, safe to call more than once**. The timer
-      waits for it before its first check, and so do the endpoints on their first read.
+      waits for it before its first check. The endpoints do not wait for it: until the load finishes,
+      they answer from whatever is held.
       - Unlike the saved price's reload, a second run isn't harmless here, so every caller waits on
         one shared load. A failed load lets the next caller try again. Not a separate
       background service: "background services start in the order they're set up" is a rule nobody
@@ -495,8 +496,11 @@ doesn't catch the repeat that follows. D-18 has the worked example.*
         `Shipped_significance_thresholds_are_valid_and_match_BR02`.
       - `PricePollingServiceTests.A_poll_whose_window_crosses_its_threshold_writes_one_event`.
 - [x] Check the tests notice when a rule is broken on purpose: drop the cross-service multiplier, drop
-      the `NOT EXISTS`, and move the event insert above the price save. Each should turn a named test
-      red. Not recorded as done yet.
+      the `NOT EXISTS`, and move the event insert above the price save. Each turned a named test red:
+      - multiplier dropped → `Cross_source_delta_requires_higher_magnitude` and three others
+        (rerun 2026-10-22)
+      - `NOT EXISTS` dropped → `Restart_does_not_re_emit_within_the_cooldown` (rerun 2026-10-22)
+      - insert moved above the save → `A_poll_whose_tick_fails_to_save_writes_no_event`
 - [x] **D-18 written up**: why `price_events` isn't a TimescaleDB table, why the waiting period lives
       in the database, and that windows inside each other each produce an event.
 

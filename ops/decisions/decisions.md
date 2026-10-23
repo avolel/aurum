@@ -203,6 +203,9 @@ controller going around MediatR to reach database or pricing code directly.
   `QueryKeyAuthHandler`, `RegisteredPriceSource`, and the two settings checkers. `Program.cs` needs to
   name all of them. The other option was making them public just so they can be set up, which shows
   far more to the rest of the code than this one exception does.
+
+  *Since D-20:* `SourceCircuitStore` is public, so the sources endpoint can read every circuit. Its
+  constructor and `For()` stay internal. Four types remain internal.
 - `Program.AddPriceSource<T>` had to become a method on the `Program` class, not a function written
   inside `Program.cs`'s top-level code. Functions written that way can't be reached from the test
   project. `ResilienceWiringTests` pins down the order of two lines in that method: the retry setup
@@ -569,7 +572,7 @@ everything that uses it.
 
 The `switch` existed because the settings had one property per provider, so turning a service code
 known only while running into a property name fixed in the code was the only way to read them. Making
-the services a list removes that step. Lookup is `TryGetByCode` or `RequireByCode`, and if the code
+the services a list removes that step. Lookup is `RequireByCode`, and if the code
 isn't found, it stops with an error.
 
 Turned down: **keeping the `switch` and adding a case per service.** The smallest edit, and it leaves
