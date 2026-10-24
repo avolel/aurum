@@ -12,6 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Only item 0, choosing the model, is done. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -100,12 +101,15 @@ flowchart TD
 ```
 aurum/
 ├── Aurum.slnx                     ← the solution file; `dotnet build` builds all of it
-├── docker-compose.yml             ← runs postgres, ollama and the api together
+├── docker-compose.yml             ← runs postgres, ollama and the api together; its two volumes are
+│                                    created by hand once (README, "Running it")
 ├── .env                           ← your secrets and connection strings (not committed)
 ├── ops/
+│   ├── bench/                     ← the model speed and memory measurements behind D-6
 │   ├── db/init/01-extensions.sql  ← turns on TimescaleDB and pgvector, once, on an empty database
 │   ├── decisions/decisions.md     ← the decision log
-│   └── phase-1-todo.md            ← Phase 1's work list, all done
+│   ├── phase-1-todo.md            ← Phase 1's work list, all done
+│   └── phase-2-todo.md            ← Phase 2's work list
 ├── docs/                          ← this file and the best-practice guides
 ├── app/                           ← the mobile/web app: an empty Expo shell for now
 └── src/
@@ -973,7 +977,7 @@ is: the connection string, the three API keys, each service's `Enabled`, GoldAPI
 | `PriceFeedCircuit` | `FailureThreshold`, `BreakDuration` | 3, 45 min (`appsettings.json`; the code's own default is 15 min) | The circuit breaker. |
 | `DeltaEngine` | `MaxSamplesPerSymbol`, `ToleranceFraction`, `MinSamplesForVolatility` | 8,640, 0.5, 5 | Price-move memory size and rules. |
 | `Significance` | `ThresholdProfile`, `CrossSourceMagnitudeMultiplier`, `Windows:<code>:MinPercent`, `Windows:<code>:Cooldown` | `default-v1`, 2.0, see below | Which moves become events, and how long a window stays quiet after one. |
-| `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2. **Nothing reads it yet.** |
+| `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2, `gemma4:12b-it-qat` (D-6). **Nothing reads it yet.** Local models are for this personal build; production would use a paid cloud AI service instead. |
 
 The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
 

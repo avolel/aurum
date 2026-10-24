@@ -10,18 +10,20 @@ AI models locally). It names one main cause and any other causes, gives a confid
 4 sentence explanation, and 3 to 5 supporting news links (BR-04). One that fails its check is
 published as "Awaiting Confirmation", not hidden.
 
+Aurum is a personal project, used by me alone. The local model is for that. If Aurum goes live, the
+explanations come from a paid cloud AI service instead, most likely Anthropic's Claude (D-6).
+
 **This is server-side only**, the same split as Phase 1. The explanation feed screen goes into one
 later batch of app work, together with the Phase 1 dashboard.
 
-**Order.** Item 0 comes first and can stop the phase: if the model can't come near the quality
-target, the rest isn't worth building as planned. After that:
+**Order.** Item 0 is finished: the main model is `gemma4:12b-it-qat` (D-6). After that:
 
 - Items 1, 2, 3 and 4 don't depend on each other.
 - Item 5 needs item 1 (economic figures for past dates) and item 3 (embeddings).
 - Item 6 needs 1 to 5. Items 7 and 8 need 6.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
-New numbers start at D-22. Item 0 closes D-6, which was put off until now.
+New numbers start at D-22. Item 0 closed D-6.
 
 A few terms used below:
 
@@ -35,8 +37,6 @@ A few terms used below:
   daily figures and similar past moves.
 - **Embedding**: a list of numbers an AI model makes from text, so two pieces of text can be compared
   by meaning. pgvector stores them in PostgreSQL.
-- **Scored test set**: about 20 past moves, each with a cause written by me and the background saved
-  with it, used to grade the AI's explanations.
 - **Context window**: how much text the model reads at once. Anything past it is cut off.
 
 ---
@@ -49,8 +49,9 @@ These come from reading the code and the requirements against the original plan 
 1. **One model writes and checks.** The requirements (FR-2.4) ask for a second, lighter model for
    checking. D-6 found the graphics card's 12 GB holds about one 14-billion-setting model. Swapping
    between two models costs about 15 seconds each time. So one model does both jobs, with different
-   instructions. This departs from the requirements, so it gets its own decision entry.
-2. **`docker compose down -v` deletes the downloaded models.** The comment in `docker-compose.yml`
+   instructions. This departs from the requirements, and D-6 records it. It applies to the personal
+   build only: a cloud AI service in production could use a separate checking model again.
+2. **`docker compose down -v` deletes the downloaded models** (fixed in item 0). The comment in `docker-compose.yml`
    says the models' volume survives it. It doesn't: `-v` removes every named volume the file
    declares. The "every phase" check runs exactly that command, and would throw away about 10 GB of
    model files each time.
@@ -76,12 +77,12 @@ These come from reading the code and the requirements against the original plan 
 8. **Tests never call Ollama**, for the same reason they never call the price services.
    `AurumApiFactory` gets a stand-in Ollama client. A separate set of tests, run by hand, calls the
    real model.
-9. **A bigger model is not the way out if quality misses.** The phased plan says to move to bigger
-   local models (§10) if the 70% target isn't met. D-6 found nothing bigger fits the card. If
-   quality misses, the fix is better instructions and better background.
-10. **Past news can't be fetched later.** RSS feeds only show recent articles. So the scored test set
-    must store each move's news and figures with it, typed in or saved by hand. The real pipeline
-    can't gather background for a move from months ago.
+9. **A bigger model is not the way out if quality is poor.** The phased plan says to move to bigger
+   local models (§10) if the 70% target isn't met. D-6 found nothing bigger fits the card. If the
+   explanations are poor, the fix is better instructions and better background.
+10. **Past news can't be fetched later.** RSS feeds only show recent articles. So the real pipeline
+    can't gather background for a move from months ago. This was the reason a scored test set would
+    have needed its news saved by hand, and part of why I dropped it (D-6).
 11. **Ollama cuts off long prompts without saying so.** Its default context window is small (a few
     thousand word-pieces). Eight hours of headlines from three feeds, plus figures and past moves,
     can be longer than that. The model then answers from part of the background, and nothing
@@ -107,7 +108,7 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 
 ---
 
-## 0. Measure the models, and build the scored test set · must pass before items 1 to 6
+## 0. Measure the models and choose one · done
 
 - [x] Fix the Ollama version in `docker-compose.yml` to an exact release instead of `latest`. It
       must be new enough to accept a JSON schema in the `format` option (item 3).
@@ -119,18 +120,18 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
       looks for a volume that doesn't exist and refuses to start.
 - [x] Download 2 or 3 candidate models of about 14 billion settings, plus `nomic-embed-text` for
       embeddings.
-- [ ] Measure each model's speed and memory use on the real card, against D-6's estimates (about 9
+- [x] Measure each model's speed and memory use on the real card, against D-6's estimates (about 9
       GB, 40 to 60 word-pieces a second). Measure at the context window size the pipeline will
       actually use: a bigger window takes more of the card's memory (finding 11).
-- [ ] Measure a cold start: how long the first answer takes when the model isn't loaded yet.
-- [ ] Write the scored test set: about 20 past moves, each with the cause written by me and the
-      background saved beside it (finding 10). It's the only thing that notices quality dropping
-      when a model or the instructions change. It lives in the repository so item 8 can reuse it.
-- [ ] Early read on quality: a quick hand-written prompt against the scored test set, for each
-      candidate model. The target is 70% passing the check first time, at 60% confidence or more.
-      **If the best result is far below that, stop and rethink before building anything else.**
-- [ ] **D-6 closed** with the measured numbers and the chosen main and embedding models.
-- [ ] Decision written up: one model writes and checks (finding 1).
+- [x] Measure a cold start: how long the first answer takes when the model isn't loaded yet.
+- [x] **D-6 closed** with the measured numbers and the chosen main and embedding models:
+      `gemma4:12b-it-qat` and `nomic-embed-text`.
+- **Dropped:** the scored test set of about 20 past moves, and the early read on quality against
+  it. This is a personal project that won't run in production, and saving the news for each past
+  move by hand isn't worth the time. Nothing measures explanation quality now. D-6 lists what that
+  costs.
+- [x] Decision written up: one model writes and checks (finding 1). It's part of D-6, not an entry
+      of its own.
 
 ---
 
@@ -241,8 +242,10 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
       `nomic-embed-text`). Each row records which model made it.
 - [ ] One way of turning a move into text, used for both the seed and live moves. If the two are
       written differently, the distances compare the wording, not the moves.
-- [ ] Get the daily price history. Nothing in the repository reads Stooq yet. Check it still offers
-      the download free, and decide whether this is a one-off import or a client.
+- [ ] Get the daily price history. Nothing in the repository reads Stooq yet. Since March 2026
+      Stooq asks for an API key before it hands over the CSV, and a script gets a browser check
+      instead of the file. Find out whether the key is free, or pick another source, and decide
+      whether this is a one-off import or a client.
 - [ ] Seed it from daily price history plus the economic figures for those dates (item 1).
 - [ ] Write down how many moves the seed holds, and that they're daily only (finding 7).
 - [ ] Decision written up: what the seed holds and what it can't do.
@@ -259,8 +262,6 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
       2. writes the explanation.
       3. checks it.
       4. saves it.
-- [ ] Gathering is separate from writing and checking, so item 8 can feed the scored test set's
-      saved background straight into steps 2 and 3 (finding 10).
 - [ ] The model cites news by the number it was given for each article, and the app fills in the
       link. A number it wasn't given fails the shape check. This stops it making up links.
 - [ ] Decide what happens when fewer than 3 articles are found. BR-04 asks for 3 to 5 links. The
@@ -304,12 +305,11 @@ Only enough news for explanations to cite. Scoring, tagging and the other source
 
 ---
 
-## 8. Measuring quality
+## 8. Measuring speed
 
-Both of these are run by hand against the real model, and kept out of `dotnet test`.
+Run by hand against the real model, and kept out of `dotnet test`. There is no quality measurement:
+the scored test set was dropped (item 0).
 
-- [ ] Run the scored test set from item 0 through the real write and check steps, using its saved
-      background. Report the first-pass rate.
 - [ ] Replay a busy week of moves and confirm every one is explained within 5 minutes, measured from
       detection to the row's finish time. The week must come from after the news feeds started
       collecting, or there's no news to gather.
@@ -331,16 +331,15 @@ Both of these are run by hand against the real model, and kept out of `dotnet te
 ## Done when
 
 - [ ] `dotnet test` passes, and no test reaches the real Ollama or any real outside service.
-- [ ] `docker compose down -v && docker compose up --build` works from empty, **and the models are
-      still there afterwards** (0, 9).
+- [ ] Starting from a new, empty database works: `docker compose down`, remove and recreate the
+      `aurum_aurum-postgres-data` volume, then `docker compose up --build`. The models' volume is
+      left alone, **and the models are still there afterwards** (0, 9). `down -v` can't do this
+      check: both volumes are `external`, so it deletes neither.
 - [ ] With the real model: a move made by hand is explained, checked and saved within 5 minutes, and
       appears at `/api/v1/explanations` and through `PriceHub` (6, 7).
-- [ ] The scored test set reaches 70% passing the check first time at 60% confidence or more (8). If
-      it doesn't, the result is written up, not hidden. The fix is better instructions or background,
-      not a bigger model (finding 9).
 - [ ] Any explanation can be recreated from its saved prompt, prompt version, model version, Ollama
       version, temperature and seed (3, 6), within the limit item 3 writes down.
-- [ ] Every decision from this phase written up with the options turned down, and D-6 closed.
+- [ ] Every decision from this phase written up with the options turned down.
 
 **Deliberately not in this batch:**
 

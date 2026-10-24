@@ -6,7 +6,10 @@ schedule, stores every answer, and will later show those prices in an app.
 **Where things stand: Phase 1, the server side, is finished.** All eleven items (0 to 10) in
 `ops/phase-1-todo.md` are done, and so is its "done when" list. Phase 2 is planned but not started.
 It adds an explanation for each big price move, written by an AI model running on my own machine.
-The plan is in `ops/phase-2-todo.md`. The app screens for both phases come later, as one batch.
+The plan is in `ops/phase-2-todo.md`.
+
+Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
+come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
 
 What has been built and checked by hand:
 
@@ -214,13 +217,14 @@ can reload these pages as often as they like.
 ## Decisions that were made without testing
 
 Three early experiments were closed without being run. D-1 and D-2 are decisions I stated rather
-than measured, and D-6 is put off until Phase 2. D-2 picks `lightweight-charts` for charts on the web
+than measured. D-6 measured speed and memory on the real graphics card and chose `gemma4:12b-it-qat`,
+but skipped the planned test of how good its explanations are. D-2 picks `lightweight-charts` for charts on the web
 and leaves the phone version until Phase 4, when there is a real phone to test on. Phone simulators
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
 The decision log has **D-1 to D-21** so far. `ops/phase-2-todo.md` lists the next work in an order
-where each item can be checked when it is finished. Its first item closes D-6. A decision number is
+where each item can be checked when it is finished. Its first item closed D-6. A decision number is
 only given out when the decision is actually made, so the next one will be D-22.
 
 ## Where things are
@@ -269,8 +273,15 @@ as a description of code you can use today.
 
 ```bash
 cp .env.example .env      # fill in the database password and the three API keys
+docker volume create aurum_aurum-postgres-data     # once per machine
+docker volume create aurum_aurum-ollama-models     # once per machine
 docker compose up --build
 ```
+
+The two volumes hold the database and the downloaded AI models. `docker-compose.yml` marks them
+`external`, which means Compose uses them but never creates or deletes them. Without the two
+`docker volume create` lines on a fresh machine, `docker compose up` refuses to start and names the
+missing volume.
 
 On startup the API brings the database up to date by itself. `/health` tells you the API is running.
 `/health/ready` also checks it can reach the database.
@@ -297,10 +308,15 @@ PriceSources__ApiNinjas__Enabled=false PricePolling__PollInterval=1.00:00:00 doc
 
 `/api/v1/price/live` should then show `isFallback: true`.
 
-**`docker compose down -v` also deletes the downloaded AI models**, about 10 GB. The `-v` removes
-every storage volume the compose file declares, the models' one included, even though the comment in
-`docker-compose.yml` says it survives. Use `docker compose down` without `-v` unless you mean to
-start from an empty database and download the models again.
+**`docker compose down -v` keeps the database and the AI models**, because both volumes are
+`external`. To start from an empty database, stop the stack and recreate that volume by hand:
+
+```bash
+docker compose down
+docker volume rm aurum_aurum-postgres-data && docker volume create aurum_aurum-postgres-data
+```
+
+The models' volume (about 10 GB) is only removed the same way, on purpose.
 
 **Only run one copy of the API.** If two copies ran, both would check prices and spend the allowance
 twice, and both would try to update the database at the same moment.

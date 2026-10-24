@@ -227,12 +227,16 @@ reconsider. Reconsidering it means updating this entry, not quietly adding a fil
 
 ## D-6 — How big a machine the AI models need
 
-**PARTLY DECIDED (2026-10-24).** I measured three candidate models on the real graphics card, using
-Ollama (the program that runs AI models locally). `qwen3:14b` is ruled out because it doesn't fit on
-the card. `gemma4:12b-it-qat` and `qwen3.5:9b` both fit, and both are fast enough. Choosing between
-them waits on the quality test, which is round 2 of Phase 2's item 0. The embedding model, which
-turns text into lists of numbers so the app can find similar past price moves, is `nomic-embed-text`.
-I chose it without measuring it (see below).
+**DECIDED (2026-10-24), without a quality test.** The main model is `gemma4:12b-it-qat`, and it both
+writes and checks explanations, with different instructions for each. That departs from FR-2.4, which
+asks for a second, lighter checking model: the card holds one model at a time (see "What I expected
+before measuring"). I measured
+three candidate models on the real graphics card, using Ollama (the program that runs AI models
+locally). `qwen3:14b` is ruled out because it doesn't fit on the card. `gemma4:12b-it-qat` and
+`qwen3.5:9b` both fit, and both are fast enough. I picked Gemma without running the planned quality
+test (see "Why there is no quality test" below). The embedding model, which turns text into lists of
+numbers so the app can find similar past price moves, is `nomic-embed-text`. I chose it without
+measuring it (see below).
 
 ### What I expected before measuring
 
@@ -325,10 +329,46 @@ whole store of past moves, so it's chosen once.
 - **Models of 26 to 31 billion settings** (`qwen3.5:27b`, `gemma4:31b`, `gemma4:26b-a4b`): their
   files are 16 to 20 GB, more than the card holds.
 
-### Still to do
+### Why there is no quality test
 
-- Run the quality test on both finalists, choose the main model, and change this entry to DECIDED.
-- Load each finalist together with `nomic-embed-text` and check they fit.
+The plan was to grade both finalists against about 20 past price moves, each with a cause I wrote
+and the news of the day saved next to it. The target was 70% of explanations passing the check on
+the first try, at 60% confidence or more. I dropped it. Aurum is a personal project, used by me
+alone, and building that test set means finding and saving the news for 25 past days by hand. Stooq,
+the free source of daily gold prices for choosing those days, has also started asking for an API key
+since March 2026. And if Aurum ever goes live, it won't use this model at all (see below), so a
+quality score for Gemma would not carry over.
+
+What this costs:
+
+- Nothing measures how good the explanations are. Their quality is judged by reading them.
+- Gemma is the slower of the two: about 30 seconds a move against about 20 for `qwen3.5:9b`
+  (point 2), and it leaves about 1.2 GB less free on the card (point 5). Both are well inside the
+  5-minute target.
+- If the explanations turn out poor, the first fix is still better instructions and background,
+  because nothing bigger fits the card. Trying `qwen3.5:9b` instead is a settings change, since the
+  model name is a setting, not code (Phase 2 item 3).
+
+### If Aurum goes live
+
+Local models through Ollama are for this personal build only. If I decide to run Aurum in production,
+the explanations will come from a paid cloud AI service instead, most likely Anthropic's Claude, or
+otherwise OpenAI. This reverses the requirements' "no outside paid AI services for production"
+(§13 of `plans/aurum_brd.md`), and that document now says so. Going live would then need:
+
+- a client for that service in place of the Ollama one, with the job-to-model map pointing at its
+  models. A cloud service has no memory limit, so checking can go back to a separate, lighter model,
+  as FR-2.4 asks;
+- the quality test above, run against the cloud model before launch, since the 70% target (§16) is a
+  launch measure;
+- a new embedding model, which means rebuilding the store of past moves, because embeddings from two
+  different models can't be compared;
+- a budget for paying per explanation, which the requirements currently put at $0.
+
+### Not checked
+
+- `nomic-embed-text` loaded at the same time as Gemma. By the numbers above they should fit: Gemma
+  takes about 8.5 GB of the 12 GB card, and the embedding model's file is 274 MB.
 
 ---
 
