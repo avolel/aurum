@@ -26,12 +26,10 @@ services:
       start_period: 30s
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.40.9
     container_name: aurum-ollama
     restart: "no"
     volumes:
-      # Named volume so `docker compose down -v` does not nuke tens of GB of
-      # model weights. Remove it explicitly if you really mean to.
       - aurum-ollama-models:/root/.ollama
     ports:
       - "127.0.0.1:11434:11434"
@@ -86,4 +84,8 @@ services:
 
 volumes:
   aurum-postgres-data:
+    external: true
+    name: aurum_aurum-postgres-data
   aurum-ollama-models:
+    external: true
+    name: aurum_aurum-ollama-models

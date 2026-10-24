@@ -109,15 +109,15 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 
 ## 0. Measure the models, and build the scored test set · must pass before items 1 to 6
 
-- [ ] Fix the Ollama version in `docker-compose.yml` to an exact release instead of `latest`. It
+- [x] Fix the Ollama version in `docker-compose.yml` to an exact release instead of `latest`. It
       must be new enough to accept a JSON schema in the `format` option (item 3).
-- [ ] Make the models' volume survive `docker compose down -v`: mark it `external` and create it once
+- [x] Make the models' volume survive `docker compose down -v`: mark it `external` and create it once
       by hand. Correct the comment that says it already survives.
       **Keep the existing name.** Compose put the project name in front, so today the volume is
       called `aurum_aurum-ollama-models`. An `external` volume is looked up by its exact name, so
       `name: aurum_aurum-ollama-models` keeps the models already downloaded. Without it, compose
       looks for a volume that doesn't exist and refuses to start.
-- [ ] Download 2 or 3 candidate models of about 14 billion settings, plus `nomic-embed-text` for
+- [x] Download 2 or 3 candidate models of about 14 billion settings, plus `nomic-embed-text` for
       embeddings.
 - [ ] Measure each model's speed and memory use on the real card, against D-6's estimates (about 9
       GB, 40 to 60 word-pieces a second). Measure at the context window size the pipeline will
