@@ -31,6 +31,7 @@ A few terms used throughout:
 | .NET SDK | 10.0.110 |
 | Docker / Compose | 29.6.2 / v5.3.1 |
 | Node | 24.11.0 |
+| Ollama | 0.40.9 (pinned in `docker-compose.yml`) |
 
 ## D-1 — Expo or plain React Native
 
@@ -226,35 +227,108 @@ reconsider. Reconsidering it means updating this entry, not quietly adding a fil
 
 ## D-6 — How big a machine the AI models need
 
-**PUT OFF until Phase 2 planning.** It can safely wait: nothing uses Ollama (the program that runs AI
-models locally) until the Phase 2 feature that explains why the price moved, so no code written
-before then depends on the answer. The hardware limit below can't wait, though. It already limits
-what Phase 2 can plan for, and it's why this entry stays open instead of being closed as "decide
-later".
+**PARTLY DECIDED (2026-10-24).** I measured three candidate models on the real graphics card, using
+Ollama (the program that runs AI models locally). `qwen3:14b` is ruled out because it doesn't fit on
+the card. `gemma4:12b-it-qat` and `qwen3.5:9b` both fit, and both are fast enough. Choosing between
+them waits on the quality test, which is round 2 of Phase 2's item 0. The embedding model, which
+turns text into lists of numbers so the app can find similar past price moves, is `nomic-embed-text`.
+I chose it without measuring it (see below).
 
-**The plan's assumption doesn't hold up on the actual hardware.**
+### What I expected before measuring
 
 The graphics card has 12 GB of memory. A large AI model (around 30 billion settings, compressed to
 the usual 4-bit level, called q4_K_M) needs about 18 GB and won't fit. So the plan's fallback of
-"use bigger local models" (§10) isn't available. The largest model that fits comfortably is
-**about 14 billion settings at q4_K_M, needing about 9 GB**.
+"use bigger local models" (§10) isn't available. I estimated that the largest model that fits
+comfortably is about 14 billion settings at q4_K_M, needing about 9 GB. The measurements below show
+that estimate was too low.
 
-The less obvious consequence, for the list of models Phase 2 will use: 12 GB holds roughly *one*
-useful model at a time. A 14-billion-setting main model (about 9 GB) plus a small 4-billion one for
-checking relevance (about 3 GB) is right at the memory limit, and Ollama will start swapping models in
-and out. That turns a relevance check that should take 0.2 seconds into a 15-second model load.
-**So the real rule for choosing models is to keep as few different models loaded as possible.** That
-points to one 14-billion-setting model doing the explaining, checking and summarising (with different
-instructions for each job), plus one model for turning text into searchable vectors.
+12 GB holds roughly *one* useful model at a time. A 14-billion-setting main model (about 9 GB) plus a
+small 4-billion one for checking relevance (about 3 GB) is right at the memory limit. Ollama would
+then swap models in and out, which turns a relevance check that should take 0.2 seconds into a
+15-second model load. **So the rule for choosing models is to keep as few different models loaded as
+possible.** That points to one main model doing the explaining, checking and summarising (with
+different instructions for each job), plus one embedding model.
 
-Speed isn't the risk. A 14-billion-setting model writes about 40 to 60 words-pieces a second, so a
-400-piece explanation takes about 10 seconds, well inside the 5-minute target (§12, §16). **The risk is
-Phase 2's target: at least 70% of explanations should pass checking on the first try, at 60%
-confidence or more.** Measure that early. If it misses, the fix has to be better instructions and
-better supporting information, not a bigger model.
+I estimated a 14-billion-setting model would write about 40 to 60 word-pieces a second, so a
+400-piece explanation would take about 10 seconds, well inside the 5-minute target (§12, §16). I
+expected the real risk to be quality, not speed: Phase 2's target is that at least 70% of
+explanations pass checking on the first try, at 60% confidence or more. If that misses, the fix has
+to be better instructions and better supporting information, not a bigger model.
 
-Still to do, as the first step of Phase 2 planning: download the candidate models with `ollama pull`
-and measure real speeds against the estimates above.
+### How I measured
+
+`ops/bench/round1.py` ran each model at two context window sizes. The context window is how much
+text the model reads at once. I measured at 16,384 word-pieces (the realistic target) and 32,768
+(room to spare). My rough estimate of a real prompt is about 10,000 word-pieces: about 60 gold-related
+articles at about 80 word-pieces each, plus economic figures, similar past moves and the instructions.
+
+Each run sent about 10,000 word-pieces of filler text taken from `docs/`, capped the answer at 400
+word-pieces, and fixed the randomness (temperature 0, seed 42). Thinking mode, where the model writes
+out its reasoning before answering, was off. Each setting ran three times, and every run started
+with no model loaded. The raw results are in `ops/bench/round1-20261024-0121.jsonl` (all three
+models) and `ops/bench/round1-20261024-0147.jsonl` (a second run of the two finalists, after the
+card's speed changed during the first).
+
+### What I measured
+
+"Card memory" is what `nvidia-smi` reported with the model loaded. The finalists' rows are from the
+second run, where every run was at full speed and the three runs of each setting agreed within
+about 1%.
+
+| Model | Context | Share on the card | Card memory | Reads (word-pieces/s) | Writes (word-pieces/s) |
+|---|---|---|---|---|---|
+| `qwen3.5:9b` | 16,384 | 100% | 6.8 GB | ~3,575 | ~77 |
+| `qwen3.5:9b` | 32,768 | 100% | 7.2 GB | ~3,490 | ~77 |
+| `gemma4:12b-it-qat` | 16,384 | 100% | 8.2 GB | ~2,490 | ~62 |
+| `gemma4:12b-it-qat` | 32,768 | 100% | 8.5 GB | ~2,485 | ~61 |
+| `qwen3:14b` | 16,384 | **89%** | 10.4 GB | ~1,500 | ~29 |
+| `qwen3:14b` | 32,768 | **74%** | 10.5 GB | ~1,140 | ~15 |
+
+### What the numbers mean
+
+1. **`qwen3:14b` doesn't fit, and my 9 GB estimate was why I expected it to.** The model file is
+   9.3 GB. But when Ollama loads a model, it also reserves memory for the whole context window. So it
+   asked for 12.2 GB at 16,384 and 14.9 GB at 32,768. The part that didn't fit ran on the processor
+   instead: 11% at 16,384 and 26% at 32,768. Writing speed halved at the larger size. My estimate
+   counted only the file. Any model considered later has to be measured at the context size the
+   pipeline uses, not judged by its file size.
+2. **Speed doesn't decide between the two that fit.** At full speed, one move takes about 20 seconds
+   with `qwen3.5:9b` and about 30 seconds with `gemma4:12b-it-qat`. That's for reading a 10,000-piece
+   prompt and writing a 600-piece answer, then doing it again for the check. Even 3 to 4 times
+   slower, both finish well inside 5 minutes.
+3. **The card doesn't always run at full speed.** In the first run, Gemma's writing speed jumped from
+   about 19 to about 61 word-pieces a second between two identical runs. An earlier single test of
+   `qwen3.5:9b` wrote at 22, against 77 at full speed. The second run was at full speed throughout,
+   and its numbers match the fastest ones from the first. The likely cause of the slow runs is the
+   laptop lowering the card's power, but I haven't confirmed it.
+4. **Loading a model is slow only the first time it's read from disk.** That took 26 seconds for
+   Gemma, 13 for `qwen3:14b`, and 47 in the earlier single test of `qwen3.5:9b`. After that it took
+   about 3 seconds, because the operating system keeps the file in memory. So the first move after a
+   reboot pays the long load.
+5. **`qwen3.5:9b` leaves the most room on the card**: about 4.7 GB free at 32,768, against about
+   3.5 GB for Gemma. Doubling the context added only 0.3 to 0.4 GB for either of them, against
+   2.7 GB for `qwen3:14b`. So a prompt bigger than expected is not a memory problem with either one.
+
+### The embedding model
+
+`nomic-embed-text`, a 274 MB download. It's the model the Phase 2 plan names and the most downloaded
+embedding model in Ollama's library, and the descriptions of price moves it will turn into numbers
+are short. I didn't measure it. By adding up the numbers above, it should fit next to either
+finalist, but I haven't checked that by loading both at once. Changing it later means rebuilding the
+whole store of past moves, so it's chosen once.
+
+### What I turned down
+
+- **`qwen3:14b`**: only 89% of it fits on the card at 16,384 (point 1).
+- **`phi4:14b`**, not downloaded: it accepts at most 16,384 word-pieces of text, too little room
+  above the 10,000 estimate.
+- **Models of 26 to 31 billion settings** (`qwen3.5:27b`, `gemma4:31b`, `gemma4:26b-a4b`): their
+  files are 16 to 20 GB, more than the card holds.
+
+### Still to do
+
+- Run the quality test on both finalists, choose the main model, and change this entry to DECIDED.
+- Load each finalist together with `nomic-embed-text` and check they fit.
 
 ---
 
