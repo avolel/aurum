@@ -14,7 +14,9 @@ namespace Aurum.Api.Controllers;
 [ApiController]
 [Route("api/v1/events")]
 [Produces("application/json")]
-public sealed class PriceEventsController(IMediator mediator, IAppLogService<PriceEventsController> appLogService)
+public sealed class PriceEventsController(
+    IMediator mediator, 
+    IAppLogService<PriceEventsController> appLogService)
     : ControllerBase
 {
     /// <summary>Saved price-move events, newest first.</summary>
