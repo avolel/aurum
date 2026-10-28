@@ -37,8 +37,8 @@ public sealed class GetPriceHistoryQueryHandler(AurumDbContext db, TimeProvider 
     {
         // The validator has checked the symbol, From and the cursor, so the "!"s cannot fail.
         var symbol = SupportedSymbol.Find(request.Symbol)!;
-        var from = request.From!.Value;
-        var to = request.To ?? clock.GetUtcNow();
+        var from = request.From!.Value.ToUniversalTime();
+        var to = request.To?.ToUniversalTime() ?? clock.GetUtcNow();
         var limit = PaginationHelper.ClampPageSize(request.Limit);
 
         var ticks = db.PriceTicks.AsNoTracking()

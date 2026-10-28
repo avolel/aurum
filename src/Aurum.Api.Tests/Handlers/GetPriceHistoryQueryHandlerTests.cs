@@ -181,6 +181,24 @@ public class GetPriceHistoryQueryHandlerTests(PostgresFixture fixture) : IAsyncL
     }
 
     [Fact]
+    public async Task Handle_FromAndToWithANonZeroOffset_ReturnsTheSameRowsAsUtc()
+    {
+        // Npgsql refuses a non-zero offset for timestamptz. Both bounds, so neither can be missed.
+        var plusTwo = TimeSpan.FromHours(2);
+        var to = From.AddMinutes(30);
+        await fixture.SeedTicksAsync(
+            (SupportedSymbol.Gold, From.AddMinutes(10), 101m, GoldApi),
+            (SupportedSymbol.Gold, From.AddMinutes(20), 102m, GoldApi),
+            (SupportedSymbol.Gold, to, 103m, GoldApi));
+
+        var utc = await HandleAsync(from: From, to: to);
+        var offset = await HandleAsync(from: From.ToOffset(plusTwo), to: to.ToOffset(plusTwo));
+
+        Assert.Equal([101m, 102m], utc.Items.Select(t => t.Mid));
+        Assert.Equal(utc.Items.Select(t => t.Mid), offset.Items.Select(t => t.Mid));
+    }
+
+    [Fact]
     public async Task Handle_WithNoTo_StopsAtTheInjectedClock()
     {
         // Ahead of the fake clock. Visible if the handler reads the wall clock instead, or no bound.
