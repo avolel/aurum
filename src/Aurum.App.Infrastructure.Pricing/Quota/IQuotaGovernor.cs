@@ -23,7 +23,7 @@ public interface IQuotaGovernor
     /// </remarks>
     Task ReportProviderRejectionAsync(string sourceCode, CancellationToken ct);
 
-    /// <summary>Read-only budget snapshot, for /health/ready and operator visibility.</summary>
+    /// <summary>Read-only budget snapshot, for logs and /api/v1/price/sources.</summary>
     Task<QuotaStatus> GetStatusAsync(string sourceCode, CancellationToken ct);
 }
 

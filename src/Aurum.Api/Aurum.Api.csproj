@@ -10,9 +10,9 @@
   <ItemGroup>
     <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
-    <!-- dotnet ef builds the STARTUP project to get its DbContext, so the tools package has to be
-         here as well as in Infrastructure.Data. Without it the tooling stops with "your startup
-         project doesn't reference Microsoft.EntityFrameworkCore.Design". -->
+    <!-- Not needed by the commands in CLAUDE.md: AurumDbContextFactory lets dotnet ef skip the
+         startup project. Kept so passing src/Aurum.Api as the startup project still works instead
+         of failing with a confusing error. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.10">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>

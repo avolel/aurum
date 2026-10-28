@@ -206,7 +206,9 @@ controller going around MediatR to reach database or pricing code directly.
   far more to the rest of the code than this one exception does.
 
   *Since D-20:* `SourceCircuitStore` is public, so the sources endpoint can read every circuit. Its
-  constructor and `For()` stay internal. Four types remain internal.
+  constructor and `For()` stay internal. Seven internal types are named in `Program.cs`:
+  `QueryKeyAuthHandler`, `RegisteredPriceSource`, the two settings checkers, `LatestQuoteCache`,
+  `DeltaEngine` and `FailoverPriceFeed`.
 - `Program.AddPriceSource<T>` had to become a method on the `Program` class, not a function written
   inside `Program.cs`'s top-level code. Functions written that way can't be reached from the test
   project. `ResilienceWiringTests` pins down the order of two lines in that method: the retry setup
@@ -1929,7 +1931,7 @@ network.
 
 **Why a new package.** `Microsoft.AspNetCore.TestHost`, already in the test project, runs a web
 server in memory, but it can't start the app from `Program.cs`. `WebApplicationFactory` does that, and
-it's the standard way to do it. Its version, 10.0.10, matches `TestHost`.
+it's the standard way to do it. Its version is kept the same as `TestHost`'s.
 
 **Checked by breaking the code on purpose.** Each of these turned a named test red:
 

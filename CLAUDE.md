@@ -155,7 +155,8 @@ registration anywhere else.
 Two consequences you will hit immediately:
 
 - `Aurum.App.Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")`. `QueryKeyAuthHandler`,
-  `RegisteredPriceSource` and both options validators stay `internal` because nothing outside the
+  `RegisteredPriceSource`, both options validators, `LatestQuoteCache`, `DeltaEngine` and
+  `FailoverPriceFeed` stay `internal` because nothing outside the
   module should resolve them, and `Program.cs` now has to name them anyway. Making them public to
   satisfy a wiring concern is the larger leak. `SourceCircuitStore` is public so the sources
   endpoint can call `SnapshotAll()` (D-20), but its constructor and `For()` stay internal — so
