@@ -120,4 +120,28 @@ public class AppLogDrainServiceTests(PostgresFixture fixture) : IAsyncLifetime
             await drain.StopAsync(Ct);
         }
     }
+
+    [Fact]
+    public async Task ExecuteAsync_RowWithALongUserAgent_DoesNotLoseItsBatch()
+    {
+        var (drain, queue) = Build();
+        var service = new AppLogService<AppLogDrainServiceTests>(
+            queue,
+            new FixedRequestContext(new RequestContext(UserAgent: new string('x', 10_000))),
+            TimeProvider.System);
+
+        // Queued before start, so the long row shares one batch with the three normal ones.
+        Enqueue(queue, 3, "neighbors");
+        await service.LogAsync(LogType.ActionLog, Action, "neighbors", ct: Ct);
+        await drain.StartAsync(Ct);
+
+        try
+        {
+            await WaitForRowsAsync("neighbors", 4);
+        }
+        finally
+        {
+            await drain.StopAsync(Ct);
+        }
+    }
 }

@@ -15,7 +15,7 @@ namespace Aurum.Api.Controllers;
 [Route("api/v1/events")]
 [Produces("application/json")]
 public sealed class PriceEventsController(
-    IMediator mediator, 
+    IMediator mediator,
     IAppLogService<PriceEventsController> appLogService)
     : ControllerBase
 {

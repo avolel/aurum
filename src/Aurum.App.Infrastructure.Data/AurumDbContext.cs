@@ -1,6 +1,7 @@
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Aurum.App.Infrastructure.Data.Entities.Macro;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
+using Aurum.App.SharedKernel.Constants;
 using Aurum.App.SharedKernel.Entities;
 using Microsoft.EntityFrameworkCore;
 
@@ -99,19 +100,19 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
         b.Entity<AppLog>(e =>
         {
             e.ToTable("app_logs");
-            e.Property(x => x.LogType).HasMaxLength(32).IsRequired();
-            e.Property(x => x.Action).HasMaxLength(128).IsRequired();
-            e.Property(x => x.Details).HasMaxLength(4000);
-            e.Property(x => x.ExceptionType).HasMaxLength(256);
-            e.Property(x => x.StackTrace).HasMaxLength(8000);
-            e.Property(x => x.UserId).HasMaxLength(64);
-            e.Property(x => x.TenantId).HasMaxLength(64);
-            e.Property(x => x.IpAddress).HasMaxLength(64);
-            e.Property(x => x.UserAgent).HasMaxLength(512);
-            e.Property(x => x.RequestPath).HasMaxLength(512);
-            e.Property(x => x.HttpMethod).HasMaxLength(16);
-            e.Property(x => x.CorrelationId).HasMaxLength(64);
-            e.Property(x => x.Source).HasMaxLength(128);
+            e.Property(x => x.LogType).HasMaxLength(AppLogColumnLengths.MaxLogTypeLength).IsRequired();
+            e.Property(x => x.Action).HasMaxLength(AppLogColumnLengths.MaxActionLength).IsRequired();
+            e.Property(x => x.Details).HasMaxLength(AppLogColumnLengths.MaxDetailsLength);
+            e.Property(x => x.ExceptionType).HasMaxLength(AppLogColumnLengths.MaxExceptionTypeLength);
+            e.Property(x => x.StackTrace).HasMaxLength(AppLogColumnLengths.MaxStackTraceLength);
+            e.Property(x => x.UserId).HasMaxLength(AppLogColumnLengths.MaxUserIdLength);
+            e.Property(x => x.TenantId).HasMaxLength(AppLogColumnLengths.MaxTenantIdLength);
+            e.Property(x => x.IpAddress).HasMaxLength(AppLogColumnLengths.MaxIpAddressLength);
+            e.Property(x => x.UserAgent).HasMaxLength(AppLogColumnLengths.MaxUserAgentLength);
+            e.Property(x => x.RequestPath).HasMaxLength(AppLogColumnLengths.MaxRequestPathLength);
+            e.Property(x => x.HttpMethod).HasMaxLength(AppLogColumnLengths.MaxHttpMethodLength);
+            e.Property(x => x.CorrelationId).HasMaxLength(AppLogColumnLengths.MaxCorrelationIdLength);
+            e.Property(x => x.Source).HasMaxLength(AppLogColumnLengths.MaxSourceLength);
 
             // The two reads: by time, and by request. Nothing reads by user or action.
             e.HasIndex(x => x.CreatedAt).IsDescending();
