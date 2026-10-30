@@ -27,6 +27,9 @@ internal class PriceSourcesOptionsValidator(
         var configuredCodes = options.Sources.Values
             .Select(s => s.SourceCode)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var registeredCodes = registered
+            .Select(r => r.SourceCode)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var registered in registered)
         {
@@ -61,6 +64,15 @@ internal class PriceSourcesOptionsValidator(
             if (!source.Enabled)
             {
                 continue;
+            }
+
+            // The feed skips an entry with no code behind it, so the budget check below would
+            // approve a primary that never takes a poll (D-10). A blank code is reported above.
+            if (!string.IsNullOrWhiteSpace(source.SourceCode) && !registeredCodes.Contains(source.SourceCode))
+            {
+                failures.Add(
+                    $"{path} is enabled, but no price source is registered for '{source.SourceCode}'. "
+                  + "Switch it off until its source exists.");
             }
 
             ValidateAnnotations(path, source, failures);

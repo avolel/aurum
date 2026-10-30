@@ -205,9 +205,46 @@ public class PriceSourcesOptionsTests
                 ["PriceSources:ApiNinjas:Enabled"] = "false",
                 ["PriceSources:GoldApiIo:Priority"] = "2",
             },
+            GoldApiIoSource.SourceCode,
             ApiNinjasSource.SourceCode);
 
         Assert.False(options.RequireByCode(ApiNinjasSource.SourceCode).Enabled);
+    }
+
+    /// <summary>
+    /// The feed drops an enabled entry with no code behind it, so the budget check would approve a
+    /// primary that never takes a poll while the real one goes unchecked (D-10).
+    /// </summary>
+    [Fact]
+    public void An_enabled_entry_without_registered_code_fails_the_host_at_boot()
+    {
+        var failure = ValidationFailure(
+            new(Usable(GoldApi, ("Placeholder", "placeholder.example")))
+            {
+                ["PriceSources:Placeholder:Priority"] = "0",
+                ["PriceSources:Placeholder:MonthlyRequestLimit"] = "10000",
+            },
+            GoldApiIoSource.SourceCode);
+
+        Assert.Contains("PriceSources:Placeholder is enabled", failure.Message, StringComparison.Ordinal);
+        Assert.Contains("'placeholder.example'", failure.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Switching the entry off is how a provider is parked before its code exists (D-9).
+    /// </summary>
+    [Fact]
+    public void A_disabled_entry_without_registered_code_boots()
+    {
+        var options = ValidatedOptions(
+            new(Usable(GoldApi))
+            {
+                ["PriceSources:Placeholder:SourceCode"] = "placeholder.example",
+                ["PriceSources:Placeholder:Enabled"] = "false",
+            },
+            GoldApiIoSource.SourceCode);
+
+        Assert.False(options.RequireByCode("placeholder.example").Enabled);
     }
 
     /// <summary>
@@ -448,22 +485,33 @@ public class PriceSourcesOptionsTests
         Dictionary<string, string?> values, params string[] registeredCodes)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(WithPolling(values)).Build();
-        using var host = PricingOptionsHost.Build(config, registeredCodes);
+        using var host = PricingOptionsHost.Build(config, RegisteredOrEveryConfigured(config, registeredCodes));
 
         return host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value;
     }
 
     /// <summary>
     /// Validates the way the host does, so a failure proves the process would refuse to boot.
-    /// With no <paramref name="registeredCodes"/> the registered-source check passes vacuously.
     /// </summary>
     private static OptionsValidationException ValidationFailure(
         Dictionary<string, string?> values, params string[] registeredCodes)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(WithPolling(values)).Build();
-        using var host = PricingOptionsHost.Build(config, registeredCodes);
+        using var host = PricingOptionsHost.Build(config, RegisteredOrEveryConfigured(config, registeredCodes));
 
         return Assert.Throws<OptionsValidationException>(
             () => host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value);
     }
+
+    /// <summary>
+    /// With no codes given, registers one for every entry, so both registration checks pass and a
+    /// test fails only on the rule it names. Tests of those checks pass their codes explicitly.
+    /// </summary>
+    private static string[] RegisteredOrEveryConfigured(IConfiguration config, string[] registeredCodes) =>
+        registeredCodes.Length > 0
+            ? registeredCodes
+            : config.GetSection(PriceSourcesOptions.SectionName).GetChildren()
+                .Select(entry => entry["SourceCode"])
+                .OfType<string>()
+                .ToArray();
 }

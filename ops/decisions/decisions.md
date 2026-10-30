@@ -800,6 +800,15 @@ first.
 The app also refuses to start with no services switched on, for a similar reason. Before, the timer
 logged one warning and stopped, while the API reported itself healthy and served nothing.
 
+The app also refuses to start when a switched-on settings entry has no code written to call it. The
+fallback list leaves such an entry out without a word, but the startup check used to count it. So a
+placeholder entry for a provider I hadn't built yet, with `Priority: 0` and a large allowance, would
+be approved as the primary. Meanwhile the real primary took every check and nothing checked its
+allowance. A switched-off entry with no code is still allowed, because switching an entry off is how
+a provider waits in the settings until its code exists (D-9). I turned down making the startup check
+skip entries with no code instead. That would copy the fallback list's ordering into a second place,
+and the app would run with a switched-on setting that does nothing.
+
 Turned down: **making every switched-on service afford the full month.** That's the literal reading
 of the Phase 1 plan, and it was the rule in the code. It means the fallback list buys reliability but
 never speed. Every added service can only lower the ceiling, never raise it, because the limit is

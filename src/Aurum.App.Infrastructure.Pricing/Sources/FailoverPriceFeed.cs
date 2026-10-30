@@ -28,7 +28,7 @@ internal sealed class FailoverPriceFeed(
         var chain = BuildChain();
         var attempts = new List<SourceAttempt>(chain.Count);
 
-        // Reachable: an enabled entry whose code was never registered passes the validator.
+        // The validator refuses an enabled entry with no registered code; this is the backstop.
         if (chain.Count == 0)
         {
             throw new AllSourcesFailedException(symbol, attempts);

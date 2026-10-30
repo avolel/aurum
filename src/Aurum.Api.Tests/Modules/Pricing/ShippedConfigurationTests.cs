@@ -27,8 +27,7 @@ public class ShippedConfigurationTests
     [Fact]
     public void Shipped_appsettings_passes_validation()
     {
-        using var host = BuildHost(
-            GoldApiIoSource.SourceCode, ApiNinjasSource.SourceCode, MetalPriceApiSource.SourceCode);
+        using var host = BuildHost();
 
         // Throws the boot failure, with its message, if the shipped file does not validate.
         _ = host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value;
@@ -175,6 +174,9 @@ public class ShippedConfigurationTests
             })
             .Build();
 
-    private static ServiceProvider BuildHost(params string[] registeredCodes) =>
-        PricingOptionsHost.Build(BuildConfiguration(), registeredCodes);
+    /// <summary>Registers what <c>Program.cs</c> registers; the validator refuses either side missing.</summary>
+    private static ServiceProvider BuildHost() =>
+        PricingOptionsHost.Build(
+            BuildConfiguration(),
+            GoldApiIoSource.SourceCode, ApiNinjasSource.SourceCode, MetalPriceApiSource.SourceCode);
 }
