@@ -23,7 +23,7 @@ later batch of app work, together with the Phase 1 dashboard.
 - Item 6 needs 1 to 5. Items 7 and 8 need 6.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
-New numbers start at D-22. Item 0 closed D-6.
+Item 0 closed D-6. The FRED client added D-22, so new numbers start at D-23.
 
 A few terms used below:
 
@@ -138,7 +138,12 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 ## 1. Economic data · BR-07
 
 - [x] FRED client: consumer prices (CPI), PCE inflation, the Fed's rate, 10-year and 2-year Treasury
-      yields, the dollar index (finding 5), VIX.
+      yields, the dollar index (finding 5), VIX. CPI and PCE come back as first published values,
+      with their publish dates (D-22).
+  - [ ] By hand: check January 2025 CPI against ALFRED, FRED's archive of past values. The
+        2025-02-12 version should read 319.086, the 2025-01-15 version should have no January row,
+        and a version from 2026-02-12 or later should read something else.
+  - [ ] By hand: `docker compose up --build` starts with the real key in `.env`.
 - [ ] BLS client: detailed consumer prices, the jobs report.
 - [ ] Treasury FiscalData client: Treasury yields.
 - [ ] All three fill the existing `MacroSeries` and `MacroObservation` tables
@@ -152,10 +157,14 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
       time comes from the calendar.
 - [ ] Daily market figures (yields, VIX, the dollar index) are not releases. They leave `ReleasedAt`
       empty and are used only as "the latest daily figure".
-- [ ] Check each provider's limits. FRED and FiscalData have no monthly allowance. BLS has a daily
-      one (about 500 requests with a free key, about 25 without; confirm on the BLS site). Decide
-      whether it goes through `IQuotaGovernor`, like the price services.
-- [ ] FRED and BLS need free API keys. FiscalData needs none.
+- [x] FRED's limits checked. It has no monthly allowance, only 120 requests a minute per key (on
+      FRED's errors page, under 429). Going over can get the key blocked for a while. It stays out
+      of `IQuotaGovernor` and uses the standard retry setup (D-22).
+- [ ] Check the other providers' limits. FiscalData has no monthly allowance. BLS has a daily one
+      (about 500 requests with a free key, about 25 without; confirm on the BLS site). Decide
+      whether BLS goes through `IQuotaGovernor`, like the price services.
+- [x] FRED API key: `Macro__Fred__ApiKey` in `.env`, required at startup.
+- [ ] BLS needs a free API key. FiscalData needs none.
 - [ ] Each figure keeps its date, so an explanation can say how old it is (finding 5).
 - [ ] `/api/v1/macro/snapshot`, with controller, handler and validator tests.
 - [ ] Decision written up: the release calendar, and how old figures are presented.
@@ -320,7 +329,8 @@ the scored test set was dropped (item 0).
 
 - [ ] New settings and API keys in `appsettings.json`, `.env.example` and `docker-compose.yml`.
       Compose passes on only the variables it lists, so a new key in `.env` needs its line there too.
-      Known so far: the FRED and BLS keys, and the job-to-model map.
+      The FRED key and the `Macro:Fred` section are in all three (2026-11-07). Still to add: the BLS
+      key and the job-to-model map.
 - [ ] The README's setup steps say to create the models' volume once, and to download the models.
       A fresh clone can't start without the volume (item 0).
 - [ ] `CLAUDE.md`, README and `docs/` brought up to date.

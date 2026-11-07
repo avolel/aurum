@@ -120,7 +120,8 @@ one lives and what is actually in it today.
 src/
 ├── Aurum.App.SharedKernel/            ApiResponse<T>, CursorPage<T>, AuditableEntity, SupportedSymbol
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
-├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed
+├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed;
+│                                      Macro/ — the FRED client (D-22)
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/
 ├── Aurum.Api/                         Program.cs (every registration), Hubs/ (SignalR)
 └── Aurum.Api.Tests/
@@ -559,6 +560,30 @@ module methods (D-5, D-20). A new controller is picked up by those two lines.
   starts from that point), and malformed dates (`from=yesterday` fails model binding with the
   framework's ProblemDetails, not `ApiResponse`).
 
+### The FRED client (D-22)
+
+`FredClient` (`Pricing/Macro/`) fetches one `FredSeries` from `fred/series/observations` and returns
+`FredObservation`s, oldest first. Fetch only: nothing calls it or saves its rows yet. Registered in
+`Program.cs` as a typed client.
+
+- **Release series (`IsRelease`: CPI, PCE) send `output_type=4` and the full real-time range,
+  `1776-07-04` to `9999-12-31`.** Left at the default (today), FRED answers 400 "No vintage dates
+  exist", not an empty list. `ReleasedOn` is the row's `realtime_start`, the first publish date.
+  Market series send neither and get a null `ReleasedOn`. `DFF` is a market series on purpose.
+- **Not behind `QuotaHandler` or `IQuotaGovernor`.** FRED has no monthly allowance, only 120
+  requests a minute per key. It uses `AddStandardResilienceHandler` (retries 408, 429, 5xx; never
+  400), registered before the `QueryKeyAuthHandler` so the key is added inside the retries, once.
+- **`BaseUrl` must end in a slash.** The path is relative, so without it `/fred` is replaced.
+- `"."` is a null `Value` and the row is kept. A `count` larger than the rows returned throws rather
+  than dropping a second page. Numbers and dates parse with the invariant culture; the format and
+  `"."` live in `SharedKernel/Constants/FredConstants.cs`.
+- A blank `Macro:Fred:ApiKey` fails boot through `[Required]` + `ValidateOnStart` (D-9's rule).
+  Nothing tests that directly.
+- The exception for a failed status carries FRED's `error_message`. The client never sees the key,
+  so it can't strip it; FRED is not known to echo it.
+- `FredObservation.ReleasedOn` is a `DateOnly`; `MacroObservation.ReleasedAt` is a
+  `DateTimeOffset?`. The save step has to pick the time of day (the release calendar).
+
 ### Database
 
 Postgres with TimescaleDB and pgvector (`timescale/timescaledb-ha:pg17`, decision D-3).
@@ -585,7 +610,8 @@ using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLim
 
 - **Compose has no `env_file`; it forwards only the variables listed under `api.environment`.** A
   setting added to `.env` without a line in `docker-compose.yml` never reaches the container, and
-  nothing reports it. Today that list is the connection string, the three API keys, each source's
+  nothing reports it. Today that list is the connection string, the three API keys,
+  `Macro__Fred__ApiKey`, each source's
   `Enabled`, GoldAPI's `MonthlyRequestLimit` (the one limit expected to change, D-8),
   `PollInterval`, `MaxAttempts` and `Ollama__BaseUrl`.
   The fallback check depends on `PriceSources__ApiNinjas__Enabled` being on it.
@@ -720,7 +746,12 @@ against a 100-request month. So nothing fills the cache; a test that needs a hel
 `ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not `ConfigureAppConfiguration` —
 `Program.cs` reads the connection string before `Build()`, and only host settings are visible that
 early. API keys are set per config key (`GoldApiIo`, …) because the shipped file leaves them blank and
-D-9 refuses to boot.
+D-9 refuses to boot. `Macro:Fred:ApiKey` is set for the same reason.
+
+`FredClientTests` needs **no container**: the real `QueryKeyAuthHandler` over a `CountingHandler`
+stub. `Modules/Macro/*.json` are real FRED answers from 2026-11-07, copied to the test output by the
+csproj; both contain real `"."` rows (October 2025 CPI, two market holidays). Re-save them with a
+real call rather than editing by hand, and check a new file for the key before committing it.
 
 `DeltaEngineReplayTests` replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine` and
 `SignificanceClassifier` on a fake clock and asserts the exact event list (D-21). The CSV rows are
