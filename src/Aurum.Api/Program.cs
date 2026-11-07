@@ -11,6 +11,7 @@ using Aurum.App.Infrastructure.Pricing.Deltas;
 using FluentValidation;
 using MediatR;
 using Aurum.App.Infrastructure.Pricing.Jobs;
+using Aurum.App.Infrastructure.Pricing.Macro;
 using Aurum.App.Infrastructure.Pricing.Quota;
 using Aurum.App.Infrastructure.Pricing.Realtime;
 using Aurum.App.Infrastructure.Pricing.Sources;
@@ -155,6 +156,23 @@ Program.AddPriceSource<MetalPriceApiSource>(builder.Services, MetalPriceApiSourc
     b.AddHttpMessageHandler(sp => new QueryKeyAuthHandler(getOptions(sp).ApiKey)));
 
 builder.Services.AddHostedService<PricePollingService>();
+
+// ── Macro data ────────────────────────────────────────────────────────────────────────────────
+
+// A blank key fails boot rather than every request (D-9, D-22).
+builder.Services.AddOptions<FredOptions>()
+    .BindConfiguration(FredOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+// Standard retries only, no QuotaHandler: FRED limits per minute, not per month (D-22).
+var fredClient = builder.Services.AddHttpClient<FredClient>((sp, http) =>
+    http.BaseAddress = sp.GetRequiredService<IOptions<FredOptions>>().Value.BaseUrl);
+
+// Not chained: AddStandardResilienceHandler does not return IHttpClientBuilder.
+fredClient.AddStandardResilienceHandler();
+fredClient.AddHttpMessageHandler(sp =>
+    new QueryKeyAuthHandler(sp.GetRequiredService<IOptions<FredOptions>>().Value.ApiKey));
 
 // ── Health ────────────────────────────────────────────────────────────────────────────────────
 

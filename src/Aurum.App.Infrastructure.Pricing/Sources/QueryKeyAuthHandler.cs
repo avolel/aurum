@@ -3,7 +3,7 @@ using Microsoft.AspNetCore.WebUtilities;
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
 /// <summary>
-/// Appends MetalpriceAPI's api_key query parameter.
+/// Appends the api_key query parameter MetalpriceAPI and FRED both use.
 /// </summary>
 /// <remarks>
 /// Added here, not in the source, so nothing the source logs or throws can contain the key.

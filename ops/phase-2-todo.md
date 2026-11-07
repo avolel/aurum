@@ -137,7 +137,7 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 
 ## 1. Economic data · BR-07
 
-- [ ] FRED client: consumer prices (CPI), PCE inflation, the Fed's rate, 10-year and 2-year Treasury
+- [x] FRED client: consumer prices (CPI), PCE inflation, the Fed's rate, 10-year and 2-year Treasury
       yields, the dollar index (finding 5), VIX.
 - [ ] BLS client: detailed consumer prices, the jobs report.
 - [ ] Treasury FiscalData client: Treasury yields.
