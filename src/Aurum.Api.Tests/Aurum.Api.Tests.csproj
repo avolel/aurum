@@ -46,6 +46,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <None Update="Modules\Pricing\DeltaEngineReplay.csv" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Modules\Macro\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

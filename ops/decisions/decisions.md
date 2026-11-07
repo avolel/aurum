@@ -1960,3 +1960,60 @@ Turned down:
   the rule.
 - **Keeping the poller and pointing it at stand-in services.** Results would still depend on when its
   timer fires.
+
+## D-22 — FRED figures are stored as first published, and FRED stays out of the quota chain
+
+**DECIDED:**
+
+- For figures that come out on a release date (CPI, the consumer price index, and PCE, the
+  personal consumption price index), the app asks FRED for the value as it was first published.
+  FRED calls this `output_type=4`. Each row's `realtime_start` is then the day it was published,
+  and `FredClient` hands it back as `ReleasedOn`.
+- Daily market figures (the Fed's effective rate `DFF`, the 10-year and 2-year Treasury yields, the
+  broad dollar index and the VIX volatility index) use FRED's normal answer, which is today's value.
+  They have no release date, so `ReleasedOn` is empty.
+- `DFF` counts as a market figure. Gold moves on the Fed's rate decisions, and those will come from
+  the release calendar, not from this daily number.
+- `FredClient` uses the standard retry setup from `Microsoft.Extensions.Http.Resilience`. It does
+  not go through `QuotaHandler` or the quota governor.
+- `Macro:Fred:ApiKey` is required. A blank key stops the app at startup, the same rule as D-9.
+
+Decided by me on 2026-10-29, built on 2026-11-07.
+
+**Why first published values.** A revised CPI figure is not the number the market reacted to. CPI
+is revised once a year when its seasonal adjustment is redone, and PCE is revised most months. An
+explanation of a price move on a release day has to use the number people saw that morning. Storing
+today's revised value would quietly rewrite why the price moved.
+
+**Why the request asks for every publish date.** By default FRED only looks at what it published
+today. With `output_type=4` that is not an empty answer, it is an error: on 2026-11-07 FRED
+answered 400, "No vintage dates exist for the specified real-time period". So the app always sends
+FRED's full range of dates, `realtime_start=1776-07-04` and `realtime_end=9999-12-31`. A test call
+the same day returned the same 21 CPI rows as starting the range at the first month asked for.
+`GetObservations_ReleaseSeries_SearchesEveryVintage` keeps the range in the request.
+
+**Why FRED is not behind the quota governor.** The governor exists to protect a monthly allowance
+that outlives the process. FRED has no monthly allowance. Its only limit is 120 requests a minute
+per key, and going over it gets a 429 error and can get the key blocked for a while. Seven series
+fetched a few times a day is far below that. The standard retry setup already waits and retries on
+429, and does not retry a 400 (a bad key or an unknown series), so a mistake fails once instead of
+repeating.
+
+**A missing value is kept, not dropped.** FRED sends `"."` for a period with no figure, and the app
+keeps the row with an empty value. The saved test file has a real case: CPI for October 2025 was
+never published, because of the government shutdown.
+
+**Not handled yet:** saving the rows. That step will serve FRED, BLS (the Bureau of Labor
+Statistics) and FiscalData together. Paging is not handled either: if FRED reports more rows than
+it sent, the client throws instead of asking for the next page.
+
+Turned down:
+
+- **Today's revised values for every series.** They are not the numbers the market saw.
+- **Asking for every past version of each figure (`output_type=2`).** It would cover revisions too,
+  but it multiplies the rows for something nothing in the app reads yet.
+- **Starting the date range at the first month asked for.** It works today, but it only works
+  because a figure is always published after the month it covers. The full range doesn't depend on
+  that.
+- **Counting FRED requests in the quota governor.** It would add a database write to every request
+  to protect a monthly allowance FRED doesn't have.

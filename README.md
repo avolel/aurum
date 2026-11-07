@@ -4,9 +4,11 @@ Aurum tracks the price of gold. It asks outside price services for the current p
 schedule, stores every answer, and will later show those prices in an app.
 
 **Where things stand: Phase 1, the server side, is finished.** All eleven items (0 to 10) in
-`ops/phase-1-todo.md` are done, and so is its "done when" list. Phase 2 is planned but not started.
-It adds an explanation for each big price move, written by an AI model running on my own machine.
-The plan is in `ops/phase-2-todo.md`.
+`ops/phase-1-todo.md` are done, and so is its "done when" list. Phase 2 has started. It adds an
+explanation for each big price move, written by an AI model running on my own machine. The plan is
+in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
+figures such as consumer prices and Treasury yields from FRED, the St. Louis Fed's free data service
+(item 1, first step). Nothing saves those figures yet.
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
@@ -223,9 +225,10 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-21** so far. `ops/phase-2-todo.md` lists the next work in an order
-where each item can be checked when it is finished. Its first item closed D-6. A decision number is
-only given out when the decision is actually made, so the next one will be D-22.
+The decision log has **D-1 to D-22** so far. `ops/phase-2-todo.md` lists the next work in an order
+where each item can be checked when it is finished. Its first item closed D-6, and the FRED client
+added D-22. A decision number is only given out when the decision is actually made, so the next one
+will be D-23.
 
 ## Where things are
 
@@ -245,6 +248,7 @@ src/Aurum.App.Infrastructure.Pricing/
   Deltas/                          how much the price moved, and which moves become events
   Jobs/                            the timer that checks the price
   Realtime/                        the interface the timer uses to send prices to apps
+  Macro/                           fetches economic figures from FRED; nothing saves them yet
 src/Aurum.App.Application/         the rules for handling requests, and logging
   Prices/                          the four read endpoints' queries, input checks and answers
 src/Aurum.Api/                     the web API; Program.cs sets everything up
@@ -272,7 +276,7 @@ as a description of code you can use today.
 ## Running it
 
 ```bash
-cp .env.example .env      # fill in the database password and the three API keys
+cp .env.example .env      # fill in the database password, the three price-service keys and the FRED key
 docker volume create aurum_aurum-postgres-data     # once per machine
 docker volume create aurum_aurum-ollama-models     # once per machine
 docker compose up --build
@@ -289,11 +293,13 @@ On startup the API brings the database up to date by itself. `/health` tells you
 **Every API key is required.** The settings file ships each key blank on purpose. A missing key stops
 the app at startup. Without that, the app would start fine and then be turned away by the service
 on every request for a month, and every turned-away request still counts against the allowance. A
-fake key in the settings file would bring that problem back.
+fake key in the settings file would bring that problem back. The FRED key follows the same rule.
+FRED has no monthly allowance, but without a key every request would fail. FRED's only limit is 120
+requests a minute per key (D-22).
 
 **A setting in `.env` only reaches the API if `docker-compose.yml` lists it.** Compose passes on
 the variables named under the `api` service and nothing else, and it gives no warning about the
-rest. The list covers the three API keys, switching each service on or off
+rest. The list covers the three price-service keys and the FRED key, switching each price service on or off
 (`PriceSources__ApiNinjas__Enabled=false`), GoldAPI's monthly limit, the check interval and the
 number of tries. Anything else is changed in `src/Aurum.Api/appsettings.json`, or by adding a line
 to `docker-compose.yml`.

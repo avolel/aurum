@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Only item 0, choosing the model, is done. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done, and so is the first step of item 1, the FRED client. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -20,7 +20,8 @@ Numbers in brackets, like (D-7), point to entries in the decision log.
 
 Everything here was checked against the code on 2026-10-15, after item 8 (the read endpoints) was
 built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audit found had drifted
-from the code since then. If you change how a piece works, update its section here too.
+from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15.
+If you change how a piece works, update its section here too.
 
 ---
 
@@ -162,6 +163,7 @@ latest-price cache, the circuit breakers, the request counter and the service se
 | `Constants/ErrorMessages.cs` | Messages the endpoints send back, such as the 503 "no price yet" text. |
 | `Constants/SupportedSymbol.cs` | The price symbols: `XAUUSD` (gold in US dollars) and `XAGUSD` (silver). `All` lists both. `Find` matches a symbol typed in any case and returns the stored spelling. |
 | `Constants/PriceEventDirection.cs` | `"Up"` and `"Down"`, for the `price_events` table. |
+| `Constants/FredConstants.cs` | FRED's date format (`yyyy-MM-dd`) and the `"."` it sends for a period with no figure. |
 | `Entities/AuditableEntity.cs` | Base class that gives every table `CreatedAt` and `UpdatedAt`. |
 
 **`Aurum.App.Infrastructure.Data`** — the database layer.
@@ -190,7 +192,7 @@ Aurum.App.Infrastructure.Pricing/
 │   ├── GoldApiIoSource.cs              ← GoldAPI
 │   ├── ApiNinjasSource.cs              ← API Ninjas
 │   ├── MetalPriceApiSource.cs          ← MetalpriceAPI
-│   ├── QueryKeyAuthHandler.cs          ← adds MetalpriceAPI's key to the web address
+│   ├── QueryKeyAuthHandler.cs          ← adds MetalpriceAPI's or FRED's key to the web address
 │   ├── IPriceFeed.cs                   ← "get me a price from anyone"
 │   ├── FailoverPriceFeed.cs            ← tries each service in order
 │   ├── SourceCircuit.cs                ← one service's circuit breaker
@@ -207,6 +209,11 @@ Aurum.App.Infrastructure.Pricing/
 │   └── LatestQuoteCache.cs             ← newest price per symbol, in memory
 ├── Realtime/
 │   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
+├── Macro/                              ← economic figures; fetched only, nothing saves them yet
+│   ├── FredSeries.cs                   ← the seven FRED series, and which are releases
+│   ├── FredClient.cs                   ← asks FRED for a series and reads the answer
+│   ├── FredObservation.cs              ← one period's value, and its publish date for a release
+│   └── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
 └── Deltas/
     ├── DeltaEngine.cs                  ← works out price moves over six windows
     ├── TickRingBuffer.cs               ← a fixed-size list of recent prices
@@ -277,12 +284,16 @@ it goes in this file.
    that service's web client with timeouts, retries, the request counter and the login header
    (section 6).
 10. **The poller.** `PricePollingService` is registered as a background job.
-11. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
+11. **Economic data.** Binds `Macro:Fred` and checks it at startup, so a blank FRED key stops the
+    app. Registers `FredClient`'s web client with the standard retry setup and `QueryKeyAuthHandler`
+    for the key. It has no request counter: FRED has no monthly allowance, only 120 requests a
+    minute (D-22). Nothing calls the client yet.
+12. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
-12. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
+13. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
     There is no do-nothing stand-in to replace (D-19). After the app is built, `MapHub<PriceHub>`
     puts the hub at `/hubs/price`.
-13. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
+14. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
     starts. This is only safe with one copy of the app running; two copies migrating at once would
     clash.
 
@@ -296,7 +307,7 @@ This matters, because getting it wrong causes bugs that only show up under load.
 | `SignalRPriceBroadcaster` | Singleton | The poller is a singleton and holds it. It keeps no state; SignalR's hub context, which it uses, is a singleton too. |
 | `PriceHub` | New for every call from an app | SignalR creates a hub for each call and throws it away. Anything that must last goes in the cache, the engine or SignalR's groups. |
 | `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IAppLogService<T>`, `IUnitOfWork` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, or one poll. |
-| Each price service class | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
+| Each price service class, and `FredClient` | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
 
 **The singletons never hold a `DbContext`.** When they need the database (for warm-up at startup),
 they create a short scope, use it, and throw it away. If you add a singleton that reads the
@@ -963,7 +974,7 @@ underscore in a variable name stands for a nested section, so
 
 **`docker-compose.yml` passes on only the variables it lists**, not everything in `.env`. A setting
 put in `.env` without a matching line there never reaches the app, and nothing warns you. The list
-is: the connection string, the three API keys, each service's `Enabled`, GoldAPI's
+is: the connection string, the three price-service keys, `Macro__Fred__ApiKey`, each service's `Enabled`, GoldAPI's
 `MonthlyRequestLimit`, `PricePolling__PollInterval`, `PriceFeed__Resilience__MaxAttempts` and
 `Ollama__BaseUrl`. Anything else is changed in `appsettings.json`, or by adding a line to
 `docker-compose.yml`.
@@ -977,6 +988,7 @@ is: the connection string, the three API keys, each service's `Enabled`, GoldAPI
 | `PriceFeedCircuit` | `FailureThreshold`, `BreakDuration` | 3, 45 min (`appsettings.json`; the code's own default is 15 min) | The circuit breaker. |
 | `DeltaEngine` | `MaxSamplesPerSymbol`, `ToleranceFraction`, `MinSamplesForVolatility` | 8,640, 0.5, 5 | Price-move memory size and rules. |
 | `Significance` | `ThresholdProfile`, `CrossSourceMagnitudeMultiplier`, `Windows:<code>:MinPercent`, `Windows:<code>:Cooldown` | `default-v1`, 2.0, see below | Which moves become events, and how long a window stays quiet after one. |
+| `Macro:Fred` | `BaseUrl`, `ApiKey` | `https://api.stlouisfed.org/fred/`, blank — **must be set** | FRED, for economic figures. `BaseUrl` must end in a slash, or the request path replaces `/fred`. Compose fills the key from `.env`'s `Macro__Fred__ApiKey`. |
 | `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2, `gemma4:12b-it-qat` (D-6). **Nothing reads it yet.** Local models are for this personal build; production would use a paid cloud AI service instead. |
 
 The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
@@ -1012,6 +1024,7 @@ fix.
 | A `Significance:Windows` key isn't one of the six window codes (a typo would switch that window off). | `SignificanceOptions.WindowKeysAreKnown` |
 | A `MinPercent` or `Cooldown` is zero or less, or `CrossSourceMagnitudeMultiplier` is below 1. | `SignificanceOptions.ValuesAreInRange` |
 | `Significance:ThresholdProfile` is empty, which includes the whole section being missing. | `[Required]` on `SignificanceOptions` |
+| `Macro:Fred:ApiKey` is blank, or `Macro:Fred:BaseUrl` is missing. | `[Required]` on `FredOptions` |
 
 The month check, worked through with the shipped values: 31 days ÷ 15 minutes = 2,976 polls. Each
 poll can take up to 3 tries, so up to 8,928 requests. API Ninjas allows 10,000, so it passes. GoldAPI's
@@ -1168,6 +1181,7 @@ Aurum.Api.Tests/
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no price timer and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
+├── Modules/Macro/             ← FredClientTests, and two real FRED answers saved as files
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
 ├── Validators/                ← one file per input check
@@ -1181,6 +1195,7 @@ Aurum.Api.Tests/
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
+| | `FredClientTests` (a fake network; no request reaches FRED) |
 
 Run one class, or a set of fast tests:
 
@@ -1201,7 +1216,13 @@ pointed at the test database, but removes the price timer and swaps the three pr
 stand-ins that fail without making a web request. A timer inside a test fires when it likes, so
 results would change from run to run, and it would spend real requests from a 100-request month.
 Because nothing polls, the saved price starts empty. A test that needs one records it into
-`ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21).
+`ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also sets a stand-in FRED
+key, because a blank one stops the app at startup.
+
+`FredClientTests` reads two real FRED answers saved on 2026-11-07, `fred-cpiaucsl-initial-release.json`
+and `fred-dgs10.json`. They are kept because FRED's answer for first published values is the part
+least likely to match its documentation. Both contain real missing values: October 2025 consumer
+prices (never published, because of the government shutdown) and two market holidays.
 
 `DeltaEngineReplayTests` checks the price-move feature and the classifier end to end, on seven hours
 of made-up prices. The prices live in `Modules/Pricing/DeltaEngineReplay.csv`. Each row is a stretch,
@@ -1254,6 +1275,7 @@ uses it yet. The API endpoints the dashboard needs exist; the dashboard itself i
 | See recent events | `SELECT "WindowCode", "Direction", "DeltaPercent", "TriggeredRule", "WindowEndedAt" FROM price_events ORDER BY "WindowEndedAt" DESC;` |
 | Add a new table | A new entity in `Entities/`, its setup in `AurumDbContext.OnModelCreating`, then `dotnet ef migrations add <Name> --project src/Aurum.App.Infrastructure.Data`. |
 | Register a new class | `src/Aurum.Api/Program.cs`. Nowhere else (D-5). |
+| Add a FRED series | A new field in `Macro/FredSeries.cs`, added to `All`. Set `IsRelease` to true only for a figure with a publish date, such as CPI; those come back as first published values (D-22). |
 | Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 
 ---
