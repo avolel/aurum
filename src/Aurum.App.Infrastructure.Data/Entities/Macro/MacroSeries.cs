@@ -3,7 +3,7 @@ using Aurum.App.SharedKernel.Entities;
 namespace Aurum.App.Infrastructure.Data.Entities.Macro;
 
 /// <summary>
-/// A macroeconomic time series (CPI, Fed Funds, 10Y, DXY, VIX …). Loaded from Phase 2a.
+/// A macroeconomic time series (CPI, Fed Funds, 10Y, the Fed's broad dollar index, VIX …). Loaded from Phase 2a.
 /// </summary>
 public class MacroSeries : AuditableEntity
 {
@@ -12,7 +12,7 @@ public class MacroSeries : AuditableEntity
     /// <summary>Provider's series identifier, e.g. FRED's <c>CPIAUCSL</c>.</summary>
     public string Code { get; set; } = null!;
 
-    /// <summary>Which upstream owns this series: <c>fred</c>, <c>bls</c>, <c>treasury</c>.</summary>
+    /// <summary>Which upstream serves this series. Only <c>fred</c> today; BLS and Treasury figures come through FRED (D-22).</summary>
     public string Provider { get; set; } = null!;
 
     public string Title { get; set; } = null!;

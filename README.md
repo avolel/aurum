@@ -7,8 +7,10 @@ schedule, stores every answer, and will later show those prices in an app.
 `ops/phase-1-todo.md` are done, and so is its "done when" list. Phase 2 has started. It adds an
 explanation for each big price move, written by an AI model running on my own machine. The plan is
 in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
-figures such as consumer prices and Treasury yields from FRED, the St. Louis Fed's free data service
-(item 1, first step). Nothing saves those figures yet.
+figures such as consumer prices, the jobs report and Treasury yields from FRED, the St. Louis Fed's
+free data service (item 1, first step). FRED also carries the figures the Bureau of Labor Statistics
+publishes, as they were first published, so the app has no separate client for that bureau or for
+the Treasury (D-22). Nothing saves those figures yet.
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
