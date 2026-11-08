@@ -23,6 +23,45 @@ built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audi
 from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15.
 If you change how a piece works, update its section here too.
 
+## Contents
+
+- [1. What the app does today, in one paragraph](#1-what-the-app-does-today-in-one-paragraph)
+- [2. The repository, folder by folder](#2-the-repository-folder-by-folder)
+  - [How the projects depend on each other](#how-the-projects-depend-on-each-other)
+  - [What is in each project](#what-is-in-each-project)
+- [3. Startup: what `Program.cs` does, in order](#3-startup-what-programcs-does-in-order)
+  - [How long each object lives](#how-long-each-object-lives)
+- [4. One poll, from start to finish](#4-one-poll-from-start-to-finish)
+  - [Zoom 1: the whole poll](#zoom-1-the-whole-poll)
+  - [Zoom 2: inside ★, one service call](#zoom-2-inside--one-service-call)
+  - [A worked example: the first service times out](#a-worked-example-the-first-service-times-out)
+  - [What the diagrams leave out](#what-the-diagrams-leave-out)
+- [5. The price services](#5-the-price-services)
+  - [`PriceQuote.Normalize` — the last check before a price is trusted](#pricequotenormalize--the-last-check-before-a-price-is-trusted)
+  - [The three failure types](#the-three-failure-types)
+- [6. What happens to one web request: the per-service pipeline](#6-what-happens-to-one-web-request-the-per-service-pipeline)
+- [7. The request counter (quota governor)](#7-the-request-counter-quota-governor)
+  - [How `QuotaHandler` uses it](#how-quotahandler-uses-it)
+  - [Why the counter uses raw SQL](#why-the-counter-uses-raw-sql)
+  - [Reading the table](#reading-the-table)
+- [8. Memory: the circuit breaker, the latest price and the price moves](#8-memory-the-circuit-breaker-the-latest-price-and-the-price-moves)
+  - [The circuit breaker (`SourceCircuit`)](#the-circuit-breaker-sourcecircuit)
+  - [The latest price (`LatestQuoteCache`)](#the-latest-price-latestquotecache)
+  - [Price moves (`DeltaEngine`)](#price-moves-deltaengine)
+  - [From a move to a saved event (`SignificanceClassifier`, `PriceEventSql`)](#from-a-move-to-a-saved-event-significanceclassifier-priceeventsql)
+- [9. Live updates to apps (`PriceHub`)](#9-live-updates-to-apps-pricehub)
+- [10. Settings](#10-settings)
+  - [What makes the app refuse to start](#what-makes-the-app-refuse-to-start)
+- [11. The database](#11-the-database)
+- [12. The read endpoints, the request pipeline and app logging](#12-the-read-endpoints-the-request-pipeline-and-app-logging)
+  - [The four read endpoints (item 8, D-20)](#the-four-read-endpoints-item-8-d-20)
+  - [App logging](#app-logging)
+- [13. Tests](#13-tests)
+- [14. The app (`app/`)](#14-the-app-app)
+- [15. Where to look when…](#15-where-to-look-when)
+- [16. What the other docs describe that is not built yet](#16-what-the-other-docs-describe-that-is-not-built-yet)
+- [17. Word list](#17-word-list)
+
 ---
 
 ## 1. What the app does today, in one paragraph
