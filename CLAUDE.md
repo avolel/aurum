@@ -566,7 +566,11 @@ module methods (D-5, D-20). A new controller is picked up by those two lines.
 `FredObservation`s, oldest first. Fetch only: nothing calls it or saves its rows yet. Registered in
 `Program.cs` as a typed client.
 
-- **Release series (`IsRelease`: CPI, PCE) send `output_type=4` and the full real-time range,
+- **There is no BLS or FiscalData client.** Core CPI (`CPILFESL`), payrolls (`PAYEMS`) and
+  unemployment (`UNRATE`) are FRED series: BLS's own API serves revised values only, and FRED
+  already has the 10-year and 2-year yields. FRED posts after BLS's 8:30; how long after is not yet
+  measured (D-22).
+- **Release series (`IsRelease`: CPI, PCE, core CPI, payrolls, unemployment) send `output_type=4` and the full real-time range,
   `1776-07-04` to `9999-12-31`.** Left at the default (today), FRED answers 400 "No vintage dates
   exist", not an empty list. `ReleasedOn` is the row's `realtime_start`, the first publish date.
   Market series send neither and get a null `ReleasedOn`. `DFF` is a market series on purpose.
@@ -750,7 +754,8 @@ D-9 refuses to boot. `Macro:Fred:ApiKey` is set for the same reason.
 
 `FredClientTests` needs **no container**: the real `QueryKeyAuthHandler` over a `CountingHandler`
 stub. `Modules/Macro/*.json` are real FRED answers from 2026-11-07, copied to the test output by the
-csproj; both contain real `"."` rows (October 2025 CPI, two market holidays). Re-save them with a
+csproj. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market holidays); the
+payrolls file has October 2025 published late, with November. Re-save them with a
 real call rather than editing by hand, and check a new file for the key before committing it.
 
 `DeltaEngineReplayTests` replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine` and

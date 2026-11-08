@@ -14,7 +14,7 @@ namespace Aurum.App.Infrastructure.Pricing.Macro;
 /// or throw it. Not behind <c>QuotaHandler</c>: FRED has no monthly allowance (D-22).
 /// </remarks>
 public class FredClient(HttpClient http)
-{  
+{
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 

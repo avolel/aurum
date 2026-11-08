@@ -14,6 +14,16 @@ public sealed record FredSeries(string Code, string Title, string Units, string 
     public static readonly FredSeries Pce =
         new("PCEPI", "Personal Consumption Expenditures Price Index", "Index 2017=100", "Monthly", IsRelease: true);
 
+    // BLS figures read from FRED, because BLS's own API serves revised values only (D-22).
+    public static readonly FredSeries CoreCpi =
+        new("CPILFESL", "Consumer Price Index for All Urban Consumers: All Items Less Food and Energy", "Index 1982-1984=100", "Monthly", IsRelease: true);
+
+    public static readonly FredSeries NonfarmPayrolls =
+        new("PAYEMS", "All Employees, Total Nonfarm", "Thousands of Persons", "Monthly", IsRelease: true);
+
+    public static readonly FredSeries UnemploymentRate =
+        new("UNRATE", "Unemployment Rate", "Percent", "Monthly", IsRelease: true);
+
     // Daily with no release date; rate decisions come from the release calendar instead.
     public static readonly FredSeries FedFundsRate =
         new("DFF", "Federal Funds Effective Rate", "Percent", "Daily", IsRelease: false);
@@ -33,5 +43,5 @@ public sealed record FredSeries(string Code, string Title, string Units, string 
 
     // Declared last: static fields initialise in text order.
     public static readonly IReadOnlyList<FredSeries> All =
-        [Cpi, Pce, FedFundsRate, Treasury10Y, Treasury2Y, DollarIndex, Vix];
+        [Cpi, Pce, CoreCpi, NonfarmPayrolls, UnemploymentRate, FedFundsRate, Treasury10Y, Treasury2Y, DollarIndex, Vix];
 }
