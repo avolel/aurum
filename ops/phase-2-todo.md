@@ -140,10 +140,10 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 - [x] FRED client: consumer prices (CPI), PCE inflation, the Fed's rate, 10-year and 2-year Treasury
       yields, the dollar index (finding 5), VIX. CPI and PCE come back as first published values,
       with their publish dates (D-22).
-  - [ ] By hand: check January 2025 CPI against ALFRED, FRED's archive of past values. The
+  - [x] By hand: check January 2025 CPI against ALFRED, FRED's archive of past values. The
         2025-02-12 version should read 319.086, the 2025-01-15 version should have no January row,
         and a version from 2026-02-12 or later should read something else.
-  - [ ] By hand: `docker compose up --build` starts with the real key in `.env`.
+  - [x] By hand: `docker compose up --build` starts with the real key in `.env`.
 - [ ] BLS client: detailed consumer prices, the jobs report.
 - [ ] Treasury FiscalData client: Treasury yields.
 - [ ] All three fill the existing `MacroSeries` and `MacroObservation` tables
