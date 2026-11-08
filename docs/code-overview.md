@@ -20,7 +20,8 @@ Numbers in brackets, like (D-7), point to entries in the decision log.
 
 Everything here was checked against the code on 2026-10-15, after item 8 (the read endpoints) was
 built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audit found had drifted
-from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15.
+from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15, and later that day its
+three jobs and core-price series.
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -249,7 +250,7 @@ Aurum.App.Infrastructure.Pricing/
 ├── Realtime/
 │   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
 ├── Macro/                              ← economic figures; fetched only, nothing saves them yet
-│   ├── FredSeries.cs                   ← the seven FRED series, and which are releases
+│   ├── FredSeries.cs                   ← the ten FRED series, and which are releases
 │   ├── FredClient.cs                   ← asks FRED for a series and reads the answer
 │   ├── FredObservation.cs              ← one period's value, and its publish date for a release
 │   └── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
@@ -1220,7 +1221,7 @@ Aurum.Api.Tests/
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no price timer and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
-├── Modules/Macro/             ← FredClientTests, and two real FRED answers saved as files
+├── Modules/Macro/             ← FredClientTests, and three real FRED answers saved as files
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
 ├── Validators/                ← one file per input check
@@ -1258,10 +1259,12 @@ Because nothing polls, the saved price starts empty. A test that needs one recor
 `ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also sets a stand-in FRED
 key, because a blank one stops the app at startup.
 
-`FredClientTests` reads two real FRED answers saved on 2026-11-07, `fred-cpiaucsl-initial-release.json`
-and `fred-dgs10.json`. They are kept because FRED's answer for first published values is the part
-least likely to match its documentation. Both contain real missing values: October 2025 consumer
-prices (never published, because of the government shutdown) and two market holidays.
+`FredClientTests` reads three real FRED answers saved on 2026-11-07: `fred-cpiaucsl-initial-release.json`,
+`fred-payems-initial-release.json` and `fred-dgs10.json`. They are kept because FRED's answer for
+first published values is the part least likely to match its documentation. The consumer-price and
+10-year files contain real missing values: October 2025 consumer prices (never published, because
+of the government shutdown) and two market holidays. In the jobs file, October 2025 came out late,
+on the same day as November.
 
 `DeltaEngineReplayTests` checks the price-move feature and the classifier end to end, on seven hours
 of made-up prices. The prices live in `Modules/Pricing/DeltaEngineReplay.csv`. Each row is a stretch,

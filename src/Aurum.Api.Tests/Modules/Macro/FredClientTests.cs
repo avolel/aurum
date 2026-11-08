@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.WebUtilities;
 namespace Aurum.Api.Tests.Modules.Macro;
 
 /// <summary>
-/// Parsing and request shape for <see cref="FredClient"/>, with no network. The two saved files
+/// Parsing and request shape for <see cref="FredClient"/>, with no network. The saved files
 /// are real FRED answers from 2026-11-07, kept because <c>output_type=4</c>'s shape is the part
 /// least likely to match the docs.
 /// </summary>
@@ -92,6 +92,18 @@ public class FredClientTests
         Assert.Equal(new FredObservation(new DateOnly(2025, 1, 1), 319.086m, new DateOnly(2025, 2, 12)), rows[0]);
         // October 2025 was never published (the shutdown); FRED keeps the period as ".".
         Assert.Null(Assert.Single(rows, r => r.ObservedOn == new DateOnly(2025, 10, 1)).Value);
+    }
+
+    [Fact]
+    public void Parse_SavedPayrollsInitialRelease_ReadsFirstPublishedValues()
+    {
+        var rows = FredClient.Parse(Saved("fred-payems-initial-release.json"), FredSeries.NonfarmPayrolls);
+
+        Assert.Equal(22, rows.Count);
+        // Checked against ALFRED: 159069 on 2025-02-07, revised to 159067 a month later.
+        Assert.Equal(new FredObservation(new DateOnly(2025, 1, 1), 159069m, new DateOnly(2025, 2, 7)), rows[0]);
+        // The shutdown delayed October 2025; it came out with November on 2025-12-16.
+        Assert.Equal(new DateOnly(2025, 12, 16), Assert.Single(rows, r => r.ObservedOn == new DateOnly(2025, 10, 1)).ReleasedOn);
     }
 
     [Fact]

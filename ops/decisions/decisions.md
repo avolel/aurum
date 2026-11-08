@@ -1977,8 +1977,12 @@ Turned down:
 - `FredClient` uses the standard retry setup from `Microsoft.Extensions.Http.Resilience`. It does
   not go through `QuotaHandler` or the quota governor.
 - `Macro:Fred:ApiKey` is required. A blank key stops the app at startup, the same rule as D-9.
+- The BLS (Bureau of Labor Statistics) figures come from FRED too, as first published values: core
+  CPI without food and energy (`CPILFESL`), jobs outside farming (`PAYEMS`) and the unemployment
+  rate (`UNRATE`). There is no BLS client and no Treasury FiscalData client.
 
-Decided by me on 2026-10-29, built on 2026-11-07.
+Decided by me on 2026-10-29, built on 2026-11-07. The BLS and Treasury part was decided and built on
+2026-11-07.
 
 **Why first published values.** A revised CPI figure is not the number the market reacted to. CPI
 is revised once a year when its seasonal adjustment is redone, and PCE is revised most months. An
@@ -1994,7 +1998,7 @@ the same day returned the same 21 CPI rows as starting the range at the first mo
 
 **Why FRED is not behind the quota governor.** The governor exists to protect a monthly allowance
 that outlives the process. FRED has no monthly allowance. Its only limit is 120 requests a minute
-per key, and going over it gets a 429 error and can get the key blocked for a while. Seven series
+per key, and going over it gets a 429 error and can get the key blocked for a while. Ten series
 fetched a few times a day is far below that. The standard retry setup already waits and retries on
 429, and does not retry a 400 (a bad key or an unknown series), so a mistake fails once instead of
 repeating.
@@ -2003,8 +2007,28 @@ repeating.
 keeps the row with an empty value. The saved test file has a real case: CPI for October 2025 was
 never published, because of the government shutdown.
 
-**Not handled yet:** saving the rows. That step will serve FRED, BLS (the Bureau of Labor
-Statistics) and FiscalData together. Paging is not handled either: if FRED reports more rows than
+**Why BLS figures come from FRED and not from BLS.** BLS's own API only gives today's revised
+value. The jobs report is revised in each of the next two months and again every year, so BLS
+cannot give the number the market saw on release morning. FRED's archive can, through the same
+request the app already sends for CPI. On 2026-11-07 January 2025 jobs read 159069 on its release
+day (2025-02-07), had no row the day before, and read 159067 a month later. FRED also keeps the
+shutdown's gaps: October 2025 jobs came out with November on 2025-12-16, and October's unemployment
+rate is `"."`. Reading from FRED also means no second API key and no BLS daily request limit, which
+the quota governor could not count anyway: it only knows monthly periods.
+
+**Why no Treasury FiscalData client.** The app already has the daily 10-year and 2-year yields
+(`DGS10`, `DGS2`), which FRED copies from the Federal Reserve's daily rates report. FiscalData's
+interest-rate data is the monthly average rate on debt the government already owes. That is not a
+market yield, and gold does not move on it.
+
+**What reading BLS figures through FRED costs.** BLS publishes at 8:30 New York time. FRED posts
+the figure some time later, and how much later has not been measured. If a move on a CPI or jobs
+morning is explained before FRED has the figure, the explanation is missing its main cause. The
+release calendar still knows the release happened at 8:30, even without the number. The delay gets
+measured on the next release day, before the explanation pipeline (Phase 2 item 6) is built. A BLS
+client is added only if the delay turns out to matter.
+
+**Not handled yet:** saving the rows. Paging is not handled either: if FRED reports more rows than
 it sent, the client throws instead of asking for the next page.
 
 Turned down:
@@ -2017,3 +2041,7 @@ Turned down:
   that.
 - **Counting FRED requests in the quota governor.** It would add a database write to every request
   to protect a monthly allowance FRED doesn't have.
+- **A BLS client.** It gets figures at 8:30 sharp, but only revised ones, and it needs its own key
+  and a daily limit the governor has no period for.
+- **A Treasury FiscalData client.** It would fetch yields the app already has, or an average rate
+  on old debt that gold does not react to.
