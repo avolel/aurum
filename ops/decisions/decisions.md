@@ -23,6 +23,36 @@ A few terms used throughout:
 - **Plan references** such as §8, FR-4.2 or BO-4 point to sections, requirements and business goals
   in the untracked `plans/` documents.
 
+## Contents
+
+When you add a decision, add a line for it here too.
+
+- [The machine these decisions were made on](#the-machine-these-decisions-were-made-on)
+- [D-1 — Expo or plain React Native](#d-1--expo-or-plain-react-native)
+- [D-2 — Which charting library](#d-2--which-charting-library)
+- [D-3 — Which database image](#d-3--which-database-image)
+- [D-4 — A symbol on every price](#d-4--a-symbol-on-every-price)
+- [D-5 — How the code is divided up](#d-5--how-the-code-is-divided-up)
+- [D-6 — How big a machine the AI models need](#d-6--how-big-a-machine-the-ai-models-need)
+- [Findings that changed the plan](#findings-that-changed-the-plan)
+- [What the groundwork actually proved](#what-the-groundwork-actually-proved)
+- [D-7 — The request counter](#d-7--the-request-counter)
+- [D-8 — Free or paid GoldAPI plan](#d-8--free-or-paid-goldapi-plan)
+- [D-9 — Looking up each service's settings, and checking settings that are nested](#d-9--looking-up-each-services-settings-and-checking-settings-that-are-nested)
+- [D-10 — Where the check interval lives, and whose allowance has to pay for it](#d-10--where-the-check-interval-lives-and-whose-allowance-has-to-pay-for-it)
+- [D-11 — Three free services instead of the paid plan](#d-11--three-free-services-instead-of-the-paid-plan)
+- [D-12 — Finding the price services: all of them, sorted, not each by name](#d-12--finding-the-price-services-all-of-them-sorted-not-each-by-name)
+- [D-13 — The time limit per try lives in the retry setup, not on the web client](#d-13--the-time-limit-per-try-lives-in-the-retry-setup-not-on-the-web-client)
+- [D-14 — The fallback list's circuit breaker is my own, not Polly's](#d-14--the-fallback-lists-circuit-breaker-is-my-own-not-pollys)
+- [D-15 — The startup check counts tries, not checks](#d-15--the-startup-check-counts-tries-not-checks)
+- [D-16 — The latest price is kept in the app's memory, and its age is worked out when it's read](#d-16--the-latest-price-is-kept-in-the-apps-memory-and-its-age-is-worked-out-when-its-read)
+- [D-17 — A price move is worked out from two real prices, or it is "no answer"](#d-17--a-price-move-is-worked-out-from-two-real-prices-or-it-is-no-answer)
+- [D-18 — Big price moves are saved as events, and the waiting period between them lives in the database](#d-18--big-price-moves-are-saved-as-events-and-the-waiting-period-between-them-lives-in-the-database)
+- [D-19 — Live prices go to connected apps through one SignalR sender, set up directly in `Program.cs`](#d-19--live-prices-go-to-connected-apps-through-one-signalr-sender-set-up-directly-in-programcs)
+- [D-20 — The read endpoints are ordinary controllers, and the Application layer reads the pricing code directly](#d-20--the-read-endpoints-are-ordinary-controllers-and-the-application-layer-reads-the-pricing-code-directly)
+- [D-21 — The replay test is written as stretches, and the test API removes the poller and the price services](#d-21--the-replay-test-is-written-as-stretches-and-the-test-api-removes-the-poller-and-the-price-services)
+- [D-22 — FRED figures are stored as first published, and FRED stays out of the quota chain](#d-22--fred-figures-are-stored-as-first-published-and-fred-stays-out-of-the-quota-chain)
+
 ## The machine these decisions were made on
 
 | | |
