@@ -34,6 +34,20 @@ What has been built and checked by hand:
 The numbers in brackets, like (D-7), point to entries in the decision log,
 `ops/decisions/decisions.md`. Each entry explains a choice I made and what I turned down.
 
+## Contents
+
+- [The three price services](#the-three-price-services)
+  - [How much of this I have actually confirmed](#how-much-of-this-i-have-actually-confirmed)
+- [What happens when a service fails (item 3, done)](#what-happens-when-a-service-fails-item-3-done)
+- [How much the price moved, and which moves are saved (items 5 and 6, done)](#how-much-the-price-moved-and-which-moves-are-saved-items-5-and-6-done)
+- [Live prices sent to connected apps (item 7, done)](#live-prices-sent-to-connected-apps-item-7-done)
+- [Reading prices over the web (item 8, done)](#reading-prices-over-the-web-item-8-done)
+- [Decisions that were made without testing](#decisions-that-were-made-without-testing)
+- [Where things are](#where-things-are)
+- [Running it](#running-it)
+- [Tests](#tests)
+- [Why the request counter matters](#why-the-request-counter-matters)
+
 ## The three price services
 
 I use the free plans of three services instead of paying for one. That gets prices often enough
