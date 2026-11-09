@@ -156,6 +156,26 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 - [ ] **Not measured yet:** how long after 8:30 FRED posts a CPI or jobs figure. BLS has it at 8:30.
       Check it on the next release day, before item 6. Add a BLS client only if the delay means a
       release-morning move gets explained without its main cause.
+  - Rough answer from FRED's `last_updated`, the time a series last changed. FRED gives it in St.
+    Louis time; these are converted to New York time:
+
+    | Series | Released (New York) | Last changed (New York) | Delay |
+    |---|---|---|---|
+    | CPI, core CPI (September figure) | 2026-10-14 08:30 | 09:08 | about 38 minutes |
+    | Payrolls, unemployment (October figure) | 2026-11-06 08:30 | 10:43 | about 2 hours 13 minutes |
+
+    These are upper bounds. `last_updated` is the latest change, so FRED may have posted the figure
+    earlier and changed the series again afterwards.
+  - The figure has to arrive by about 08:50 to be used. The price arrives 15 minutes late and the poll
+    runs every 15 minutes, so an 8:30 move is noticed around 8:45 to 9:00, and its background is
+    gathered within 5 minutes after that.
+  - [ ] On the next CPI and jobs release days, run `ops/bench/fred_delay.py` from before 08:25 New York
+        time. It checks FRED every minute until 11:00. Release dates are on bls.gov/schedule. Write
+        the first minute the figure appears into D-22, with the date and series. One run per release
+        type is enough.
+  - [ ] Then decide. Before about 08:50: FRED is enough, close this item. Later: add a BLS client
+        for the release-morning value, and have the app replace it with FRED's first published value
+        once FRED has it, so stored history still follows D-22.
 - [ ] The FRED client fills the existing `MacroSeries` and `MacroObservation` tables
       (`src/Aurum.App.Infrastructure.Data/Entities/Macro/`). Nothing writes to them yet.
 - [ ] Load past figures too, not only the latest, back as far as item 5's seed needs. Without them

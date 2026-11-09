@@ -2028,6 +2028,19 @@ release calendar still knows the release happened at 8:30, even without the numb
 measured on the next release day, before the explanation pipeline (Phase 2 item 6) is built. A BLS
 client is added only if the delay turns out to matter.
 
+The figure has to reach FRED by about 08:50 New York time to be used. The price arrives 15 minutes
+late and the app checks it every 15 minutes, so an 8:30 move is noticed around 8:45 to 9:00. Its
+background is gathered within 5 minutes after that.
+
+FRED's `last_updated` gives a rough answer for now. It is the time the series last changed, given in
+St. Louis time; I converted it to New York time. September CPI and core CPI were released
+2026-10-14 at 08:30 and last changed at 09:08, about 38 minutes later. October payrolls and
+unemployment were released 2026-11-06 at 08:30 and last changed at 10:43, about 2 hours 13 minutes
+later. Both are upper bounds, because FRED may have posted the figure earlier and changed the series
+again afterwards. Both are also later than 08:50. `ops/bench/fred_delay.py` checks FRED every minute
+on a release morning and logs the first minute the figure appears. That measured time replaces these
+numbers.
+
 **Not handled yet:** saving the rows. Paging is not handled either: if FRED reports more rows than
 it sent, the client throws instead of asking for the next page.
 
