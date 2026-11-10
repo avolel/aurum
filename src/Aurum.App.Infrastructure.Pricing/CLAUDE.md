@@ -71,7 +71,8 @@ Read top to bottom as the order a request passes through. Placement decisions th
   false and the feed stays on cadence — those clear in minutes.
 - **`PriceSourceOptions.Enabled` actually filters.** `FailoverPriceFeed` builds the chain from
   configuration and joins it to the registered sources, so a disabled or unconfigured source is not
-  called.
+  called. Before item 3 the poller selected straight off `IEnumerable<IPriceSource>`, which has no
+  `Enabled` to filter on, so setting it shortened the startup log while changing nothing.
 - **`price_sources` has no `IsEnabled` or `Priority` column** (dropped in D-20). Configuration alone
   says whether a source is used and in what order; `/api/v1/price/sources` reads both from there.
 - The cadence is one feed-wide value, `PricePolling:PollInterval`, coupled to the **primary**
@@ -114,7 +115,9 @@ them.
   `MonthlyRequestLimit`. Without it a missing key bound to the empty string, booted clean, and spent
   the month one 401 at a time (401 is not a quota rejection, so nothing clamps and leases are never
   refunded). Any new annotation on `PriceSourceOptions` is enforced by that validator.
-- The validator also holds cross-field checks: the cadence-vs-budget guard and "`RollingThirtyDays`
+- The validator also holds cross-field checks: the cadence-vs-budget guard (formerly
+  `PricePollingService.GuardPollBudget`, which ran after the host reported healthy and only covered
+  the one hardcoded source) and "`RollingThirtyDays`
   requires a `PeriodAnchor`" — without one `ResolvePeriod` throws on every acquire inside an HTTP
   handler, which the poller swallows and retries forever.
 - A source with `Enabled: false` is exempt from credential and cadence checks so a half-configured

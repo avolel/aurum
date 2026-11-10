@@ -69,15 +69,21 @@ Three things that look wrong without the reason:
 No `Add<Module>Module` methods, no per-layer `ServiceCollectionExtensions`. **D-5 records both the
 original module seam and its reversal** — read it before registering anything elsewhere.
 
-- MediatR handlers and FluentValidation validators are found by assembly scanning. Everything else,
-  repositories included, is registered in `Program.cs`.
+- MediatR handlers and FluentValidation validators are found by assembly scanning (`AddMediatR()`,
+  `AddValidatorsFromAssembly()`). Everything else, repositories included, is registered in
+  `Program.cs`.
 - `Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")` so `Program.cs` can name its
-  internal types. Don't make them public to satisfy wiring. A type with a public class but internal
-  constructor (`SourceCircuitStore`) is registered with a factory lambda.
+  internal types: `QueryKeyAuthHandler`, `RegisteredPriceSource`, both options validators,
+  `LatestQuoteCache`, `DeltaEngine` and `FailoverPriceFeed`. Nothing outside the module should
+  resolve them, so don't make them public to satisfy wiring.
+- **`SourceCircuitStore` is public** so the `/sources` endpoint can call `SnapshotAll()` (D-20), but
+  its constructor and `For()` stay internal. The container only calls public constructors, so
+  `Program.cs` registers it with a factory lambda.
 - **`Program.AddPriceSource<T>` is a member of `Program`, not a local function**, so tests can call
   it. The order of two lines inside it — resilience handler above `QuotaHandler` — is what
   `ResilienceWiringTests` pins. Swapping them makes retries uncounted (see the Pricing CLAUDE.md).
-- `AppLogService<>` is scoped; `IAppLogQueue` is a **singleton** (a scoped queue drops rows when the
+- `services.AddScoped(typeof(IAppLogService<>), typeof(AppLogService<>))`; `IAppLogQueue` is a
+  **singleton** (a scoped queue drops rows when the
   request ends); `AppLogDrainService` batches rows into `app_logs`.
 - `IRequestContextAccessor` is implemented by `HttpRequestContextAccessor` in `Aurum.Api`. The
   Application layer must not reference `IHttpContextAccessor`. Outside a request it yields
@@ -134,11 +140,12 @@ The DbContext is `AurumDbContext`. The only feature is `Prices` (queries only �
 - Manual entity ↔ DTO mapping. Never return entities. DTOs never reference entities, and vice versa.
 - Pass `CancellationToken` to every async call. No manual validation or transactions.
 - No hardcoded status strings or IDs: use `SupportedSymbol.*` and each source's `SourceCode`
-  constant. Create a constants class if one is missing. Same on the frontend.
+  constant (`GoldApiIoSource.SourceCode`). Create a constants class if one is missing. Same on the frontend.
 
 ### Validator and repository rules
 
-- **Every command must have a FluentValidation validator** — a blocker. One per command in
+- **Every command must have a FluentValidation validator** (extends `AbstractValidator<TCommand>`)
+  — a blocker. One per command in
   `Application/{Feature}/Validators/{CommandName}Validator.cs`, auto-discovered. Queries usually
   need none. **A validator never ships without its test file.**
 - Repositories take `AurumDbContext` only, return entities only, live in `Repositories/{Feature}/`,
