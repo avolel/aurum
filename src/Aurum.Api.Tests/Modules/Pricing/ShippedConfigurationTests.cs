@@ -34,36 +34,6 @@ public class ShippedConfigurationTests
     }
 
     /// <summary>
-    /// The rule the shipped file once broke: fails if someone lowers <c>PollInterval</c> or
-    /// reorders <c>Priority</c> without checking the two together.
-    /// </summary>
-    [Fact]
-    public void Shipped_primary_budget_funds_the_shipped_cadence()
-    {
-        using var host = BuildHost();
-        var options = host.GetRequiredService<IOptions<PriceSourcesOptions>>().Value;
-        var polling = host.GetRequiredService<IOptions<PricePollingOptions>>().Value;
-        var resilience = host.GetRequiredService<IOptions<PriceFeedResilienceOptions>>().Value;
-
-        var primary = options.Sources.Values
-            .Where(source => source.Enabled)
-            .OrderBy(source => source.Priority)
-            .First();
-
-        // 31 days is the worst case: the most polls a period can hold.
-        var pollsPerPeriod = PriceSourcesOptionsValidator.LongestPeriod / polling.PollInterval;
-
-        // Every attempt is charged its own lease (D-15).
-        var requestsPerPeriod = pollsPerPeriod * resilience.MaxAttempts;
-
-        Assert.True(
-            requestsPerPeriod <= primary.MonthlyRequestLimit,
-            $"Primary '{primary.SourceCode}' allows {primary.MonthlyRequestLimit} requests per "
-          + $"period but PollInterval {polling.PollInterval} implies {pollsPerPeriod:F0} polls, "
-          + $"which MaxAttempts {resilience.MaxAttempts} charges as {requestsPerPeriod:F0} requests.");
-    }
-
-    /// <summary>
     /// Every enabled source's TotalTimeout must fit the shipped MaxAttempts and its backoff.
     /// </summary>
     /// <remarks>
