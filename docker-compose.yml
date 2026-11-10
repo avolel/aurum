@@ -53,7 +53,9 @@ services:
       context: .
       dockerfile: src/Aurum.Api/Dockerfile
     environment:
-      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      # Production unless .env asks for Development, so a deployed container can't start with
+      # Swagger and the developer error page switched on by accident.
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       ASPNETCORE_HTTP_PORTS: "8080"
       ConnectionStrings__DefaultConnection: ${ConnectionStrings__Aurum:?set in .env}
       Ollama__BaseUrl: ${Ollama__BaseUrl:-http://ollama:11434}
