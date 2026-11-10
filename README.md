@@ -4,7 +4,8 @@ Aurum tracks the price of gold. It asks outside price services for the current p
 schedule, stores every answer, and will later show those prices in an app.
 
 **Where things stand: Phase 1, the server side, is finished.** All eleven items (0 to 10) in
-`ops/phase-1-todo.md` are done, and so is its "done when" list. Phase 2 has started. It adds an
+`ops/phase-1-todo.md` are done, and so is its "done when" list, apart from one box in item 7 left
+open on purpose (see the top of that file). Phase 2 has started. It adds an
 explanation for each big price move, written by an AI model running on my own machine. The plan is
 in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
 figures such as consumer prices, the jobs report and Treasury yields from FRED, the St. Louis Fed's

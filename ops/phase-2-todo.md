@@ -1,8 +1,9 @@
 # Phase 2 — AI explanations, the server side
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
-`ops/decisions/decisions.md` for what's already decided. Nothing in this list has been started yet.
-I last checked it against the code on 2026-10-23.
+`ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
+FRED client fetches figures, but nothing saves them yet. Nothing else has been started.
+I last checked it against the code on 2026-11-09.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -55,9 +56,9 @@ These come from reading the code and the requirements against the original plan 
    says the models' volume survives it. It doesn't: `-v` removes every named volume the file
    declares. The "every phase" check runs exactly that command, and would throw away about 10 GB of
    model files each time.
-3. **The Ollama version isn't fixed.** `docker-compose.yml` uses `ollama/ollama:latest`. The same
-   model can answer differently under a different Ollama version, which breaks "any explanation can
-   be recreated" (§8).
+3. **The Ollama version isn't fixed** (fixed in item 0: pinned to `0.40.9`). `docker-compose.yml`
+   uses `ollama/ollama:latest`. The same model can answer differently under a different Ollama
+   version, which breaks "any explanation can be recreated" (§8).
 4. **The main price service is 15 minutes behind** (API Ninjas, D-11). The move happened before the
    app noticed it. So news and economic background are gathered back from the move's start
    (`WindowStartedAt`), not from when it was detected. The 5-minute target still counts from

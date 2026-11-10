@@ -1296,7 +1296,8 @@ Four things to know before writing a test:
 An empty Expo shell (Expo is a toolkit for building React Native apps for phones and the web).
 `App.tsx` shows a placeholder screen with a summary of fake prices from `src/fixture/generateTicks.ts`.
 The chart library is chosen (`lightweight-charts`, D-2) and listed in `app/package.json`, but no code
-uses it yet. The API endpoints the dashboard needs exist; the dashboard itself is planned for Phase 4.
+uses it yet. The API endpoints the dashboard needs exist; the dashboard itself comes in a later
+batch of app work, together with the Phase 2 explanation feed. The phone version of the chart is decided in Phase 4 (D-2).
 
 ---
 

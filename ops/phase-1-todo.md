@@ -717,7 +717,9 @@ Existing pieces reused: `Infrastructure/PostgresFixture.cs`, `Infrastructure/Lis
       Checked by `Subscribe_sends_the_held_price_and_moves_immediately`; not yet tried by hand against
       `docker compose up`.
 - [x] `curl 'localhost:8080/api/v1/price/history?from=2020-01-01T00:00:00Z'` answers 400 and names the 30-day limit (8)
-- [x] `docker compose down -v && docker compose up --build` from empty still works (9)
+- [x] Starting from an empty database works (9). Checked at the time with `down -v`. Since Phase 2
+      item 0 made both volumes `external`, an empty start means removing and recreating
+      `aurum_aurum-postgres-data` by hand (README, "Running it").
 - [x] D-17 to D-20 written up with the options turned down (each item). D-9 to D-19 are done.
 
 **Deliberately not in this batch:** the dashboard app and its under-1.5-seconds goal, logins, limiting
