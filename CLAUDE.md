@@ -2,57 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Policy: all documentation is written in plain English
-
-**This is mandatory and applies every time, with no exceptions.** It covers:
-
-- `README.md`, everything in `docs/`, `ops/` (including the decision log), and `app/README.md`.
-- Plans in `plans/`, and any plan written in chat or in plan mode.
-- Anything else written for a person to read that is not code: todo lists, handoff notes, summaries.
-
-It does **not** cover code comments or this file's own reference sections below, unless the owner
-says otherwise.
-
-The rules:
-
-1. Use everyday words. Write the way you would explain it to a smart colleague from another team.
-2. Short sentences. One idea per sentence.
-3. Avoid jargon. If a technical term can't be avoided, explain it in the same sentence it first
-   appears, e.g. "a circuit breaker, which stops calling a service that keeps failing."
-4. Spell out every acronym the first time it is used.
-5. Say what happens, not what the pattern is called: "the app refuses to start" rather than "fails
-   fast at boot."
-6. Names of files, classes, settings and tables are fine in backticks when the reader needs to find
-   them. Don't use them as a replacement for explaining what the thing does.
-7. Don't swap jargon for vague words. "Split into one piece per day" is jargon-free and still says
-   nothing. Say what the thing is and why it matters to the reader.
-8. Never write "we", "us" or "our". Use "I" / "my" for what the owner did or decided ("I checked the
-   account page", "I wrote my own circuit breaker"). Use "the app" for what the code does ("the app
-   checks the price every 15 minutes", "the service turned the app away").
-9. Keep every fact. Plain English means simpler words, not less information. When rewriting an old
-   doc, check each claim against the code before restating it.
-
-When editing an older doc that doesn't follow this yet, rewrite the section you touch to follow it.
-
-## Policy: keep it simple (K.I.S.S.)
-
-**This is mandatory.** Write the least code that does the job. The simpler the code, the faster
-another developer can pick it up and change it safely.
-
-1. Solve the problem in front of you. No hooks, options or abstractions for a future that has not
-   arrived.
-2. Prefer the plain version over the clever one. A lock and a flag beat a shared `Task` with
-   identity checks; a two-pass loop beats a one-pass trick when the input is small.
-3. Remove what is unreachable. No guards for states the code or the validators already rule out.
-4. Use what .NET and the existing code already provide before writing a new helper, type or
-   interface.
-5. Keep comments short. Say why in a line or two; long reasoning belongs in the decision log
-   (`ops/decisions/decisions.md`), not in a `<remarks>` block.
-6. Before you hand back a change, re-read it and cut anything that can go without breaking a test
-   or a recorded decision.
-
-Simple does not mean careless. The invariants recorded below and in the decision log still hold. If
-a simpler version would break one, keep the complex version and say why in one line.
+Deeper notes live beside the code they describe and load when you work in that folder:
+`src/Aurum.App.Infrastructure.Pricing/CLAUDE.md` (quota chain, configuration) and its `Cache/`,
+`Deltas/` and `Macro/` folders, `src/Aurum.Api/Hubs/`, `src/Aurum.App.Application/Prices/`,
+`src/Aurum.App.Infrastructure.Data/` and `src/Aurum.Api.Tests/`. The reasoning behind each rule is in
+`ops/decisions/decisions.md` under the D-number given.
 
 ## Commands
 
@@ -63,58 +17,27 @@ dotnet test --filter "FullyQualifiedName~QuotaGovernorTests"   # one class
 dotnet test --filter "FullyQualifiedName~ResolvePeriod"        # one test; no container, sub-second
 dotnet format                                             # before committing
 docker compose up --build                                 # full stack: postgres, ollama, api
-```
 
-`~` in `--filter` is a substring match on the fully-qualified name, so it matches namespace, class
-or method.
-
-Migrations (run from the repository root):
-
-```bash
+# migrations, from the repository root
 dotnet ef migrations add <Name> --project src/Aurum.App.Infrastructure.Data
 dotnet ef migrations list       --project src/Aurum.App.Infrastructure.Data
 dotnet ef database update       --project src/Aurum.App.Infrastructure.Data
 dotnet ef migrations script --idempotent --project src/Aurum.App.Infrastructure.Data
 ```
 
-**No `export` and no `--startup-project`.** `AurumDbContextFactory` is an
-`IDesignTimeDbContextFactory<AurumDbContext>`, and EF prefers it over building the application host
-— so the tooling never runs `Program.cs`, never hits its connection-string guard, and does not need
-to be told where the host is. It is design-time only; nothing in it runs in production.
+`~` in `--filter` is a substring match on the fully-qualified name.
 
-It resolves the connection string in this order:
-
-1. An exported `ConnectionStrings__Aurum`, so CI and existing habits keep working.
-2. `AURUM_DESIGN_CONNECTION` from `.env`.
-3. `ConnectionStrings__Aurum` from `.env`.
-
-`.env` is a Docker Compose convention, not a .NET one: Compose reads it and injects it as container
-environment, and `dotnet ef` on the host never sees it. The factory parses the nearest `.env`,
-searching upward from the working directory, which is why the commands above work from the
-repository root or from inside a project directory.
-
-**`AURUM_DESIGN_CONNECTION` exists because the two connection strings are not interchangeable.**
-`.env`'s `ConnectionStrings__Aurum` says `Host=postgres`, which resolves only inside the compose
-network; anything that actually opens a connection — `database update`, `dbcontext script` — runs on
-your machine, where that name fails DNS with nothing in the error pointing at the cause. Compose
-publishes 5432, so the override is the same database at `Host=localhost`. Nothing in
-`docker-compose.yml` maps `AURUM_DESIGN_CONNECTION` into a container, so it is tooling-only.
-`migrations add` and `migrations script` never connect and do not need it.
-
-`Microsoft.EntityFrameworkCore.Design` is referenced by both `Aurum.App.Infrastructure.Data` and
-`Aurum.Api`. The second is no longer needed for the commands above, but `dotnet ef` still builds a
-startup project when one is passed explicitly, and removing it makes that form fail confusingly.
-
-You rarely need `database update` at all: `Program.cs` migrates at startup, so `docker compose up`
-applies pending migrations to the existing volume by itself.
-
-Tests require Docker. If `docker ps` is permission-denied, `sudo usermod -aG docker $USER` and log
-back in — nothing runs without it.
+- **No `export` and no `--startup-project`** for `dotnet ef`. `AurumDbContextFactory` supplies the
+  connection; commands that connect (`database update`) need `AURUM_DESIGN_CONNECTION` in `.env`
+  pointing at `Host=localhost`, because `.env`'s `Host=postgres` only resolves inside compose.
+  Details in `src/Aurum.App.Infrastructure.Data/CLAUDE.md`.
+- You rarely need `database update`: `Program.cs` migrates at startup.
+- Tests require Docker. If `docker ps` is permission-denied, `sudo usermod -aG docker $USER` and log
+  back in.
 
 ## Architecture
 
-Five projects. The layer table in `docs/best-practices-api.md` is the contract; this is where each
-one lives and what is actually in it today.
+Five projects. The layer table in `docs/best-practices-api.md` is the contract.
 
 ```
 src/
@@ -122,758 +45,136 @@ src/
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
 ├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed;
 │                                      Macro/ — the FRED client (D-22)
-├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/
-├── Aurum.Api/                         Program.cs (every registration), Hubs/ (SignalR)
+├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/, Prices/
+├── Aurum.Api/                         Program.cs (every registration), Controllers/, Hubs/ (SignalR)
 └── Aurum.Api.Tests/
 ```
 
-Three things about this layout will look wrong without the reason. `best-practices-api.md` notes
-each one in a line; the reasoning is here:
+Three things that look wrong without the reason:
 
-- **`Aurum.App.Infrastructure.Pricing` is a fifth project the layer table does not list.** The price
-  sources are external HTTP clients and the poller is a background job; neither is "EF Core queries,
-  repositories, DbContext", which is what that table says `Infrastructure.Data` does and the only
-  other infrastructure box it offers. `cqrs-guide.md` refers to `Aurum.App.Infrastructure.*`
-  generically, and this is that. It depends on `Infrastructure.Data` because the quota governor
-  writes `api_quota_windows`.
-- **`Aurum.Api` references all four projects**, not the two the table gives it. It is the
-  composition root and every registration is in `Program.cs`, so it has to be able to name every
-  concrete type it registers. The table's rule still holds for *code in `Controllers/`*: a
-  controller that reaches past `IMediator` into Infrastructure is the violation that rule is about.
-- **`AutoMapper` is deliberately absent.** Every published version, 15.0.1 included, carries the unpatched high-severity advisory
-  GHSA-rvv3-g6hj-g44x, so there is no version to upgrade to. Handlers map entity to DTO by hand
-  until that has a fix. `MediatR` is pinned to 12.5.0 for a different reason: 13+ requires a paid
-  licence key validated at runtime, so an unpinned bump fails the first `Send()` in production
-  rather than the build.
+- **`Infrastructure.Pricing` is a fifth project the layer table does not list.** Price sources are
+  external HTTP clients and the poller is a background job; neither fits "EF Core queries,
+  repositories, DbContext". It depends on `Infrastructure.Data` because the quota governor writes
+  `api_quota_windows`.
+- **`Aurum.Api` references all four projects.** It is the composition root and must name every type
+  it registers. The layer rule still holds for `Controllers/`: a controller reaching past
+  `IMediator` into Infrastructure is the violation.
+- **`AutoMapper` is deliberately absent.** Every version, 15.0.1 included, carries the unpatched
+  advisory GHSA-rvv3-g6hj-g44x. Handlers map by hand. **`MediatR` is pinned to 12.5.0**: 13+ needs a
+  paid licence key checked at runtime, so a bump fails the first `Send()` in production, not the
+  build.
 
 ### Dependency injection — every registration is in `Program.cs`
 
-There is no `Add<Module>Module` extension method and no `ServiceCollectionExtensions` per layer.
-`src/Aurum.Api/Program.cs` is the only file that registers anything. **D-5 records both the original
-folder-module seam and its reversal**, including what the reversal costs — read it before adding a
-registration anywhere else.
+No `Add<Module>Module` methods, no per-layer `ServiceCollectionExtensions`. **D-5 records both the
+original module seam and its reversal** — read it before registering anything elsewhere.
 
-Two consequences you will hit immediately:
-
-- `Aurum.App.Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")`. `QueryKeyAuthHandler`,
-  `RegisteredPriceSource`, both options validators, `LatestQuoteCache`, `DeltaEngine` and
-  `FailoverPriceFeed` stay `internal` because nothing outside the
-  module should resolve them, and `Program.cs` now has to name them anyway. Making them public to
-  satisfy a wiring concern is the larger leak. `SourceCircuitStore` is public so the sources
-  endpoint can call `SnapshotAll()` (D-20), but its constructor and `For()` stay internal — so
-  `Program.cs` registers it with a factory lambda, because the container only calls public
-  constructors.
-- `Program.AddPriceSource<T>` is a **member of the `Program` class**, not a local function. A local
-  function in top-level statements is unreachable from the test assembly, and the order of two lines
-  inside that method — resilience handler above `QuotaHandler` — is what `ResilienceWiringTests`
-  exists to pin. Registering a source without the handler compiles, works, and spends its budget
-  uncounted.
+- MediatR handlers and FluentValidation validators are found by assembly scanning. Everything else,
+  repositories included, is registered in `Program.cs`.
+- `Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")` so `Program.cs` can name its
+  internal types. Don't make them public to satisfy wiring. A type with a public class but internal
+  constructor (`SourceCircuitStore`) is registered with a factory lambda.
+- **`Program.AddPriceSource<T>` is a member of `Program`, not a local function**, so tests can call
+  it. The order of two lines inside it — resilience handler above `QuotaHandler` — is what
+  `ResilienceWiringTests` pins. Swapping them makes retries uncounted (see the Pricing CLAUDE.md).
+- `AppLogService<>` is scoped; `IAppLogQueue` is a **singleton** (a scoped queue drops rows when the
+  request ends); `AppLogDrainService` batches rows into `app_logs`.
+- `IRequestContextAccessor` is implemented by `HttpRequestContextAccessor` in `Aurum.Api`. The
+  Application layer must not reference `IHttpContextAccessor`. Outside a request it yields
+  `RequestContext.None`, which lets background jobs share `IAppLogService<T>`.
 
 ### Frontend (`app/`)
 
-An Expo scaffold, and little more: `App.tsx`, `src/fixture/generateTicks.ts` and
-`src/fixture/rng.ts`. Charting is settled on `lightweight-charts` (D-2) and nothing is wired up yet.
+An Expo scaffold: `App.tsx`, `src/fixture/generateTicks.ts`, `src/fixture/rng.ts`. Charting is
+settled on `lightweight-charts` (D-2); nothing is wired up.
 
-**There is no Expo Router, no Redux, no NativeWind, no Gluestack UI, no `src/subscreens/`, no
-`components/`, no `babel.config.js`, `jest.config.js` or `eslint.config.js` in this repository.**
-`docs/best-practices.md` and `docs/best-practices-redux.md` are the **target shape for Phase 4**, not
-a description of anything you can import today. Examples in `best-practices.md` marked "Found in the
-original app" come from another project. Check that a path exists before citing it.
+**There is no Expo Router, Redux, NativeWind, Gluestack UI, `src/subscreens/`, `components/`,
+`babel.config.js`, `jest.config.js` or `eslint.config.js` here.** `docs/best-practices.md` and
+`docs/best-practices-redux.md` are the **target for Phase 4**; examples marked "Found in the original
+app" come from another project. Check a path exists before citing it.
 
-### Data Flow (CQRS with MediatR)
- 
+### Data flow (CQRS with MediatR)
+
 ```
 Request → Controller → IMediator.Send() → Pipeline Behaviors → Handler → Repository/DbContext → Database
-                                                                   ↕
               ApiResponse ← Controller ← Handler ← manual mapping ← Entities
 ```
- 
-Pipeline order: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler
 
-**The DbContext is `AurumDbContext`.**
+Pipeline: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler.
+The DbContext is `AurumDbContext`. The only feature is `Prices` (queries only — see
+`src/Aurum.App.Application/Prices/CLAUDE.md`). The only scheduled work is `PricePollingService`, a
+`BackgroundService` outside MediatR. A feature with commands adds `Commands/`,
+`Handlers/Commands/`, a validator per command and `Infrastructure.Data/Repositories/{Feature}/`;
+`docs/cqrs-guide.md` shows the shape. **No new service layer** — handlers replace services.
 
-The only controllers are the four read endpoints (see "The read endpoints" below). The only thing
-running on a schedule is `PricePollingService`, a `BackgroundService` that does not go through
-MediatR.
- 
-- Controllers dispatch via `_mediator.Send()` — never call services or repositories directly
-- Handlers own all business logic and entity ↔ DTO mapping
-- Query handlers may inject `AurumDbContext` directly for read-only queries
-- Command handlers use `IUnitOfWork` for writes (TransactionBehavior wraps automatically)
-- DTOs never reference entity classes; entities never reference DTOs
-- Repositories return entities only
-- **No NEW service layer** — handlers replace services for new work. See `docs/cqrs-guide.md`.
- 
-### Feature Folder Structure
+### Controller rules
 
-The one real feature is `Prices` (item 8). It has queries only, so no `Commands/` and no
-repository — query handlers read `AurumDbContext` directly. A feature with commands adds
-`Commands/`, `Handlers/Commands/`, a validator per command, and
-`Aurum.App.Infrastructure.Data/Repositories/{Feature}/`; `cqrs-guide.md` shows that shape.
+- Thin: receive request → `_mediator.Send()` → return `ApiResponse<T>`
+  (`SharedKernel/Common/ApiResponse.cs`). Never anonymous types.
+- Inject `IMediator` + `IAppLogService<TController>`.
+- Attributes: `[ApiController]`, `[Authorize]`, `[Route("api/v1/{feature}")]`,
+  `[Produces("application/json")]`. (Phase 1 read endpoints are open — see the Prices CLAUDE.md.)
+- Every action has try/catch; the catch calls `_appLogService.LogErrorAsync()` and returns
+  `ApiResponse<T>.CreateError()`.
+- **Security-configuration actions log failures only — no success row.** None exist yet; add the
+  enforcing test with the first one. Every other action logs success with
+  `LogAsync(LogType.ActionLog, ...)`.
+- Catch `FluentValidation.ValidationException` on command endpoints → 400.
+- `CancellationToken` on every async action. No business logic, DB access, external HTTP or
+  `async void`.
 
-```
-Aurum.Api/Controllers/PricesController.cs              ← /api/v1/price/live, /history, /sources
-Aurum.Api/Controllers/PriceEventsController.cs         ← /api/v1/events
-Aurum.App.Application/Prices/
-  Queries/Get{LivePrice,PriceHistory,PriceEvents,PriceSources}Query.cs   ← IQuery<T> records
-  Handlers/Queries/*QueryHandler.cs
-  Validators/*QueryValidator.cs                       ← live, history, events (sources has no input)
-  DTOs/*.cs
-Aurum.App.Application/Validation/ValidationErrors.cs   ← ValidationException → ApiResponse.Errors
-```
- 
-### Controller Rules
- 
-- Must be thin: receive request → `_mediator.Send()` → return `ApiResponse<T>`
-- Inject `IMediator` + `IAppLogService<TController>` (for error logging in catch blocks)
-- Required attributes: `[ApiController]`, `[Authorize]`, `[Route("api/v1/{feature}")]`, `[Produces("application/json")]`
-- Every action must have try/catch — catch logs via `_appLogService.LogErrorAsync()` and returns `ApiResponse<T>.CreateError()`
-- **Check first whether the action is on the security-configuration surface.** If it is, it logs **failures only** — do NOT add a success row. No security-configuration endpoints exist yet; when the first one lands,
-  add the test that enforces this. Otherwise: every action must log success via `_appLogService.LogAsync(LogType.ActionLog, ...)`, not just errors
-- Catch `FluentValidation.ValidationException` on command endpoints → return 400
-- `CancellationToken` on every async action method
-- No business logic, no DB access, no external HTTP calls, no `async void`
-- Always use `ApiResponse<T>` wrapper (`Aurum.App.SharedKernel/Common/ApiResponse.cs`) — never return anonymous types
- 
-### Handler Rules (replaces Service Layer)
- 
-- One handler per command/query — implements `IRequestHandler<TRequest, TResponse>`
-- **Handlers must contain business logic directly — NEVER delegate to a service (no pass-through handlers)**
-- After migrating logic from a service into handlers, DELETE the old service interface + implementation AND remove its DI registration from `Program.cs`
-- Check for OTHER consumers of the deleted service — update them to use `IMediator` + the new command/query
-- Query handlers: may inject `AurumDbContext` directly — always use `AsNoTracking()`
-- Command handlers: inject `IUnitOfWork` or repositories — TransactionBehavior wraps automatically
-- Owns all entity ↔ DTO mapping. **Manual** — AutoMapper is not referenced (see Architecture)
-- All `Handle` methods receive `CancellationToken` — pass to every async call in the chain
-- No manual validation — use FluentValidation validators (auto-run by `ValidationBehavior`)
-- No manual transaction management — `TransactionBehavior` handles it
-- Never returns raw entities — always DTOs
-- Never hardcode status strings or IDs — use constants. Here that means `SupportedSymbol.*` and
-  each source's `SourceCode` constant (`GoldApiIoSource.SourceCode`). If a constants class doesn't
-  exist for a domain, create one. The same applies to the frontend — named constants, not inline
-  magic numbers.
- 
-### Validator Rules
- 
-- **Every command MUST have a FluentValidation validator** — this is a blocker, no exceptions
-- One validator per command: `Aurum.App.Application/{Feature}/Validators/{CommandName}Validator.cs`
-- Extends `AbstractValidator<TCommand>` from FluentValidation
-- Auto-discovered by assembly scanning — no DI registration needed
-- Queries typically don't need validators
-- **Validator tests must be created alongside validators** — never create a validator without its test file
- 
-### Repository Layer Rules
- 
-- Takes `AurumDbContext` as its sole constructor dependency
-- Returns entities only — never DTOs
-- **Uses `AsNoTracking()` for ALL read-only queries** — any query where the entity is mapped to a DTO and never saved back MUST use `AsNoTracking()`. This includes repository methods used by query handlers.
-- Each feature gets its own subfolder: `Repositories/{Feature}/`
+### Handler rules
 
-### The quota chain — the part that needs multiple files to understand
+- One handler per command/query, implementing `IRequestHandler<TRequest, TResponse>`.
+- **Business logic lives in the handler — never a pass-through to a service.** When moving logic out
+  of a service, delete the interface, implementation and `Program.cs` registration, and move other
+  consumers to `IMediator`.
+- Query handlers may inject `AurumDbContext`, always with `AsNoTracking()`. Command handlers use
+  `IUnitOfWork` or repositories; `TransactionBehavior` wraps them.
+- Manual entity ↔ DTO mapping. Never return entities. DTOs never reference entities, and vice versa.
+- Pass `CancellationToken` to every async call. No manual validation or transactions.
+- No hardcoded status strings or IDs: use `SupportedSymbol.*` and each source's `SourceCode`
+  constant. Create a constants class if one is missing. Same on the frontend.
 
-GoldAPI's free tier is roughly **100 requests per month**. Everything below exists because an
-in-memory counter that resets with the container can spend a month of budget in an afternoon while
-every individual request looks fine.
+### Validator and repository rules
 
-```
-PricePollingService  →  IPriceFeed (FailoverPriceFeed)
-                            ├─ SourceCircuitStore → SourceCircuit (in-memory, per source)
-                            └─ IPriceSource, in priority order
-                                  └─ HttpClient (typed)
-                                        └─ resilience pipeline   total timeout → retry (MaxAttempts) → per-attempt timeout
-                                              └─ QuotaHandler (DelegatingHandler)
-                                                    └─ auth handler
-                                                          └─ IQuotaGovernor → api_quota_windows
-```
+- **Every command must have a FluentValidation validator** — a blocker. One per command in
+  `Application/{Feature}/Validators/{CommandName}Validator.cs`, auto-discovered. Queries usually
+  need none. **A validator never ships without its test file.**
+- Repositories take `AurumDbContext` only, return entities only, live in `Repositories/{Feature}/`,
+  and use `AsNoTracking()` for **every** read-only query, including ones used by query handlers.
 
-Read that top to bottom as the order a request passes through. Four placement decisions here look
-arbitrary in isolation:
+## Invariants that are easy to break from outside their folder
 
-- **`QuotaHandler` is a `DelegatingHandler`, not a wrapper around `IPriceSource`.** The retries and
-  the failover chain both sit above `IPriceSource`; a governor at that level would let every retry
-  spend quota uncounted. The handler sees exactly what leaves the process.
-- **The resilience pipeline is registered *before* `QuotaHandler`, so it is outermost.** Every retry
-  attempt re-enters the handler and is charged its own lease, because that is what the provider
-  bills. Swapping those two lines makes retries free in our ledger and billed by the provider — an
-  under-count, the direction that costs a month rather than a poll.
-  `ResilienceWiringTests.Each_retry_attempt_spends_its_own_lease` is the only thing that catches the
-  swap, and it calls `Program.AddPriceSource<T>` rather than hand-composing the chain for exactly
-  that reason.
-- **The attempt count is `PriceFeed:Resilience:MaxAttempts`, not a literal.** Polly counts retries
-  and the knob counts attempts, so `Program.AddPriceSource` passes `MaxAttempts - 1`; the conversion
-  happens there and nowhere else, because the cadence guard multiplies by attempts and an off-by-one
-  in two files is an under-count of exactly one attempt per poll (D-15). `RetryBackoffBase` sets
-  Polly's `Delay` explicitly for the same reason `MinimumTotalTimeout` needs it — see the
-  `TotalTimeout` bullet under Configuration.
-- **It takes `IServiceScopeFactory`, not `IQuotaGovernor`.** `IHttpClientFactory` pools handlers for
-  minutes, so injecting the scoped governor would capture a `DbContext` in a long-lived object
-  shared across concurrent requests.
-- **`PostgresQuotaGovernor.AcquireAsync` uses raw SQL** — a single
-  `INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`. Do not "simplify" this into EF. Loading the
-  row, deciding in C#, and saving leaves a gap between the check and the increment that no C# can
-  close; `ON CONFLICT` re-reads the row under a lock, which is the entire concurrency guarantee.
-  `Concurrent_acquires_never_oversubscribe` is the test that catches a regression here. The class
-  remarks and `ops/decisions/decisions.md` (D-7) carry the full reasoning.
-- **`ReportProviderRejectionAsync` is an upsert for the same reason**, not the `UPDATE … WHERE` it
-  looks like it should be. An update changes zero rows and reports success when the period has no
-  row yet, which happens whenever a request straddles a period boundary — the acquire is charged to
-  the old period, the rejection arrives in the new one, and the clamp disappears silently.
+Each folder's CLAUDE.md has the full reasoning. These are the ones a change elsewhere can break:
 
-Related invariants:
-
-- Period rollover needs no scheduled job. A new period means a new `PeriodKey`, so no row exists and
-  the next acquire creates one. Spent rows are never reset — they are history.
-- `QuotaStatus.Limit - Used` is **not** remaining budget. When `ProviderRejected` is set, remaining
-  is zero regardless of the counter. The clamp never lives in the counter: a row reading "0 used of
-  100, rejected" is deliberate, and it is the only signal that our accounting has drifted from the
-  provider's.
-- `AcquireAsync` reads the row back on the **denial path only**, to log whether the cause was a
-  spent budget or a provider rejection. That read is outside the atomic statement and is therefore
-  diagnostic only — it can be stale by a rejection or a period rollover. Nothing may branch on it.
-- **The circuit breaker's state is the opposite rule from the governor's, one folder away.**
-  `SourceCircuit` is in-memory, authoritative, and never rehydrated at startup; the governor is
-  durable. A spent request is a fact about the provider's ledger that outlives our process, while a
-  circuit is a fact about *our own recent observations*, and a fresh process has none. Loading an
-  open circuit at boot would blind a new process to a healthy source for a break it never observed
-  (D-14). `price_sources.LastFailureAt` / `LastFailureReason` is a projection for operators, written
-  once per poll by `PricePollingService` and never read back.
-- **Quota exhaustion is not a circuit fault.** The source is healthy and out of budget. The chain
-  records `SourceAttemptOutcome.QuotaExhausted` and moves to the next source immediately; the
-  breaker is not touched, because opening on it would keep the source out of the chain after its
-  period rolls and its budget is fresh.
-- **The poller sleeps only when *every* source is out of quota**, and then only to the *earliest*
-  `ResetsAt`. A single fault or a single open circuit makes `AllSourcesFailedException.AllQuotaExhausted`
-  false and the feed stays on cadence — those clear in minutes, and a month-long sleep over one is
-  the failure item 3 exists to remove.
-- **`PriceSourceOptions.Enabled` now actually filters.** `FailoverPriceFeed` builds the chain from
-  configuration and joins it to the registered sources, so a disabled or unconfigured source is not
-  called. Before item 3 the poller selected straight off `IEnumerable<IPriceSource>`, which has no
-  `Enabled` to filter on, and setting it shortened the startup log while changing nothing.
-- **`price_sources` has no `IsEnabled` or `Priority` column.** Neither had a reader; D-20 dropped
-  both. Configuration alone says whether a source is used and in what order, and
-  `/api/v1/price/sources` reads both from there.
-- The cadence is one feed-wide value, `PricePolling:PollInterval`, and it is coupled to the
-  **primary** source's `MonthlyRequestLimit` — the enabled entry with the lowest `Priority` — **and
-  to `PriceFeed:Resilience:MaxAttempts`**. A poll is not a request: every attempt re-enters
-  `QuotaHandler` and is charged its own lease, so the guard multiplies polls per period by
-  `MaxAttempts` before comparing (D-15). **The circuit breaker does not bound that multiple.**
-  `SourceCircuit` observes poll outcomes, and retries resolve below it, so a provider that fails two
-  attempts and succeeds on the third spends triple forever while the breaker reads it as healthy —
-  the most expensive provider behaviour is the one the breaker exists to tolerate.
-  `PriceSourcesOptionsValidator` fails the process at boot when that budget cannot fund the cadence
-  for a period. Backups are deliberately exempt (D-10): holding every source to the full period
-  pegs the cadence to the smallest budget in the file, so each added provider could only slow the
-  feed. A backup that empties its budget during a long primary outage is counted and clamped by the
-  governor, which is the accounting working rather than the failure it guards against; the cost is
-  only visible in `PricePollingService`'s startup coverage log. The validator also refuses a tie for
-  the lowest `Priority` and a configuration with nothing enabled.
-- The injected `TimeProvider` is the sole authority for every timestamp the app writes, not just
-  period boundaries; `now()` never appears in governor SQL. `AurumDbContext` takes it as a
-  **required** constructor parameter so no construction site can silently fall back to wall clock —
-  that fallback is precisely what let `ApplyAuditFields` stamp wall-clock times while the governor
-  wrote clock-injected ones, so two rows in the same table carried timestamps from two different
-  clocks — invisible in production, a month apart under a fake clock in tests. Note that raw SQL
-  bypasses `ApplyAuditFields` entirely, so `CreatedAt` / `UpdatedAt` must still be passed explicitly
-  there.
-
-### The latest-quote cache (D-16)
-
-`LatestQuoteCache` (`Pricing/Cache/`) holds the newest `PriceQuote` per symbol for
-`/api/v1/price/live`. Singleton, registered beside `SourceCircuitStore`. `PricePollingService` awaits
-`EnsureWarmAsync` before its first poll and calls `Record` after every successful one.
-
-- **`Record` runs before the tick is added to the `DbContext`.** Memory, then database, then clients
-  (D-19): a failed save must not hide a price the app fetched. A failed poll never records — the
-  `AllSourcesFailedException` path projects onto `price_sources` and rethrows, and the held quote's
-  growing `Age` is the signal. `A_poll_writes_the_cache_before_it_persists` was mutation-checked
-  against `Record` moved below the save.
-- **Warm-up is awaited by the poller, not a hosted service of its own** — hosted-service start order
-  is registration order, and nobody re-reads that before adding one. The delta engine warms the same
-  way, but the two reads do **not** merge: a `Sample` has no bid, ask or `ReceivedAt` (D-17). Each
-  warm-up is in its own try in `PricePollingService.TryWarmAsync`; one that throws is logged and
-  polling continues: an unhandled exception in `ExecuteAsync` stops the host by default.
-- **Warm-up goes through `Record`**, so it is idempotent and cannot overwrite a newer live quote.
-  It builds `PriceQuote` with the constructor, not `Normalize`, so a since-tightened plausibility band
-  cannot fail boot over stored data. A warmed quote has empty `AttemptedSources` ("not observed by
-  this process") and `IsFallback` derived from the *current* primary, so reordering sources across a
-  restart can flip it.
-- It visits `SupportedSymbol.All`. A symbol added to `SupportedSymbol` but not to `All` is never
-  warmed.
-
-- **A `ConcurrentDictionary`, not `IMemoryCache`.** Eviction makes "eight hours old" look identical
-  to "never had a price", and the age is the product requirement. Do not "upgrade" it.
-- **Newest-only by `ObservedAt`, strictly.** The comparison lives inside `AddOrUpdate`'s update
-  delegate; a `TryGetValue`-then-indexer rewrite reopens the check-then-set gap. The delegate may run
-  more than once under contention, so it must stay side-effect free — the debug log for a dropped
-  quote is decided afterwards by `ReferenceEquals(held, incoming)`.
-- **`Age = clock.GetUtcNow() - Quote.ObservedAt`, computed in `Get`, never stored.** Not
-  `ReceivedAt`: a provider answering 200 with a frozen `ObservedAt` would look fresh forever.
-  `Age_is_measured_from_ObservedAt_not_ReceivedAt` pins this.
-- **`LatestQuote` must not carry `SourceAttempt`.** It holds an `Exception`, which a cached quote
-  would pin for hours. `Record` takes the whole `PriceFeedResult` so that projection happens in one
-  place; `A_cached_quote_holds_no_exception_reference` is a decision-pinning test, not dead weight.
-- `ILatestQuoteCache` and both records are **public** because `Aurum.App.Application` references
-  this project and `GetLivePriceQueryHandler` reads the cache (D-20).
-- Symbol keys are `OrdinalIgnoreCase` to match `PriceSourcesOptions.Sources` and
-  `PriceFeedResult.UsedFallback`.
-
-### The price-move calculator (D-17)
-
-`DeltaEngine` (`Pricing/Deltas/`) works out how far each symbol moved over the six fixed
-`DeltaWindow`s (1m, 5m, 15m, 1h, 4h, 1d) for item 6's classifier. Singleton, registered beside
-`LatestQuoteCache`. `PricePollingService` awaits `EnsureWarmAsync` after the cache's and calls
-`Record(result.Quote)` on the line after `cache.Record`, before the save.
-
-- **A window is two real prices or null.** Never a zero-filled `WindowDelta`. With the shipped
-  15-minute cadence, 1m and 5m are almost always null — correct, not a bug.
-- **Start = last sample at or before `now - W`** (`TickRingBuffer.LastIndexAtOrBefore`), never
-  first-after. **Now = the injected clock**, not the newest sample's time, and the newest sample must
-  also be within `Tolerance(W)` of now. Both rules have tests that go red when broken.
-- **One `TickRingBuffer` per symbol behind its own `Lock`**, not one per window. Strictly increasing
-  `ObservedAt`; `TryAppend` refuses at-or-before and never re-sorts. `Record` counts refusals in
-  `DroppedOutOfOrder`; warm-up appends through `TryAppend` directly so overlap is not counted.
-- **Lookback is `1d + Tolerance(1d)` (36h), not 1d.** The 1d start is *older* than "now − 1 day". The
-  warm-up query and `DeltaEngineOptions.BufferCoversLongestWindow` (checked at boot against
-  `PricePolling:PollInterval`) both use `Lookback`. Shrinking it makes the 1d window dark for a day
-  after every restart.
-- **`EnsureWarmAsync` loads at most once**, behind a `SemaphoreSlim` and a `_warmed` flag. A second
-  load would add nothing (everything is older than live data) and the buffer cannot back-fill. A
-  failed or cancelled load leaves the flag false so the next caller retries. A symbol with no stored ticks gets no history, so `GetSnapshot` stays null ("never held a
-  price") rather than six nulls.
-- **`CrossSource` is a flag, not a correction.** It compares the start and end samples' per-process
-  `SourceOrdinal`s only.
-- Volatility is a `double`, two-pass sample standard deviation of step-to-step percent changes, null
-  below `MinSamplesForVolatility`.
-- `IDeltaEngine`, `DeltaSnapshot`, `WindowDelta`, `DeltaWindow` and `Sample` are public for the same
-  reason as `ILatestQuoteCache`; `GetPriceEventsQueryValidator` reads `DeltaWindow.All`.
-- `WindowDelta.StartSourceCode` / `EndSourceCode` come from a reverse `ordinal → code` array filled
-  where `Ordinal()` hands one out. `Sample` stays 40 bytes; do not put the code on it.
-
-### Price-move events (D-18)
-
-`SignificanceClassifier` (`Pricing/Deltas/`) turns a `DeltaSnapshot` into `PriceEvent`s;
-`PriceEventSql.InsertAsync` saves each one. `PricePollingService.SaveEventsAsync` runs both **after**
-the tick's `SaveChangesAsync`, so an event never points at a price the database failed to keep. A
-failed insert falls into the poll's existing catch. `A_poll_whose_tick_fails_to_save_writes_no_event`
-pins the order; it was mutation-checked by moving the insert above the save.
-
-- **The waiting period is in the insert, not in memory.** `WHERE NOT EXISTS` an event for the same
-  `(Symbol, WindowCode)` with `WindowEndedAt > @windowEndedAt - @cooldown`, plus `ON CONFLICT DO
-  NOTHING` on the unique `(Symbol, WindowCode, WindowEndedAt)`. Do not reintroduce an in-memory
-  `LastEmittedAt`: after a restart the next poll's 1d window has a new end time, the unique rule
-  misses, and the event repeats. `Restart_does_not_re_emit_within_the_cooldown` catches it.
-- **Measured on `WindowEndedAt` (price time), never the clock**, so a replay gives the same events.
-  The boundary is strict: exactly one cooldown later is saved.
-- Raw SQL: pass `CreatedAt`/`UpdatedAt` from the clock, and keep `CAST(... AS numeric)` on
-  `Volatility` — a null parameter is untyped and Postgres reads it as text in a `SELECT` list.
-- **The classifier is static and pure** — no clock, no database, no interface. Required magnitude is
-  `MinPercent`, times `CrossSourceMagnitudeMultiplier` when `CrossSource`; fires on `>=`.
-  `TriggeredRule` is formatted with the invariant culture.
-- **`SignificanceOptions` has no defaults in code.** The binder adds dictionary keys but cannot remove
-  them, so a coded default could never be switched off. A window missing from `Windows` is never
-  classified, deliberately. `Windows` is get-only to keep its `OrdinalIgnoreCase` comparer. Boot rules
-  are `WindowKeysAreKnown` and `ValuesAreInRange`, registered in `Program.cs`.
-- Only the 5m threshold (0.25%) is from BR-02; the other five are placeholders.
-- `price_events` is an ordinary table, not a hypertable, so it never gets `price_ticks`' 30-day
-  retention. Nested windows each produce an event; merging is Phase 2.
-- **Single poller only.** `NOT EXISTS` is not atomic across instances; the unique rule still stops
-  exact duplicates.
-- `PricePollingServiceTests` and `PriceEventSqlTests` delete every `price_events` row in
-  `InitializeAsync`; the waiting-period check reads across sources, so a leftover row suppresses the
-  test's insert.
-
-### Live updates (D-19)
-
-`PriceHub` (`Aurum.Api/Hubs/`, mapped at `/hubs/price`) is a `Hub<IPriceClient>` with
-`Subscribe`/`Unsubscribe(symbol)` over one group per symbol, `PriceHub.GroupName` → `price:{symbol}`.
-The poller talks only to `IPriceBroadcaster` (`Pricing/Realtime/`); `SignalRPriceBroadcaster` is its
-one implementation, a singleton registered directly in `Program.cs`.
-
-- **No `NullPriceBroadcaster`, no `TryAdd`-then-replace.** That pattern existed only because two module
-  methods each registered a sender; D-5 removed them. Tests that build `PricePollingService` by hand
-  pass a `RecordingBroadcaster`. Do not reintroduce a default "so tests don't need one".
-- **Poll order: memory → tick save → `TryPublishAsync` → `SaveEventsAsync`.** After the save so an app
-  is never told a price the database lost (`A_poll_publishes_after_the_tick_is_saved`,
-  `A_failed_save_does_not_publish`). Before events so a failed insert can't silence apps. Own catch so
-  a failed send can't skip events (`A_failed_publish_still_saves_events`). All three were
-  mutation-checked.
-- **`Subscribe` joins the group, then sends to `Clients.Caller`.** The reverse loses a broadcast that
-  lands in between. **No test catches the swap** — it was mutation-checked and stayed green. Guard it
-  in review.
-- **`Subscribe` resolves the symbol against `SupportedSymbol.All` ignoring case and uses the stored
-  spelling.** Group names are case-sensitive; `xauusd` would otherwise be a silent group
-  (`Symbol_case_does_not_split_groups`). Unknown symbol → `HubException` naming the supported ones.
-  `SignalRPriceBroadcaster` does **not** resolve: its only caller passes `PriceQuote.Symbol`, which is
-  already the stored spelling. A new caller with user input must resolve first.
-- **`PriceUpdate.From(symbol, LatestQuoteSnapshot?, DeltaSnapshot?)` is the only mapper**, used by hub
-  and sender. Takes `symbol` because both snapshots can be null. `Windows` is keyed by
-  `DeltaWindow.Code` and always has all six keys; no answer is a `null` value, never a zero record or
-  a missing key (`A_window_with_no_answer_arrives_as_null_not_zero` reads raw JSON). `Quote` null =
-  "no price yet", still sent. `AttemptedSources` is not sent over the hub; `/api/v1/price/live`
-  serves it.
-- **The hub reads `ILatestQuoteCache`/`IDeltaEngine` directly, not via MediatR** — a cache-only query
-  would be a pass-through handler. D-20 kept it that way.
-- Typed client methods take no `CancellationToken`; `PublishAsync`'s `ct` is unused by the SignalR
-  implementation. Group sends only queue into per-connection buffers.
-- Not handled: auth (Phase 1 is open), CORS, events over SignalR, scale-out (groups are in-process;
-  needs a backplane), and subscribe/broadcast arrival order (client keeps newer `observedAt`).
-
-### The read endpoints (D-20)
-
-Four controller actions, all `GET`, all open in Phase 1 (no login method is registered, so
-`[Authorize]` would refuse everything). **None of them calls a price service** — every provider
-request spends part of a 100-request month, and these can be reloaded freely.
-
-**They needed no new registration.** `Program.cs` already called `AddControllers()` and
-`MapControllers()`, so the planned `MapPricingModule` setup method was dropped along with the other
-module methods (D-5, D-20). A new controller is picked up by those two lines.
-
-| Route | Reads | Notes |
-|---|---|---|
-| `/api/v1/price/live?symbol=` | `ILatestQuoteCache` | 503 with `ErrorMessages.NoPriceMessage` when nothing is held |
-| `/api/v1/price/history?symbol=&from=&to=&limit=&cursor=` | `price_ticks` | oldest first, `[from, to)`, 400 when `from` is older than `PriceTick.Retention` |
-| `/api/v1/events?symbol=&window=&minPercent=&limit=&cursor=` | `price_events` | newest first; `minPercent` matches `abs(DeltaPercent)` |
-| `/api/v1/price/sources` | settings + `price_sources` + `SourceCircuitStore` + `IQuotaGovernor` | ordered by `Priority`, switched-off sources included |
-
-- **`Aurum.App.Application` references `Aurum.App.Infrastructure.Pricing`** so handlers can read the
-  cache, circuits, governor and settings. Controllers still see only `IMediator`.
-- **Paging is keyset, not page numbers.** `Cursor` (SharedKernel) is the last row's `(time, Id)`,
-  sent as base64url — plain base64's `+` arrives as a space in a query string. The comparison is
-  written out (`t > c.Time || (t == c.Time && Id > c.Id)`): EF Core does not translate tuple
-  comparison. Handlers read `limit + 1` rows; `NextCursor` is null on the last page. Page size is
-  `PaginationHelper.ClampPageSize` — clamped, never rejected. The tie tests
-  (`..._SplitAcrossAPage_...`) fail when `>` becomes `>=` or the `Id` half is dropped; both were
-  mutation-checked.
-- **Symbols are resolved with `SupportedSymbol.Find`** and compared exactly in SQL. A
-  case-insensitive comparison there skips the `(Symbol, ObservedAt)` index.
-- **`PriceTick.Retention` must equal the migration's `INTERVAL '30 days'`.**
-  `SchemaTests.PriceTicks_retention_policy_matches_PriceTick_Retention` reads the job and compares.
-- **`/sources` asks the governor only about switched-on sources.** The validator lets a switched-off
-  source sit half-configured, and `ResolvePeriod` throws for a rolling period with no anchor.
-  `Quota` is null for those; `Circuit` is null for a configured source with no registered code.
-  `Remaining` is `0` when `ProviderRejected` (`Handle_ProviderRejected_...` was mutation-checked).
-- Controllers rethrow `OperationCanceledException` when the request's own token fired, so a client
-  hanging up is not logged as a 500.
-- **`price_events` has no index on `DetectedAt`.** `/events` sorts the symbol's rows; fine at Phase 1
-  volume. Add `(Symbol, DetectedAt DESC, Id DESC)` if it grows.
-- Not handled: CORS, response caching, a cursor reused with a different range or symbol (it just
-  starts from that point), and malformed dates (`from=yesterday` fails model binding with the
-  framework's ProblemDetails, not `ApiResponse`).
-
-### The FRED client (D-22)
-
-`FredClient` (`Pricing/Macro/`) fetches one `FredSeries` from `fred/series/observations` and returns
-`FredObservation`s, oldest first. Fetch only: nothing calls it or saves its rows yet. Registered in
-`Program.cs` as a typed client.
-
-- **There is no BLS or FiscalData client.** Core CPI (`CPILFESL`), payrolls (`PAYEMS`) and
-  unemployment (`UNRATE`) are FRED series: BLS's own API serves revised values only, and FRED
-  already has the 10-year and 2-year yields. FRED posts after BLS's 8:30; how long after is not yet
-  measured (D-22).
-- **Release series (`IsRelease`: CPI, PCE, core CPI, payrolls, unemployment) send `output_type=4` and the full real-time range,
-  `1776-07-04` to `9999-12-31`.** Left at the default (today), FRED answers 400 "No vintage dates
-  exist", not an empty list. `ReleasedOn` is the row's `realtime_start`, the first publish date.
-  Market series send neither and get a null `ReleasedOn`. `DFF` is a market series on purpose.
-- **Not behind `QuotaHandler` or `IQuotaGovernor`.** FRED has no monthly allowance, only 120
-  requests a minute per key. It uses `AddStandardResilienceHandler` (retries 408, 429, 5xx; never
-  400), registered before the `QueryKeyAuthHandler` so the key is added inside the retries, once.
-- **`BaseUrl` must end in a slash.** The path is relative, so without it `/fred` is replaced.
-- `"."` is a null `Value` and the row is kept. A `count` larger than the rows returned throws rather
-  than dropping a second page. Numbers and dates parse with the invariant culture; the format and
-  `"."` live in `SharedKernel/Constants/FredConstants.cs`.
-- A blank `Macro:Fred:ApiKey` fails boot through `[Required]` + `ValidateOnStart` (D-9's rule).
-  Nothing tests that directly.
-- The exception for a failed status carries FRED's `error_message`. The client never sees the key,
-  so it can't strip it; FRED is not known to echo it.
-- `FredObservation.ReleasedOn` is a `DateOnly`; `MacroObservation.ReleasedAt` is a
-  `DateTimeOffset?`. The save step has to pick the time of day (the release calendar).
-
-### Database
-
-Postgres with TimescaleDB and pgvector (`timescale/timescaledb-ha:pg17`, decision D-3).
-
-- `price_ticks` has a **composite primary key `(ObservedAt, Id)`**. TimescaleDB rejects any unique
-  index that omits the partitioning column, so a surrogate-only key makes `create_hypertable` fail.
-- The first migration does more than create tables: hypertable conversion, the 30-day retention
-  policy, and the price-source seed all live there. Read it before adding a migration that touches
-  `price_ticks`.
-- Extensions are declared in **both** `ops/db/init/01-extensions.sql` (superuser, once, on an empty
-  volume) and `AurumDbContext.OnModelCreating`. Harmless today only because the compose app role is
-  the bootstrap superuser; introducing a least-privilege role means the init script must become the
-  sole owner.
-- `Program.cs` migrates at startup. Correct for one instance, wrong the moment the API scales out.
-  `PricePollingService` carries the same single-instance assumption.
-
-### Configuration
-
-The `PriceSources` section binds to a **map of sources**, not a property per provider
-(`PriceSourcesOptions.Sources`, keyed by config key, with the provider's natural key carried inside
-as `SourceCode`). Values come from `appsettings.json` and are overridden by environment variables
-using `__` as the section separator (`PriceSources__GoldApiIo__MonthlyRequestLimit`), which is how
-`docker-compose.yml` and `.env` set them.
-
-- **Compose has no `env_file`; it forwards only the variables listed under `api.environment`.** A
-  setting added to `.env` without a line in `docker-compose.yml` never reaches the container, and
-  nothing reports it. Today that list is the connection string, the three API keys,
-  `Macro__Fred__ApiKey`, each source's
-  `Enabled`, GoldAPI's `MonthlyRequestLimit` (the one limit expected to change, D-8),
-  `PollInterval`, `MaxAttempts` and `Ollama__BaseUrl`.
-  The fallback check depends on `PriceSources__ApiNinjas__Enabled` being on it.
-- **The app reads `ConnectionStrings:DefaultConnection`.** Compose fills it from `.env`'s
-  `ConnectionStrings__Aurum`, which `AurumDbContextFactory` also reads for `dotnet ef`.
-  `appsettings.json` has no connection string; without one the app refuses to start.
-
-- **Look sources up with `RequireByCode`, never with a `switch` on the code.** A
-  switch needs a fall-through arm, and a fall-through arm is a fabricated configuration —
-  indistinguishable downstream from a real one, so a source with a 20-request tier gets accounted
-  against whatever the arm guessed. `RequireByCode` throws instead; there is no defensible default
-  for another provider's budget or reset semantics.
-- The map key is the friendly config key (`GoldApiIo`) rather than the source code, because keying
-  by the code puts a dot in every environment variable name
-  (`PriceSources__goldapi.io__ApiKey`) and the compose toolchain's dotenv parsers are inconsistent
-  about those. The cost is that nothing structural stops two entries declaring the same
-  `SourceCode` — they would collide on one ledger row — so the validator rejects duplicates.
-- **`ValidateDataAnnotations()` does not descend into nested objects.** It evaluates the attributes
-  on the options object's own properties and stops. `PriceSourcesOptionsValidator` does the descent
-  explicitly and is what actually enforces `[Required]` on `ApiKey` and `[Range]` on
-  `MonthlyRequestLimit`; while the sources hung off a nested property those attributes were dead,
-  and a missing API key bound to the empty string, booted clean, and then spent the month one 401
-  at a time (401 is not a quota rejection, so nothing clamps, and a lease is never refunded). Any
-  new annotation on `PriceSourceOptions` is enforced by that validator, not by the `.Bind` chain.
-- The validator also holds the cross-field checks the attributes cannot express: the
-  cadence-vs-budget guard (formerly `PricePollingService.GuardPollBudget`, which ran after the host
-  reported healthy and only covered the one hardcoded source) and the rule that
-  `RollingThirtyDays` requires a `PeriodAnchor` — without one `ResolvePeriod` throws on *every*
-  acquire, inside an HTTP handler, which the poller swallows and retries forever.
-- A source with `Enabled: false` is exempt from the credential and cadence checks so a
-  half-configured provider can sit in the file switched off. `SourceCode` is still required — it is
-  the entry's identity.
-- `appsettings.json` ships `ApiKey` as the empty string deliberately. A placeholder there would
-  satisfy `[Required]` and put the hole straight back.
-- **`PriceFeed:Resilience` is a flat section, not part of the source map**, and binds with
-  `ValidateDataAnnotations()` — its `[Range]` on `MaxAttempts` is on the options object's own
-  property, so the descent problem above does not apply to it. It is feed-wide for the same reason
-  the cadence is: the poller makes one request per tick and the retry policy is the same for every
-  source.
-- **`TotalTimeout` must fit `MaxAttempts × RequestTimeout` plus the backoff between attempts**, and
-  `PriceSourcesOptionsValidator.MinimumTotalTimeout` is what computes it — 3 × 10s at a 2s base
-  needs 36s, not the 35s that shipped until item 4. Below that the last attempt runs on a truncated
-  budget or never starts, so `MaxAttempts` reads as one number and behaves as another, and a
-  truncated attempt still spends its lease. `RetryBackoffBase` exists so that method reconstructs a
-  schedule this repository names rather than a Polly default it cannot see.
-- **`UseJitter = false` is set explicitly and must stay that way.** `HttpRetryStrategyOptions`
-  defaults it to **`true`**, unlike Polly's base options, so `MinimumTotalTimeout` modelled the
-  wrong schedule until `Backoff_schedule_matches_what_MinimumTotalTimeout_models` caught it — a
-  jittered delay measured 503ms against a 400ms nominal, so the sequence can outlast any fixed model
-  and the formula under-estimates. Jitter disperses many clients retrying in lockstep; there is one
-  single-instance poller issuing one request at a time, so it buys nothing and costs a computable
-  ceiling. That test is the only thing standing between a re-enabled default and a silent overspend.
-- **`PricePolling:StaleAfter`** is optional; null means twice `PollInterval`, derived once when the
-  cache is constructed. It lives beside `PollInterval` because its default is computed from it. The
-  rule (unset, or strictly longer than `PollInterval`) is
-  `PricePollingOptions.StaleAfterExceedsPollInterval`, a method rather than an inline `.Validate`
-  lambda so `PricePollingOptionsTests` calls the rule the host runs. A threshold at or below the
-  interval flags every price stale one poll after it arrives.
-
-### Tests
-
-`src/Aurum.Api.Tests` runs against a **real Postgres** via Testcontainers, not an in-memory or
-SQLite provider — hypertables and vector columns behave differently enough that a mock would
-validate nothing. One container per collection (`PostgresCollection`), migrated once; tests share
-the database and clean up their own rows in `InitializeAsync`.
-
-`InternalsVisibleTo` is set on `Aurum.App.Infrastructure.Data`, `Aurum.App.Infrastructure.Pricing`
-and `Aurum.Api` so tests can reach internal seams — `PostgresQuotaGovernor.ResolvePeriod`,
-`SourceCircuit`, `SourceCircuitStore`, `FailoverPriceFeed`, `Program.AddPriceSource<T>` — without
-widening any module's public surface.
-
-`ResilienceWiringTests` calls **the production registration**, `Program.AddPriceSource<T>`, and
-swaps only the primary handler for a counting stub. The subject is the order of two lines inside
-that method, so hand-composing the chain in the test would re-declare that order and then assert the
-test agrees with itself. It uses `TimeProvider.System`, unlike everything else here:
-`AddResilienceHandler` resolves `TimeProvider` from the container and hands it to Polly, so a
-`FakeTimeProvider` makes the retry backoff wait on a clock nothing advances and the test hangs
-rather than failing.
-
-The backoff check is split in two so a failure says which side moved.
-`PriceSourcesOptionsTests.MinimumTotalTimeout_sums_an_exponential_schedule` tests the formula with
-hand-worked expectations and no clock; `Backoff_schedule_matches_what_MinimumTotalTimeout_models`
-measures Polly at three base/attempt rows (~1.6s of real waiting). Keep the expectations typed in by
-hand — computing them with a `base × 2^i` loop re-implements the formula. Every other wiring test
-overrides `RetryBackoffBase` to 1ms, so `Resilience_defaults_are_the_shipped_attempt_count_and_backoff`
-is what notices the production default changing.
-
-The circuit, chain and cache tests (`SourceCircuitTests`, `FailoverPriceFeedTests`,
-`LatestQuoteCacheTests`) need **no container** and run in milliseconds. That is the payoff of
-measuring time by comparing two `TimeProvider` reads instead of holding a timer or an eviction, and it
-is half of D-14's case against Polly's breaker.
-
-`LatestQuoteCacheTests.Concurrent_records_leave_a_consistent_entry` runs rounds on dedicated threads
-behind a `Barrier` and checks after every round. Its first version checked only the final state and
-**passed every run against a deliberately broken check-then-set implementation** — only the last few
-writes decide the final state, and by then most writers had finished. Do not collapse it back into
-one long run, and do not swap the threads for `Task.Run`: pool threads arrive at the barrier
-staggered.
-
-**Tests that store ticks must date them within 30 days of the real clock.** `price_ticks` has
-TimescaleDB's 30-day retention policy, and its background job drops old chunks by the database
-server's real time, not the fake clock. A fixed date older than that loses its rows whenever the job
-runs mid-test, so the test fails only sometimes. Every class that stores ticks dates them from
-`PostgresFixture.RecentMinute`, the real time cut down to the whole minute.
-
-`LatestQuoteCacheWarmupTests` is the Postgres half of the cache. It inserts ticks with **seeded**
-source codes — `price_ticks.SourceCode` has a foreign key to `price_sources` — and deletes *every*
-tick in `InitializeAsync`, because warm-up reads the newest row per symbol whatever its source.
-`PricePollingServiceTests` deletes every tick for the same reason: a newer leftover row would be
-warmed first and the cache would then drop the test's quote as older. Both rely on the collection
-running one class at a time.
-
-`PricePollingServiceTests` does need Postgres, because the `price_sources` projection is half its
-subject. `A_poll_writes_the_cache_before_it_persists` makes the save fail with a source code that is
-not seeded, so the foreign key rejects it — no mocked `DbContext` needed. `WaitForCachedAsync` is
-`WaitUntilAsync` for the in-memory cache. Its waits are the fragile part: `ScriptedPriceFeed.WaitForCallAsync` completes when the
-feed is *entered*, and the poller writes the tick afterwards, so a test that asserts straight after
-that wait races the save. `WaitUntilAsync` polls the database for the side effect instead.
-
-`PriceHubTests` needs **no container**: an in-test `WebApplication` on `TestServer` with
-`AddSignalR`, `MapHub<PriceHub>`, the real cache and `DeltaEngine` on a `FakeTimeProvider`, and a real
-`HubConnection`. Transport is **long polling** via `server.CreateHandler()` — `TestServer` has no
-socket — so "nothing arrived" assertions wait 250ms. The fake clock is passed to the cache and engine
-by constructor and **not registered in the container**, so SignalR's own timers stay on real time.
-Messages are received as `JsonElement` so assertions check the wire (camelCase names, nulls inside
-the dictionary), not the record. It does not use `Program.cs`; that is `AurumApiFactory`.
-
-`AurumApiFactory` (`WebApplicationFactory<Program>`) boots the real `Program.cs` against the
-collection's Postgres. It **removes `PricePollingService` and replaces every `IPriceSource` with a
-faulting `ScriptedPriceSource`**: a poller in a test fires on its own timer and spends real requests
-against a 100-request month. So nothing fills the cache; a test that needs a held price calls
-`ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not `ConfigureAppConfiguration` —
-`Program.cs` reads the connection string before `Build()`, and only host settings are visible that
-early. API keys are set per config key (`GoldApiIo`, …) because the shipped file leaves them blank and
-D-9 refuses to boot. `Macro:Fred:ApiKey` is set for the same reason.
-
-`FredClientTests` needs **no container**: the real `QueryKeyAuthHandler` over a `CountingHandler`
-stub. `Modules/Macro/*.json` are real FRED answers from 2026-11-07, copied to the test output by the
-csproj. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market holidays); the
-payrolls file has October 2025 published late, with November. Re-save them with a
-real call rather than editing by hand, and check a new file for the key before committing it.
-
-`DeltaEngineReplayTests` replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine` and
-`SignificanceClassifier` on a fake clock and asserts the exact event list (D-21). The CSV rows are
-**stretches** (`fromMinute,toMinute,fromMid,toMid,source`), not single prices; `TickReplay` expands
-them to one price a minute and adds seeded mulberry32 noise (a port of `app/src/fixture/rng.ts`).
-Each stretch's `#` note says what it is for and which thresholds it clears, by how much — keep every
-margin above the noise ($0.20 a price) when editing it. The test owns its thresholds rather than
-reading `appsettings.json`, so tuning a placeholder does not break it. The expected list has
-repeats: the classifier has no waiting period; that lives in the insert (D-18).
-
-`QuotaHandlerTests` drives the handler through a real `HttpClient` over a stub inner handler rather
-than calling `SendAsync` directly, because `HttpClient` does its own exception handling on the way
-out — a test that bypasses it would not prove `QuotaExhaustedException` actually reaches
-`PricePollingService`'s catch clause. `Infrastructure/ListLogger.cs` captures log entries for the
-cases where the log line *is* the deliverable; the governor's denial message is the only one so far.
-
-Several tests exist to pin a decision rather than to find a bug — `Transport_failure_still_spends_the_lease`
-is the executable form of "no refunds," which was otherwise enforced only by the absence of a
-`catch`. Deleting one of those because it "tests nothing" removes the guard, not the redundancy.
-
-Concurrency tests give each caller its own `DbContext` — a `DbContext` is not thread-safe, and the
-concurrency being tested is between database transactions. A concurrency test that passes on the
-first try should be checked for whether it is actually racing before it is believed.
+- **GoldAPI's free tier is ~100 requests a month.** Nothing that serves a web request may call a
+  price service. Every retry attempt spends quota.
+- **`PostgresQuotaGovernor.AcquireAsync` stays one raw SQL upsert.** Don't rewrite it in EF (D-7).
+- **The injected `TimeProvider` stamps every time the app writes.** `now()` never appears in SQL;
+  raw SQL passes `CreatedAt`/`UpdatedAt` itself.
+- **Poll order is memory → tick save → publish → events** (D-16, D-18, D-19).
+- **`PriceTick.Retention` equals the migration's `INTERVAL '30 days'`.**
+- **Single instance only.** Startup migration, the poller, the event waiting period and SignalR
+  groups all assume one process.
+- Compose forwards only the variables listed under `api.environment`; a new `.env` setting without a
+  line there never reaches the container.
 
 ## Conventions
 
-- Decisions go in `ops/decisions/decisions.md` with the reasoning and the rejected alternatives, not
-  only in code, and are tracked. The roadmap (`plans/aurum-phased-plan.md`) and requirements
-  (`plans/aurum_brd.md`) are deliberately untracked — `plans/` is gitignored and exists only in the
-  working copy, so a fresh clone will not have them. Ask for the contents rather than assuming the
-  paths resolve.
-- Comments explain *why* and non-obvious behaviour, aimed at a mid-to-senior engineer. Skip language
-  basics and anything the code already states plainly.
-- Prose in this repo consistently names the failure mode a decision avoids. Match that when editing
-  docs or the decision log.
+- Decisions go in `ops/decisions/decisions.md` with reasoning and rejected alternatives. `plans/` is
+  gitignored (roadmap `aurum-phased-plan.md`, requirements `aurum_brd.md`); ask for the contents
+  rather than assuming the paths resolve.
+- Comments explain *why* and non-obvious behaviour for a mid-to-senior engineer.
+- Prose names the failure mode a decision avoids. Match that in docs and the decision log.
+- REST: `GET/POST /api/v1/{resources}`, `GET/PUT/DELETE /api/v1/{resources}/{id}`. No verbs,
+  lowercase.
+- Logging: always `IAppLogService<T>`, not `ILogger<T>`. Auto-enriched (UserId, TenantId, IpAddress,
+  UserAgent, RequestPath, HttpMethod, CorrelationId), queued, non-blocking. Success:
+  `LogAsync(LogType.ActionLog, action, details, 200)`. Error: `LogErrorAsync(action, exception, 500)`.
 
-  ### DI Registration
- 
-- **MediatR handlers**: auto-discovered via `AddMediatR()` assembly scanning
-- **FluentValidation validators**: auto-discovered via `AddValidatorsFromAssembly()`
-- **Everything else, including repositories**: `src/Aurum.Api/Program.cs`. There is no per-layer
-  `ServiceCollectionExtensions` — see the DI section above and D-5
-- **AppLogService**: `services.AddScoped(typeof(IAppLogService<>), typeof(AppLogService<>))`, with
-  `IAppLogQueue` as a **singleton** — it owns the channel, and a scoped queue would be a fresh empty
-  channel per request whose rows are dropped when the scope ends — and `AppLogDrainService` as a
-  hosted service that batches them into `app_logs`
-- **`IRequestContextAccessor`**: implemented by `HttpRequestContextAccessor` in `Aurum.Api`. The
-  Application layer must not reference `IHttpContextAccessor` directly — its "never does" is HTTP.
-  Outside a request (the poller, the drain) it yields `RequestContext.None` rather than throwing,
-  which is what lets a background job share one `IAppLogService<T>` with controllers
+## Testing (backend)
 
-### RESTful URL Conventions
- 
-- `GET /api/v1/{resources}` (list), `GET /api/v1/{resources}/{id}` (detail)
-- `POST /api/v1/{resources}` (create), `PUT /api/v1/{resources}/{id}` (update), `DELETE /api/v1/{resources}/{id}` (delete)
-- No verbs in URLs, always lowercase
- 
-### Application Logging (`IAppLogService<T>`)
- 
-- Used in controllers AND services — always use `IAppLogService<T>`, not `ILogger<T>`
-- Auto-enriched: UserId, TenantId, IpAddress, UserAgent, RequestPath, HttpMethod, CorrelationId
-- Non-blocking: queued via `IAppLogQueue`
-- Log success: `LogAsync(LogType.ActionLog, action, details, 200)`
-- Log error: `LogErrorAsync(action, exception, 500)` or `LogAsync(LogType.ActionLog, action, errorDetails, 500)`
- 
-### Unit Testing (Backend)
- 
-**Framework**: xUnit + Moq. Tests in `src/Aurum.Api.Tests/`.
- 
-**Every new CQRS feature must have test files for: controller, handlers, and validators.** All three are required — not optional.
- 
-**Test file naming and location**:
- 
-- `Controllers/{ControllerName}Tests.cs` — controller tests
-- `Handlers/{Feature}CommandHandlerTests.cs` — command handler tests
-- `Handlers/{Feature}QueryHandlerTests.cs` — query handler tests
-- `Validators/{Feature}CommandValidatorTests.cs` — validator tests
- 
-**Test method naming**: `{MethodName}_{Scenario}_{ExpectedResult}` (e.g., `Handle_WithValidId_ReturnsDto`)
- 
-#### Controller Tests
- 
-- Mock `IMediator` with `Mock<IMediator>` — never mock services directly
-- Mock `IAppLogService<TController>` for logging
-- Set up `ControllerContext` with `HttpContext` and user claims for auth tests
-- Follow Arrange/Act/Assert pattern
-- Test every endpoint for: success (200), not found (404 if applicable), error (500)
- 
-**What to test per endpoint type**:
- 
-| Endpoint  | Required Tests                                                     |
-| --------- | ------------------------------------------------------------------ |
-| GET by ID | 200 with valid ID, 404 with invalid ID, 500 on exception           |
-| GET list  | 200 with data, 200 with empty list, 500 on exception               |
-| POST      | 200/201 with valid input, 400 with invalid input, 500 on exception |
-| PUT       | 200 with valid update, 404 not found, 500 on exception             |
-| DELETE    | 200 with valid ID, 404 not found, 500 on exception                 |
- 
-**Common Moq patterns**:
- 
-- `_mockMediator.Setup(m => m.Send(It.IsAny<TCommand>(), It.IsAny<CancellationToken>())).ReturnsAsync(value)` — return data
-- `_mockMediator.Setup(m => m.Send(It.IsAny<TQuery>(), It.IsAny<CancellationToken>())).ReturnsAsync((T?)null)` — return null
-- `_mockMediator.Setup(m => m.Send(It.IsAny<TCommand>(), It.IsAny<CancellationToken>())).ThrowsAsync(new Exception(...))` — simulate error
-- `It.IsAny<T>()` — match any parameter value
-- `_mockMediator.Verify(m => m.Send(It.IsAny<TCommand>(), It.IsAny<CancellationToken>()), Times.Once)` — verify call happened
- 
-#### Handler Tests
- 
-- **Command handlers**: Mock `IUnitOfWork` and the feature's repository. Test success path (entity saved, correct return), not-found path (returns false/null), and verify `SaveChangesAsync` called.
-- **Query handlers**: ones that read only memory mock what they read (`GetLivePriceQueryHandlerTests`). Ones that read the
-  database use the Postgres collection (`GetPriceHistoryQueryHandlerTests`); never an in-memory provider. Test data returned,
-  empty result, null for missing ID.
-- Test file: `Handlers/{Feature}CommandHandlerTests.cs` and `Handlers/{Feature}QueryHandlerTests.cs`
- 
-#### Validator Tests
- 
-- Instantiate the validator directly (`new CreateXCommandValidator()`) — no mocking needed.
-- Call `ValidateAsync(command)` and assert on `result.IsValid` and `result.Errors`.
-- **Required tests per validator**: valid input passes, each required field empty fails, boundary values (max length exact, max length + 1).
-- Test file: `Validators/{Feature}CommandValidatorTests.cs`
+xUnit + Moq in `src/Aurum.Api.Tests/`, against a real Postgres via Testcontainers — never an
+in-memory or SQLite provider. **Every new CQRS feature needs controller, handler and validator test
+files.** Naming, required cases per endpoint and per-class notes are in that folder's CLAUDE.md.

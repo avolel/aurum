@@ -21,7 +21,7 @@ hand. The audit itself changes no code.
    scratchpad directory and the GitHub issues in step 7.
 4. **Report only what you checked.** Every finding cites a `file:line` you opened during this run.
    A finding you cannot point at is dropped.
-5. **Deliberate decisions are not bugs.** `CLAUDE.md` and `ops/decisions/decisions.md` record many
+5. **Deliberate decisions are not bugs.** The `CLAUDE.md` files and `ops/decisions/decisions.md` record many
    choices that look wrong out of context: the raw SQL in `PostgresQuotaGovernor`, no AutoMapper,
    MediatR pinned to 12.5.0, every registration in `Program.cs`, the cache being a
    `ConcurrentDictionary`. Flag one of these only when the code no longer matches the recorded
@@ -81,7 +81,9 @@ own debugging session, not in an audit. Write "Tests: not run" in the final repo
 
 Read the rules first, so the code is judged against what the repository says about itself.
 
-1. `CLAUDE.md`
+1. Every `CLAUDE.md`: the root one, then each one under `src/` (they hold the rules for their
+   folder). Then the owner's `plain-english-kiss` skill
+   (`~/.claude/skills/plain-english-kiss/`), which holds the plain-English and K.I.S.S. policies.
 2. `README.md` and `app/README.md`
 3. Every file in `docs/`
 4. `ops/decisions/decisions.md`, then the rest of `ops/`
@@ -102,20 +104,20 @@ summarised during a long read, and a finding held only in memory can be lost.
 
 ### Drift: the docs say one thing and the code does another
 
-- Every path, class, method and test named in `CLAUDE.md`, `README.md`, `docs/` and the decision log
+- Every path, class, method and test named in the `CLAUDE.md` files, `README.md`, `docs/` and the decision log
   exists, and does what the text says. Check by opening the file, not by trusting the name.
 - Every decision number cited in code or docs (`D-5`, `D-20`, …) exists in `decisions.md`, and
   says what the citing text claims.
 - **The compose list.** Every setting in `.env.example` that the app needs has a line under
   `api.environment` in `docker-compose.yml`. The names in `.env` match the names in `.env.example`.
-  `CLAUDE.md` lists what should be forwarded; check that list too.
+  The `CLAUDE.md` files list what should be forwarded; check that list too.
 - `PriceTick.Retention` matches the `INTERVAL` in the migration.
 - Package versions in `.csproj` match what the docs say: MediatR 12.5.0, no AutoMapper.
 - `docs/best-practices*.md` describe a target shape for later phases. Flag text that presents that
   target as something that exists today. Do not flag the missing code itself.
 - Comments that describe behaviour the code below them no longer has.
 
-### Rule breaks: the code breaks a rule in `CLAUDE.md`
+### Rule breaks: the code breaks a rule in a `CLAUDE.md` file or the `plain-english-kiss` skill
 
 - Controllers: required attributes, `try`/`catch` in every action, `CancellationToken` on every
   action, `ApiResponse<T>` only, success logging, no database or HTTP access.
@@ -151,12 +153,13 @@ summarised during a long read, and a finding held only in memory can be lost.
 Then, for every finding:
 
 1. Open the cited lines again and confirm the problem is really there.
-2. Check it is not a recorded decision (rule 5). Search `decisions.md` and `CLAUDE.md` for the
+2. Check it is not a recorded decision (rule 5). Search `decisions.md` and the `CLAUDE.md` files for the
    class or setting name.
 3. Merge findings that share one cause into a single issue that lists every place.
 4. Drop anything that is a guess. Put it under "Not filed: unconfirmed" in the final report.
-5. Write the proposed fix. It must keep every invariant in `CLAUDE.md` and every recorded decision,
-   and follow the K.I.S.S. policy: the smallest change that removes the problem. If the only fix
+5. Write the proposed fix. It must keep every invariant in the `CLAUDE.md` files and every recorded
+   decision, and follow the K.I.S.S. policy in the `plain-english-kiss` skill: the smallest change
+   that removes the problem. If the only fix
    would break a recorded decision, say so in the issue and propose updating the decision instead.
    If a fix is a real design choice, give two options with the tradeoff of each and recommend one.
 
@@ -206,8 +209,9 @@ gh issue create \
 
 Title: `[High|Medium|Low]` and a plain sentence that says what is wrong, not where.
 
-Body template. The issues are for the owner to read, so the repository's plain-English policy
-applies: everyday words, short sentences, no "we", every acronym spelled out the first time.
+Body template. The issues are for the owner to read, so the plain-English policy in the
+`plain-english-kiss` skill applies: everyday words, short sentences, no "we", every acronym spelled
+out the first time.
 
 ````markdown
 ## What is wrong
