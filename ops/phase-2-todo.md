@@ -170,10 +170,11 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
   - The figure has to arrive by about 08:50 to be used. The price arrives 15 minutes late and the poll
     runs every 15 minutes, so an 8:30 move is noticed around 8:45 to 9:00, and its background is
     gathered within 5 minutes after that.
-  - [ ] On the next CPI and jobs release days, run `ops/bench/fred_delay.py` from before 08:25 New York
-        time. It checks FRED every minute until 11:00. Release dates are on bls.gov/schedule. Write
-        the first minute the figure appears into D-22, with the date and series. One run per release
-        type is enough.
+  - [x] CPI, measured 2026-11-10: CPI posted at 09:12:46, 43 minutes after 08:30, and core CPI at
+        09:13:38, 44 minutes after. `last_updated` matched the first appearance to within a minute.
+        Details and the log file are in D-22.
+  - [ ] Jobs report: run `python3 ops/bench/fred_delay.py jobs 2026-11` on Friday 2026-12-04, from
+        before 08:25 New York time. Write the first minute the figure appears into D-22.
   - [ ] Then decide. Before about 08:50: FRED is enough, close this item. Later: add a BLS client
         for the release-morning value, and have the app replace it with FRED's first published value
         once FRED has it, so stored history still follows D-22.

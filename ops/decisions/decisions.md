@@ -2052,7 +2052,7 @@ interest-rate data is the monthly average rate on debt the government already ow
 market yield, and gold does not move on it.
 
 **What reading BLS figures through FRED costs.** BLS publishes at 8:30 New York time. FRED posts
-the figure some time later, and how much later has not been measured. If a move on a CPI or jobs
+the figure some time later: 43 minutes later for October 2026 CPI (measured below). If a move on a CPI or jobs
 morning is explained before FRED has the figure, the explanation is missing its main cause. The
 release calendar still knows the release happened at 8:30, even without the number. The delay gets
 measured on the next release day, before the explanation pipeline (Phase 2 item 6) is built. A BLS
@@ -2062,14 +2062,26 @@ The figure has to reach FRED by about 08:50 New York time to be used. The price 
 late and the app checks it every 15 minutes, so an 8:30 move is noticed around 8:45 to 9:00. Its
 background is gathered within 5 minutes after that.
 
-FRED's `last_updated` gives a rough answer for now. It is the time the series last changed, given in
-St. Louis time; I converted it to New York time. September CPI and core CPI were released
-2026-10-14 at 08:30 and last changed at 09:08, about 38 minutes later. October payrolls and
-unemployment were released 2026-11-06 at 08:30 and last changed at 10:43, about 2 hours 13 minutes
-later. Both are upper bounds, because FRED may have posted the figure earlier and changed the series
-again afterwards. Both are also later than 08:50. `ops/bench/fred_delay.py` checks FRED every minute
-on a release morning and logs the first minute the figure appears. That measured time replaces these
-numbers.
+**Measured on 2026-11-10, October CPI.** `ops/bench/fred_delay.py` checked FRED once a minute from
+08:25 to 09:37 New York time, with no missed checks and no errors. The log is
+`ops/bench/fred_delay-cpi-20261110.jsonl`. CPI (`CPIAUCSL`) first appeared at the 09:13 check, and
+FRED's `last_updated` for it reads 09:12:46: 43 minutes after 08:30. Core CPI (`CPILFESL`) first
+appeared at the 09:14 check, with `last_updated` 09:13:38: 44 minutes after. Both are later than
+08:50.
+
+`last_updated` is the time FRED last changed a series, given in St. Louis time; I converted it to New
+York time. On this release it fell inside the minute before the figure first appeared. So for a
+series FRED has not touched since, `last_updated` gives the posting time without a polled run. Two
+earlier readings taken that way:
+
+- September CPI and core CPI, released 2026-10-14 at 08:30: last changed 09:08, about 38 minutes
+  later.
+- October payrolls and unemployment, released 2026-11-06 at 08:30: last changed 10:43, about 2
+  hours 13 minutes later.
+
+Those two are still upper bounds, because FRED may have changed the series again after posting the
+figure. The jobs figures are posted by a different team at FRED than CPI, so the CPI match does not
+prove the jobs reading. The polled jobs run on 2026-12-04 checks it.
 
 **Not handled yet:** saving the rows. Paging is not handled either: if FRED reports more rows than
 it sent, the client throws instead of asking for the next page.
