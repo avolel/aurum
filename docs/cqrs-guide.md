@@ -643,8 +643,11 @@ public async Task GetByCode_WithKnownCode_ReturnsOk()
 **Command handlers:** fake `IUnitOfWork` and the repository. Test success (the change is made), not
 found (returns false or empty), and check whether saving was called.
 
-**Query handlers:** fake the repository, or use Entity Framework's in-memory database. Test that data
-comes back, that an empty result comes back empty, and that a missing ID returns nothing.
+**Query handlers:** a handler that only reads memory fakes what it reads (`GetLivePriceQueryHandlerTests`).
+A handler that reads the database runs against the real Postgres test collection
+(`GetPriceHistoryQueryHandlerTests`). Never use an in-memory database: it has no hypertables and no
+Postgres locking, so it would prove nothing. Test that data comes back, that an empty result comes back
+empty, and that a missing ID returns nothing.
 
 ```csharp
 [Fact]
@@ -725,5 +728,5 @@ public async Task Validate_SourceCodeOneOverMaxLength_HasError()
 | `src/Aurum.App.Infrastructure.Data/Repositories/IUnitOfWork.cs` | Saving, and running work in one transaction |
 | `src/Aurum.App.SharedKernel/Common/CursorPage.cs` | `CursorPage<T>` and `Cursor`, for lists that come back one page at a time |
 | `src/Aurum.App.SharedKernel/Common/Pagination.cs` | `PaginationHelper.ClampPageSize`, which keeps a page size between 1 and 500 |
-| `src/Aurum.App.Application/AppLogs/` | App logging. It's not a command/query feature, and there are no converted controllers yet. |
+| `src/Aurum.App.Application/AppLogs/` | App logging. It's not a command/query feature. Every controller uses it. |
 | `src/Aurum.Api/Program.cs` | Where MediatR and FluentValidation are set up |
