@@ -78,6 +78,36 @@ public class PipelineBehaviorTests
         appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), failure, 500, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public async Task LoggingBehavior_WhenCallerCancels_LogsNothingAndRethrows()
+    {
+        var appLog = new Mock<IAppLogService<TestQuery>>();
+        using var hungUp = new CancellationTokenSource();
+        hungUp.Cancel();
+        var cancelled = new OperationCanceledException(hungUp.Token);
+
+        var thrown = await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            Logging(appLog).Handle(new TestQuery("gold"), _ => throw cancelled, hungUp.Token));
+
+        Assert.Same(cancelled, thrown);
+        appLog.Verify(l => l.LogErrorAsync(
+            It.IsAny<string>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    // Pins the `when` filter: without it, a handler's own timeout would vanish from app_logs too.
+    [Fact]
+    public async Task LoggingBehavior_OnCancellationTheCallerDidNotAsk_LogsServerError()
+    {
+        var appLog = new Mock<IAppLogService<TestQuery>>();
+        var timedOut = new OperationCanceledException("handler timed out");
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            Logging(appLog).Handle(new TestQuery("gold"), _ => throw timedOut, Ct));
+
+        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), timedOut, 500, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     // --- ValidationBehavior ---
 
     private static InlineValidator<TestCommand> NameRequired()

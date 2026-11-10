@@ -46,6 +46,12 @@ public sealed class LoggingBehavior<TRequest, TResponse>(
 
             return response;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller hung up; the controller rethrows this too. Not a server fault, so no
+            // 500 row. A cancellation the caller didn't ask for (a timeout) falls through below.
+            throw;
+        }
         catch (Exception ex)
         {
             var statusCode = ex is ValidationException ? 400 : 500;
