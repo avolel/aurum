@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 OLLAMA = "http://localhost:11434"
+# The 0121 run also had qwen3:14b. It was dropped after it didn't fit on the card (D-6);
+# this list produces the 0147 run.
 MODELS = ["gemma4:12b-it-qat", "qwen3.5:9b"]
 CONTEXTS = [16384, 32768]  # the realistic target, and headroom
 RUNS = 3  # a laptop card slows down when hot; the median of 3 smooths that out
@@ -79,12 +81,12 @@ def measure(model, ctx, prompt):
 
 
 def main():
-    # The prompt is the concatenation of all the docs, truncated to FILLER_CHARS. 
-    # This is a realistic prompt size for the pipeline, and it ensures that the model is fully loaded into GPU memory.
+    # The prompt is the concatenation of all the docs, truncated to FILLER_CHARS.
+    # This is a realistic prompt size for the pipeline.
     prompt = "Summarise this in 5 bullet points:\n" + "".join(
         p.read_text() for p in sorted((REPO / "docs").glob("*.md"))
     )[:FILLER_CHARS]
-    
+
     version = call("/api/version")["version"]
     out_path = HERE / f"round1-{datetime.now():%Y%m%d-%H%M}.jsonl"
     print(f"Ollama {version}; raw results -> {out_path}")
