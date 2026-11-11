@@ -2,8 +2,9 @@
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
 `ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
-FRED client fetches figures, but nothing saves them yet. Nothing else has been started.
-I last checked it against the code on 2026-11-09.
+FRED client fetches figures, but nothing saves them yet, and a BLS client is planned for
+release-morning figures. Nothing else has been started.
+I last checked it against the code on 2026-11-10.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -145,18 +146,19 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
         2025-02-12 version should read 319.086, the 2025-01-15 version should have no January row,
         and a version from 2026-02-12 or later should read something else.
   - [x] By hand: `docker compose up --build` starts with the real key in `.env`.
-- [x] Detailed consumer prices and the jobs report, read from FRED instead of a BLS (Bureau of Labor
-      Statistics) client: core CPI (`CPILFESL`), jobs (`PAYEMS`) and the unemployment rate
-      (`UNRATE`), all as first published values (D-22). BLS's own API only gives today's revised
-      value, and the jobs report is revised twice in the following months.
+- [x] Detailed consumer prices and the jobs report, read from FRED (BLS is the Bureau of Labor
+      Statistics): core CPI (`CPILFESL`), jobs (`PAYEMS`) and the unemployment rate (`UNRATE`), all
+      as first published values (D-22). BLS's own API only gives today's revised value, and the jobs
+      report is revised twice in the following months, so stored history stays on FRED. The
+      release-morning value comes from BLS instead, because FRED posts too late (BLS client item
+      below).
   - [x] By hand: January 2025 jobs read 159069 on its release day (2025-02-07), had no row the day
         before, and read 159067 a month later.
 - **Dropped:** a Treasury FiscalData client. FRED already has the daily 10-year and 2-year yields
   (`DGS10`, `DGS2`). FiscalData's interest rates are the monthly average rate on debt the
   government already owes, not market yields (D-22).
-- [ ] **Not measured yet:** how long after 8:30 FRED posts a CPI or jobs figure. BLS has it at 8:30.
-      Check it on the next release day, before item 6. Add a BLS client only if the delay means a
-      release-morning move gets explained without its main cause.
+- [x] Measured how long after 8:30 FRED posts a CPI or jobs figure. BLS has it at 8:30. FRED is too
+      late, so the app adds a BLS client (next item, D-22).
   - Rough answer from FRED's `last_updated`, the time a series last changed. FRED gives it in St.
     Louis time; these are converted to New York time:
 
@@ -166,18 +168,37 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
     | Payrolls, unemployment (October figure) | 2026-11-06 08:30 | 10:43 | about 2 hours 13 minutes |
 
     These are upper bounds. `last_updated` is the latest change, so FRED may have posted the figure
-    earlier and changed the series again afterwards.
+    earlier and changed the series again afterwards. On 2026-11-10, `last_updated` matched CPI's
+    first appearance to within a minute, so the CPI reading is probably exact. The jobs reading
+    stays an upper bound until 2026-12-04.
   - The figure has to arrive by about 08:50 to be used. The price arrives 15 minutes late and the poll
     runs every 15 minutes, so an 8:30 move is noticed around 8:45 to 9:00, and its background is
     gathered within 5 minutes after that.
   - [x] CPI, measured 2026-11-10: CPI posted at 09:12:46, 43 minutes after 08:30, and core CPI at
         09:13:38, 44 minutes after. `last_updated` matched the first appearance to within a minute.
         Details and the log file are in D-22.
+  - [x] Decided 2026-11-10: CPI misses 08:50, so the app adds a BLS client for the release-morning
+        value (next item). The jobs figures were not polled. Their `last_updated` reading of about 2
+        hours is checked on 2026-12-04 under the next item.
+- [ ] BLS client for release-morning figures (D-23, plan in
+      `plans/aurum-phase-2-item-1-bls-client.md`). On release day, the newest month's value from BLS
+      is the first published value, so it doesn't break D-22. Older months still come from FRED.
+  - [ ] By hand: register a free BLS key at data.bls.gov/registrationEngine and put
+        `Macro__Bls__ApiKey` in `.env`. BLS allows 500 requests a day and 50 every 10 seconds.
+  - [ ] Add a BLS check to `ops/bench/fred_delay.py`, so the 2026-12-04 jobs run measures BLS's own
+        delay beside FRED's. Nothing yet proves BLS has the figure at 08:30 sharp.
   - [ ] Jobs report: run `python3 ops/bench/fred_delay.py jobs 2026-11` on Friday 2026-12-04, from
-        before 08:25 New York time. Write the first minute the figure appears into D-22.
-  - [ ] Then decide. Before about 08:50: FRED is enough, close this item. Later: add a BLS client
-        for the release-morning value, and have the app replace it with FRED's first published value
-        once FRED has it, so stored history still follows D-22.
+        before 08:25 New York time. Write the first minute each provider has the figure into D-22
+        (FRED) and D-23 (BLS).
+  - [ ] `BlsClient`, `BlsSeries`, `BlsObservation` and `BlsOptions` in `Pricing/Macro/`. It fetches
+        only, with one request for all four series: CPI, core CPI, payrolls and unemployment.
+  - [ ] Wiring in `Program.cs`, the settings in `appsettings.json`, `docker-compose.yml` and
+        `.env.example`, and the key in `AurumApiFactory`. A blank key stops the app at startup.
+  - [ ] `BlsClientTests`, with a real saved BLS answer. October 2026 CPI must read 337.476, the same
+        as FRED's first published value.
+  - [ ] D-23. The storage rule: BLS writes the month's row under the FRED series on release morning,
+        FRED's first published value replaces it later, and a mismatch is logged as a warning. The
+        save step must follow it.
 - [ ] The FRED client fills the existing `MacroSeries` and `MacroObservation` tables
       (`src/Aurum.App.Infrastructure.Data/Entities/Macro/`). Nothing writes to them yet.
 - [ ] Load past figures too, not only the latest, back as far as item 5's seed needs. Without them
@@ -192,8 +213,8 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 - [x] FRED's limits checked. It has no monthly allowance, only 120 requests a minute per key (on
       FRED's errors page, under 429). Going over can get the key blocked for a while. It stays out
       of `IQuotaGovernor` and uses the standard retry setup (D-22).
-- [x] FRED API key: `Macro__Fred__ApiKey` in `.env`, required at startup. No BLS key is needed,
-      and no check of BLS or FiscalData limits, since neither is called.
+- [x] FRED API key: `Macro__Fred__ApiKey` in `.env`, required at startup. No FiscalData key is
+      needed, since it isn't called. The BLS key and its limits are under the BLS client item.
 - [ ] Each figure keeps its date, so an explanation can say how old it is (finding 5).
 - [ ] `/api/v1/macro/snapshot`, with controller, handler and validator tests.
 - [ ] Decision written up: the release calendar, and how old figures are presented.
@@ -358,8 +379,8 @@ the scored test set was dropped (item 0).
 
 - [ ] New settings and API keys in `appsettings.json`, `.env.example` and `docker-compose.yml`.
       Compose passes on only the variables it lists, so a new key in `.env` needs its line there too.
-      The FRED key and the `Macro:Fred` section are in all three (2026-11-07). Still to add: the
-      job-to-model map.
+      The FRED key and the `Macro:Fred` section are in all three (2026-11-07). Still to add:
+      `Macro__Bls__ApiKey` and the `Macro:Bls` section (BLS client), and the job-to-model map.
 - [ ] The README's setup steps say to create the models' volume once, and to download the models.
       A fresh clone can't start without the volume (item 0).
 - [ ] `CLAUDE.md`, README and `docs/` brought up to date.
