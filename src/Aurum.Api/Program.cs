@@ -174,6 +174,17 @@ fredClient.AddStandardResilienceHandler();
 fredClient.AddHttpMessageHandler(sp =>
     new QueryKeyAuthHandler(sp.GetRequiredService<IOptions<FredOptions>>().Value.ApiKey));
 
+// Release-morning figures (D-23). The key goes in the POST body, so no auth handler. No QuotaHandler:
+// BLS limits per day, and a retried 429 costs at most 3 of the 500.
+builder.Services.AddOptions<BlsOptions>()
+    .BindConfiguration(BlsOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+builder.Services.AddHttpClient<BlsClient>((sp, http) =>
+        http.BaseAddress = sp.GetRequiredService<IOptions<BlsOptions>>().Value.BaseUrl)
+    .AddStandardResilienceHandler();
+
 // ── Health ────────────────────────────────────────────────────────────────────────────────────
 
 // /health is liveness; /health/ready checks dependencies, selected by the "ready" tag.

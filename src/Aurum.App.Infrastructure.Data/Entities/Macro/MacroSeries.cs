@@ -12,7 +12,7 @@ public class MacroSeries : AuditableEntity
     /// <summary>Provider's series identifier, e.g. FRED's <c>CPIAUCSL</c>.</summary>
     public string Code { get; set; } = null!;
 
-    /// <summary>Which upstream serves this series. Only <c>fred</c> today; BLS and Treasury figures come through FRED (D-22).</summary>
+    /// <summary>Which upstream serves this series. Only <c>fred</c> today; BLS and Treasury figures come through FRED (D-22). BLS's release-morning value is stored under the FRED series, not a <c>bls</c> one (D-23).</summary>
     public string Provider { get; set; } = null!;
 
     public string Title { get; set; } = null!;

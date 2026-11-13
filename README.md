@@ -10,8 +10,12 @@ explanation for each big price move, written by an AI model running on my own ma
 in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
 figures such as consumer prices, the jobs report and Treasury yields from FRED, the St. Louis Fed's
 free data service (item 1, first step). FRED also carries the figures the Bureau of Labor Statistics
-publishes, as they were first published, so the app has no separate client for that bureau or for
-the Treasury (D-22). Nothing saves those figures yet.
+(BLS) publishes, as they were first published, so the app has no client for the Treasury (D-22).
+But FRED posts a new CPI (consumer price index) figure 40 minutes or more after BLS releases it at
+08:30 New York time. That is too late to explain the price move it causes. So on release morning
+the app reads the newest month straight from BLS, and FRED's copy replaces it later (D-23). Nothing
+calls either client or saves the figures yet. `ops/bench/fred_delay.py` measures how late each
+provider posts a figure; the jobs report on 2026-12-04 is its next run.
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
@@ -242,15 +246,17 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-22** so far. `ops/phase-2-todo.md` lists the next work in an order
-where each item can be checked when it is finished. Its first item closed D-6, and the FRED client
-added D-22. A decision number is only given out when the decision is actually made, so the next one
-will be D-23.
+The decision log has **D-1 to D-23** so far. `ops/phase-2-todo.md` lists the next work in an order
+where each item can be checked when it is finished. Its first item closed D-6, the FRED client
+added D-22, and the BLS client added D-23. A decision number is only given out when the decision is
+actually made, so the next one will be D-24.
 
 ## Where things are
 
 ```
 docker-compose.yml                 starts the database, Ollama (a local AI model) and the API
+ops/bench/                         measurements run by hand: the AI model's speed (D-6), and how
+                                   late FRED and BLS post a figure (D-22, D-23)
 ops/db/init/                       one-time database setup, runs only on an empty database
 ops/decisions/                     the decision log (D-1 onward; the code refers to these numbers)
 ops/phase-1-todo.md                Phase 1's work list, all done
@@ -265,7 +271,8 @@ src/Aurum.App.Infrastructure.Pricing/
   Deltas/                          how much the price moved, and which moves become events
   Jobs/                            the timer that checks the price
   Realtime/                        the interface the timer uses to send prices to apps
-  Macro/                           fetches economic figures from FRED; nothing saves them yet
+  Macro/                           fetches economic figures from FRED, and from BLS on release
+                                   morning; nothing saves them yet
 src/Aurum.App.Application/         the rules for handling requests, and logging
   Prices/                          the four read endpoints' queries, input checks and answers
 src/Aurum.Api/                     the web API; Program.cs sets everything up
@@ -293,7 +300,7 @@ as a description of code you can use today.
 ## Running it
 
 ```bash
-cp .env.example .env      # fill in the database password, the three price-service keys and the FRED key
+cp .env.example .env      # fill in the database password, the three price-service keys, and the FRED and BLS keys
 docker volume create aurum_aurum-postgres-data     # once per machine
 docker volume create aurum_aurum-ollama-models     # once per machine
 docker compose up --build
@@ -312,11 +319,12 @@ the app at startup. Without that, the app would start fine and then be turned aw
 on every request for a month, and every turned-away request still counts against the allowance. A
 fake key in the settings file would bring that problem back. The FRED key follows the same rule.
 FRED has no monthly allowance, but without a key every request would fail. FRED's only limit is 120
-requests a minute per key (D-22).
+requests a minute per key (D-22). The BLS key follows the same rule. BLS allows 500 requests a day
+and 50 every 10 seconds (D-23). A free key comes from data.bls.gov/registrationEngine.
 
 **A setting in `.env` only reaches the API if `docker-compose.yml` lists it.** Compose passes on
 the variables named under the `api` service and nothing else, and it gives no warning about the
-rest. The list covers the three price-service keys and the FRED key, switching each price service on or off
+rest. The list covers the three price-service keys, the FRED and BLS keys, switching each price service on or off
 (`PriceSources__ApiNinjas__Enabled=false`), GoldAPI's monthly limit, the check interval and the
 number of tries. Anything else is changed in `src/Aurum.Api/appsettings.json`, or by adding a line
 to `docker-compose.yml`.

@@ -2,9 +2,9 @@
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
 `ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
-FRED client fetches figures, but nothing saves them yet, and a BLS client is planned for
-release-morning figures. Nothing else has been started.
-I last checked it against the code on 2026-11-10.
+FRED client fetches figures and the BLS client fetches release-morning figures, but nothing saves
+them yet. Nothing else has been started.
+I last checked it against the code on 2026-11-11.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -183,20 +183,27 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 - [ ] BLS client for release-morning figures (D-23, plan in
       `plans/aurum-phase-2-item-1-bls-client.md`). On release day, the newest month's value from BLS
       is the first published value, so it doesn't break D-22. Older months still come from FRED.
-  - [ ] By hand: register a free BLS key at data.bls.gov/registrationEngine and put
+  - [x] By hand: register a free BLS key at data.bls.gov/registrationEngine and put
         `Macro__Bls__ApiKey` in `.env`. BLS allows 500 requests a day and 50 every 10 seconds.
-  - [ ] Add a BLS check to `ops/bench/fred_delay.py`, so the 2026-12-04 jobs run measures BLS's own
-        delay beside FRED's. Nothing yet proves BLS has the figure at 08:30 sharp.
+  - [x] Add a BLS check to `ops/bench/fred_delay.py`, so the 2026-12-04 jobs run measures BLS's own
+        delay beside FRED's. Nothing yet proves BLS has the figure at 08:30 sharp. Each minute the
+        script sends one BLS request for both series, so a full morning spends about 155 of the key's
+        500 a day. Every log line now has a `source` field (`fred` or `bls`); the 2026-11-10 file has
+        none. The summary prints when each provider first had the figure and how long FRED trailed.
+  - [ ] Dry run before 2026-12-04, on another day: `python3 ops/bench/fred_delay.py cpi 2026-09 --now`,
+        then Ctrl-C after a few rounds. Both providers should show `present=True` at once. The live
+        BLS call has never been run. Test on another day because both runs append to the same dated
+        file.
   - [ ] Jobs report: run `python3 ops/bench/fred_delay.py jobs 2026-11` on Friday 2026-12-04, from
         before 08:25 New York time. Write the first minute each provider has the figure into D-22
         (FRED) and D-23 (BLS).
-  - [ ] `BlsClient`, `BlsSeries`, `BlsObservation` and `BlsOptions` in `Pricing/Macro/`. It fetches
+  - [x] `BlsClient`, `BlsSeries`, `BlsObservation` and `BlsOptions` in `Pricing/Macro/`. It fetches
         only, with one request for all four series: CPI, core CPI, payrolls and unemployment.
-  - [ ] Wiring in `Program.cs`, the settings in `appsettings.json`, `docker-compose.yml` and
+  - [x] Wiring in `Program.cs`, the settings in `appsettings.json`, `docker-compose.yml` and
         `.env.example`, and the key in `AurumApiFactory`. A blank key stops the app at startup.
-  - [ ] `BlsClientTests`, with a real saved BLS answer. October 2026 CPI must read 337.476, the same
+  - [x] `BlsClientTests`, with a real saved BLS answer. October 2026 CPI must read 337.476, the same
         as FRED's first published value.
-  - [ ] D-23. The storage rule: BLS writes the month's row under the FRED series on release morning,
+  - [x] D-23. The storage rule: BLS writes the month's row under the FRED series on release morning,
         FRED's first published value replaces it later, and a mismatch is logged as a warning. The
         save step must follow it.
 - [ ] The FRED client fills the existing `MacroSeries` and `MacroObservation` tables

@@ -15,6 +15,7 @@ public sealed record FredSeries(string Code, string Title, string Units, string 
         new("PCEPI", "Personal Consumption Expenditures Price Index", "Index 2017=100", "Monthly", IsRelease: true);
 
     // BLS figures read from FRED, because BLS's own API serves revised values only (D-22).
+    // On release morning BlsClient supplies the newest month under these series (D-23).
     public static readonly FredSeries CoreCpi =
         new("CPILFESL", "Consumer Price Index for All Urban Consumers: All Items Less Food and Energy", "Index 1982-1984=100", "Monthly", IsRelease: true);
 
