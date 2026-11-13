@@ -52,6 +52,7 @@ When you add a decision, add a line for it here too.
 - [D-20 — The read endpoints are ordinary controllers, and the Application layer reads the pricing code directly](#d-20--the-read-endpoints-are-ordinary-controllers-and-the-application-layer-reads-the-pricing-code-directly)
 - [D-21 — The replay test is written as stretches, and the test API removes the poller and the price services](#d-21--the-replay-test-is-written-as-stretches-and-the-test-api-removes-the-poller-and-the-price-services)
 - [D-22 — FRED figures are stored as first published, and FRED stays out of the quota chain](#d-22--fred-figures-are-stored-as-first-published-and-fred-stays-out-of-the-quota-chain)
+- [D-23 — BLS supplies the release-morning figure, and FRED's first published value replaces it](#d-23--bls-supplies-the-release-morning-figure-and-freds-first-published-value-replaces-it)
 
 ## The machine these decisions were made on
 
@@ -2009,7 +2010,8 @@ Turned down:
 - `Macro:Fred:ApiKey` is required. A blank key stops the app at startup, the same rule as D-9.
 - The BLS (Bureau of Labor Statistics) figures come from FRED too, as first published values: core
   CPI without food and energy (`CPILFESL`), jobs outside farming (`PAYEMS`) and the unemployment
-  rate (`UNRATE`). There is no BLS client and no Treasury FiscalData client.
+  rate (`UNRATE`). There is no Treasury FiscalData client. On release morning only, the newest
+  month comes from BLS instead (D-23).
 
 Decided by me on 2026-10-29, built on 2026-11-07. The BLS and Treasury part was decided and built on
 2026-11-07.
@@ -2056,7 +2058,7 @@ the figure some time later: 43 minutes later for October 2026 CPI (measured belo
 morning is explained before FRED has the figure, the explanation is missing its main cause. The
 release calendar still knows the release happened at 8:30, even without the number. The delay gets
 measured on the next release day, before the explanation pipeline (Phase 2 item 6) is built. A BLS
-client is added only if the delay turns out to matter.
+client is added only if the delay turns out to matter. It did: see D-23.
 
 The figure has to reach FRED by about 08:50 New York time to be used. The price arrives 15 minutes
 late and the app checks it every 15 minutes, so an 8:30 move is noticed around 8:45 to 9:00. Its
@@ -2097,6 +2099,69 @@ Turned down:
 - **Counting FRED requests in the quota governor.** It would add a database write to every request
   to protect a monthly allowance FRED doesn't have.
 - **A BLS client.** It gets figures at 8:30 sharp, but only revised ones, and it needs its own key
-  and a daily limit the governor has no period for.
+  and a daily limit the governor has no period for. **Reversed by D-23 on 2026-11-10:** FRED posts
+  too late, and on release day BLS's newest month is the first published value.
 - **A Treasury FiscalData client.** It would fetch yields the app already has, or an average rate
   on old debt that gold does not react to.
+
+## D-23 — BLS supplies the release-morning figure, and FRED's first published value replaces it
+
+**DECIDED:**
+
+- On a release morning, the app reads the month just released from BLS (the Bureau of Labor
+  Statistics) for four figures: CPI, core CPI, jobs outside farming and the unemployment rate. Every
+  older month, and the value kept for good, still comes from FRED as first published (D-22).
+- **One row per figure per month, and FRED overwrites it.** BLS writes the month's row under the
+  existing FRED series, such as `CPIAUCSL`. When FRED posts its first published value, that value
+  replaces the BLS one, and a mismatch is logged as a warning. Readers never need to know BLS exists.
+  The save step is not built yet; it must follow this rule.
+- `BlsClient` sends one `POST` per check, with every series in one request and the key in the
+  request body.
+- `BlsClient` is not behind `QuotaHandler` or the quota governor. It uses the standard retry setup.
+- `Macro:Bls:ApiKey` is required. A blank key stops the app at startup, the same rule as D-9.
+
+Decided by me on 2026-11-10, built on 2026-11-11.
+
+**Why BLS now, when D-22 turned it down.** D-22 turned BLS down because its API only gives today's
+revised value. That is still true, but it does not matter on release morning. On release day, the
+newest month's value *is* the first published value; revisions only come at later releases. FRED, on
+the other hand, posted October 2026 CPI 43 minutes after the 08:30 release and core CPI 44 minutes
+after (measured in D-22). The explanation for a release-morning move is gathered by about 08:50 to
+09:05, so without BLS it would be missing its main cause. The jobs figures look about two hours late
+on FRED, judging by `last_updated`.
+
+**Why the same row, and FRED wins.** Readers then ask one series for one month and get the right
+number, whichever provider filled it. FRED's value is the one D-22 trusts for good, so it has the
+last word. The two should match; a mismatch is logged rather than silently kept, because it would
+mean the release-morning explanation used a different number than the stored one. On 2026-11-11 BLS
+read 337.476 for October CPI and 339.9 for core CPI, the same as FRED's first published values.
+
+**Why one `POST` with the key in the body.** BLS's daily limit of 500 counts requests, and one
+request covers up to 50 series. BLS's docs only show the key in a `POST` body, so
+`QueryKeyAuthHandler`, which adds it to the web address, can't be reused.
+
+**BLS copies the key into its refusal.** A bad key gets HTTP 200 with
+`"status":"REQUEST_NOT_PROCESSED"` and the message "The key:… provided by the User is invalid",
+with the key written out in full. So `BlsClient` replaces the key with `[key]` in the answer before
+reading it. Without that, the refusal message, which the client puts in its exception, would copy
+the key into the logs. `GetObservations_ErrorStatus_ThrowsWithoutTheKey` uses that real message.
+
+**Why not behind the quota governor.** BLS allows 500 requests a day and 50 every 10 seconds. The
+governor only knows monthly periods, and use is a handful of requests on a release morning. The
+standard retry setup retries a 429 ("too many requests") up to 3 times, costing at most 3 more of the
+day's 500. That's acceptable.
+
+**Not proven yet: that BLS has the figure at 08:30 sharp.** The jobs run of `ops/bench/fred_delay.py`
+on 2026-12-04 checks BLS beside FRED. Its result goes here. If BLS is also late, this decision gets
+rethought before anything relies on the client.
+
+**Not handled yet:** the save step and the overwrite itself, the release calendar that calls the
+client, and counting the daily limit. PCE is not covered: it comes from BEA (the Bureau of Economic
+Analysis), not BLS.
+
+Turned down:
+
+- **A separate `bls` series beside the FRED one.** Every reader would have to know two series hold
+  the same figure and pick between them.
+- **Holding the explanation until FRED posts.** For jobs that could be two hours, far past the
+  5-minute goal.

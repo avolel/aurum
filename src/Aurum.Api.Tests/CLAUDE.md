@@ -105,7 +105,10 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   `ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not
   `ConfigureAppConfiguration` — `Program.cs` reads the connection string before `Build()`, and only
   host settings are visible that early. API keys are set per config key (`GoldApiIo`, …) and
-  `Macro:Fred:ApiKey` is set, because blank keys refuse to boot (D-9).
+  `Macro:Fred:ApiKey` and `Macro:Bls:ApiKey` are set, because blank keys refuse to boot (D-9).
+- **`BlsClientTests`** needs **no container**: `BlsClient` over a `CountingHandler` stub that records
+  the `POST` body. `Modules/Macro/bls-2026.json` is a real BLS answer for all four series from
+  2026-11-11. The refusal body is BLS's real one, key included, so the scrub test is honest.
 - **`FredClientTests`** needs **no container**: the real `QueryKeyAuthHandler` over a
   `CountingHandler` stub. `Modules/Macro/*.json` are real FRED answers from 2026-11-07, copied to the
   test output by the csproj. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market

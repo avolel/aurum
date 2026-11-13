@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done, and so is the first step of item 1, the FRED client. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done, and so are item 1's FRED client and BLS client. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -21,7 +21,8 @@ Numbers in brackets, like (D-7), point to entries in the decision log.
 Everything here was checked against the code on 2026-10-15, after item 8 (the read endpoints) was
 built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audit found had drifted
 from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15, and later that day its
-three jobs and core-price series.
+three jobs and core-price series. On 2026-11-12 the BLS client and the BLS check in
+`ops/bench/fred_delay.py` were added to sections 2, 3, 10, 13 and 15.
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -146,7 +147,8 @@ aurum/
 │                                    created by hand once (README, "Running it")
 ├── .env                           ← your secrets and connection strings (not committed)
 ├── ops/
-│   ├── bench/                     ← the model speed and memory measurements behind D-6
+│   ├── bench/                     ← the model speed and memory measurements behind D-6, and
+│   │                                `fred_delay.py`: how late FRED and BLS post a figure (D-22, D-23)
 │   ├── db/init/01-extensions.sql  ← turns on TimescaleDB and pgvector, once, on an empty database
 │   ├── decisions/decisions.md     ← the decision log
 │   ├── phase-1-todo.md            ← Phase 1's work list, all done
@@ -204,6 +206,7 @@ latest-price cache, the circuit breakers, the request counter and the service se
 | `Constants/SupportedSymbol.cs` | The price symbols: `XAUUSD` (gold in US dollars) and `XAGUSD` (silver). `All` lists both. `Find` matches a symbol typed in any case and returns the stored spelling. |
 | `Constants/PriceEventDirection.cs` | `"Up"` and `"Down"`, for the `price_events` table. |
 | `Constants/FredConstants.cs` | FRED's date format (`yyyy-MM-dd`) and the `"."` it sends for a period with no figure. |
+| `Constants/BlsConstants.cs` | BLS's success status (`REQUEST_SUCCEEDED`), the `"-"` it sends for a period with no figure, and `M13`, its annual average, which the client skips. |
 | `Entities/AuditableEntity.cs` | Base class that gives every table `CreatedAt` and `UpdatedAt`. |
 
 **`Aurum.App.Infrastructure.Data`** — the database layer.
@@ -253,7 +256,11 @@ Aurum.App.Infrastructure.Pricing/
 │   ├── FredSeries.cs                   ← the ten FRED series, and which are releases
 │   ├── FredClient.cs                   ← asks FRED for a series and reads the answer
 │   ├── FredObservation.cs              ← one period's value, and its publish date for a release
-│   └── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
+│   ├── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
+│   ├── BlsSeries.cs                    ← the four BLS series, each tied to the FRED series it fills
+│   ├── BlsClient.cs                    ← one request for a year of all four; checks BLS's status
+│   ├── BlsObservation.cs               ← one month's value, or none when BLS sends "-"
+│   └── BlsOptions.cs                   ← `Macro:Bls` settings: web address and key
 └── Deltas/
     ├── DeltaEngine.cs                  ← works out price moves over six windows
     ├── TickRingBuffer.cs               ← a fixed-size list of recent prices
@@ -327,7 +334,11 @@ it goes in this file.
 11. **Economic data.** Binds `Macro:Fred` and checks it at startup, so a blank FRED key stops the
     app. Registers `FredClient`'s web client with the standard retry setup and `QueryKeyAuthHandler`
     for the key. It has no request counter: FRED has no monthly allowance, only 120 requests a
-    minute (D-22). Nothing calls the client yet.
+    minute (D-22). Then the same for `Macro:Bls` and `BlsClient`, which fetches the newest month
+    of CPI and jobs figures from BLS (the Bureau of Labor Statistics) on release morning, because
+    FRED posts them 40 minutes or more later (D-23). BLS takes its key in the request body, so it
+    has no `QueryKeyAuthHandler`, and no request counter either: its limit is 500 requests a day.
+    Nothing calls either client yet.
 12. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
 13. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
@@ -347,7 +358,7 @@ This matters, because getting it wrong causes bugs that only show up under load.
 | `SignalRPriceBroadcaster` | Singleton | The poller is a singleton and holds it. It keeps no state; SignalR's hub context, which it uses, is a singleton too. |
 | `PriceHub` | New for every call from an app | SignalR creates a hub for each call and throws it away. Anything that must last goes in the cache, the engine or SignalR's groups. |
 | `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IAppLogService<T>`, `IUnitOfWork` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, or one poll. |
-| Each price service class, and `FredClient` | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
+| Each price service class, `FredClient` and `BlsClient` | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
 
 **The singletons never hold a `DbContext`.** When they need the database (for warm-up at startup),
 they create a short scope, use it, and throw it away. If you add a singleton that reads the
@@ -1014,7 +1025,7 @@ underscore in a variable name stands for a nested section, so
 
 **`docker-compose.yml` passes on only the variables it lists**, not everything in `.env`. A setting
 put in `.env` without a matching line there never reaches the app, and nothing warns you. The list
-is: the connection string, the three price-service keys, `Macro__Fred__ApiKey`, each service's `Enabled`, GoldAPI's
+is: the connection string, the three price-service keys, `Macro__Fred__ApiKey`, `Macro__Bls__ApiKey`, each service's `Enabled`, GoldAPI's
 `MonthlyRequestLimit`, `PricePolling__PollInterval`, `PriceFeed__Resilience__MaxAttempts` and
 `Ollama__BaseUrl`. Anything else is changed in `appsettings.json`, or by adding a line to
 `docker-compose.yml`.
@@ -1029,6 +1040,7 @@ is: the connection string, the three price-service keys, `Macro__Fred__ApiKey`, 
 | `DeltaEngine` | `MaxSamplesPerSymbol`, `ToleranceFraction`, `MinSamplesForVolatility` | 8,640, 0.5, 5 | Price-move memory size and rules. |
 | `Significance` | `ThresholdProfile`, `CrossSourceMagnitudeMultiplier`, `Windows:<code>:MinPercent`, `Windows:<code>:Cooldown` | `default-v1`, 2.0, see below | Which moves become events, and how long a window stays quiet after one. |
 | `Macro:Fred` | `BaseUrl`, `ApiKey` | `https://api.stlouisfed.org/fred/`, blank — **must be set** | FRED, for economic figures. `BaseUrl` must end in a slash, or the request path replaces `/fred`. Compose fills the key from `.env`'s `Macro__Fred__ApiKey`. |
+| `Macro:Bls` | `BaseUrl`, `ApiKey` | `https://api.bls.gov/publicAPI/v2/`, blank — **must be set** | BLS, for the newest month of CPI and jobs figures on release morning (D-23). `BaseUrl` must end in a slash, or the request path replaces `/v2`. Compose fills the key from `.env`'s `Macro__Bls__ApiKey`. |
 | `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2, `gemma4:12b-it-qat` (D-6). **Nothing reads it yet.** Local models are for this personal build; production would use a paid cloud AI service instead. |
 
 The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
@@ -1065,6 +1077,7 @@ fix.
 | A `MinPercent` or `Cooldown` is zero or less, or `CrossSourceMagnitudeMultiplier` is below 1. | `SignificanceOptions.ValuesAreInRange` |
 | `Significance:ThresholdProfile` is empty, which includes the whole section being missing. | `[Required]` on `SignificanceOptions` |
 | `Macro:Fred:ApiKey` is blank, or `Macro:Fred:BaseUrl` is missing. | `[Required]` on `FredOptions` |
+| `Macro:Bls:ApiKey` is blank, or `Macro:Bls:BaseUrl` is missing. | `[Required]` on `BlsOptions` |
 
 The month check, worked through with the shipped values: 31 days ÷ 15 minutes = 2,976 polls. Each
 poll can take up to 3 tries, so up to 8,928 requests. API Ninjas allows 10,000, so it passes. GoldAPI's
@@ -1221,7 +1234,7 @@ Aurum.Api.Tests/
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no price timer and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
-├── Modules/Macro/             ← FredClientTests, and three real FRED answers saved as files
+├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
 ├── Validators/                ← one file per input check
@@ -1236,6 +1249,7 @@ Aurum.Api.Tests/
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 | | `FredClientTests` (a fake network; no request reaches FRED) |
+| | `BlsClientTests` (a fake network; no request reaches BLS) |
 
 Run one class, or a set of fast tests:
 
@@ -1256,8 +1270,8 @@ pointed at the test database, but removes the price timer and swaps the three pr
 stand-ins that fail without making a web request. A timer inside a test fires when it likes, so
 results would change from run to run, and it would spend real requests from a 100-request month.
 Because nothing polls, the saved price starts empty. A test that needs one records it into
-`ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also sets a stand-in FRED
-key, because a blank one stops the app at startup.
+`ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also sets stand-in FRED and
+BLS keys, because a blank one stops the app at startup.
 
 `FredClientTests` reads three real FRED answers saved on 2026-11-07: `fred-cpiaucsl-initial-release.json`,
 `fred-payems-initial-release.json` and `fred-dgs10.json`. They are kept because FRED's answer for
@@ -1265,6 +1279,12 @@ first published values is the part least likely to match its documentation. The 
 10-year files contain real missing values: October 2025 consumer prices (never published, because
 of the government shutdown) and two market holidays. In the jobs file, October 2025 came out late,
 on the same day as November.
+
+`BlsClientTests` reads `bls-2026.json`, a real BLS answer for all four series saved on 2026-11-11.
+The fake network records the request body, so a test can check that every series, the year and the
+key were sent. BLS answers a refusal (bad key, daily limit reached) with a normal 200 status and
+copies the key into the message. The refusal test uses BLS's real refusal text, key included, to
+prove the key never reaches the error the client throws.
 
 `DeltaEngineReplayTests` checks the price-move feature and the classifier end to end, on seven hours
 of made-up prices. The prices live in `Modules/Pricing/DeltaEngineReplay.csv`. Each row is a stretch,
@@ -1319,6 +1339,7 @@ batch of app work, together with the Phase 2 explanation feed. The phone version
 | Add a new table | A new entity in `Entities/`, its setup in `AurumDbContext.OnModelCreating`, then `dotnet ef migrations add <Name> --project src/Aurum.App.Infrastructure.Data`. |
 | Register a new class | `src/Aurum.Api/Program.cs`. Nowhere else (D-5). |
 | Add a FRED series | A new field in `Macro/FredSeries.cs`, added to `All`. Set `IsRelease` to true only for a figure with a publish date, such as CPI; those come back as first published values (D-22). |
+| Measure how late FRED and BLS post a figure | `ops/bench/fred_delay.py`, run by hand before 08:25 New York time on release morning. It logs one line per series per minute, with a `source` field, and ends with the gap between BLS and FRED. Each morning spends about 155 of BLS's 500 requests a day. |
 | Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 
 ---

@@ -35,6 +35,7 @@ public sealed class AurumApiFactory(PostgresFixture postgres) : WebApplicationFa
             builder.UseSetting($"PriceSources:{configKey}:ApiKey", "test-key");
         }
         builder.UseSetting("Macro:Fred:ApiKey", "test-key");
+        builder.UseSetting("Macro:Bls:ApiKey", "test-key");
 
         builder.ConfigureTestServices(services =>
         {
