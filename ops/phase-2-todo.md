@@ -2,8 +2,8 @@
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
 `ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
-FRED client fetches figures and the BLS client fetches release-morning figures, but nothing saves
-them yet. Nothing else has been started.
+FRED client fetches figures and the BLS client fetches release-morning figures. `FredImporter` can
+save FRED's figures, but no timer calls it yet. Nothing else has been started.
 I last checked it against the code on 2026-11-11.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
@@ -207,7 +207,15 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
         FRED's first published value replaces it later, and a mismatch is logged as a warning. The
         save step must follow it.
 - [ ] The FRED client fills the existing `MacroSeries` and `MacroObservation` tables
-      (`src/Aurum.App.Infrastructure.Data/Entities/Macro/`). Nothing writes to them yet.
+      (`src/Aurum.App.Infrastructure.Data/Entities/Macro/`). Plan in
+      `plans/aurum-phase-2-item-1-fred-save.md`.
+  - [x] `FredImporter` saves one series' rows. It creates the series row the first time, adds new
+        dates, skips unchanged rows and overwrites changed ones. A changed value on a release series
+        is logged as a warning (D-23). `ReleasedAt` is 08:30 New York time on the publish date.
+        `FredImporterTests` covers it against a real database.
+  - [ ] `FredPollingService`: every `Macro:Fred:RefreshInterval` (6 hours), fetch each series from
+        60 days before its newest stored date (a year back when empty) and save it. Register it in
+        `Program.cs`, and remove it in `AurumApiFactory` so tests never call the real FRED.
 - [ ] Load past figures too, not only the latest, back as far as item 5's seed needs. Without them
       the seed has prices but no economic background.
 - [ ] A release calendar, so a new figure is fetched right after its known publish time (8:30 New

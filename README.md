@@ -13,8 +13,8 @@ free data service (item 1, first step). FRED also carries the figures the Bureau
 (BLS) publishes, as they were first published, so the app has no client for the Treasury (D-22).
 But FRED posts a new CPI (consumer price index) figure 40 minutes or more after BLS releases it at
 08:30 New York time. That is too late to explain the price move it causes. So on release morning
-the app reads the newest month straight from BLS, and FRED's copy replaces it later (D-23). Nothing
-calls either client or saves the figures yet. `ops/bench/fred_delay.py` measures how late each
+the app reads the newest month straight from BLS, and FRED's copy replaces it later (D-23).
+`FredImporter` can save FRED's figures to the database, but nothing calls it or either client yet. `ops/bench/fred_delay.py` measures how late each
 provider posts a figure; the jobs report on 2026-12-04 is its next run.
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
@@ -272,7 +272,7 @@ src/Aurum.App.Infrastructure.Pricing/
   Jobs/                            the timer that checks the price
   Realtime/                        the interface the timer uses to send prices to apps
   Macro/                           fetches economic figures from FRED, and from BLS on release
-                                   morning; nothing saves them yet
+                                   morning; saves FRED's, but nothing runs it yet
 src/Aurum.App.Application/         the rules for handling requests, and logging
   Prices/                          the four read endpoints' queries, input checks and answers
 src/Aurum.Api/                     the web API; Program.cs sets everything up

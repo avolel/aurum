@@ -2114,7 +2114,7 @@ Turned down:
 - **One row per figure per month, and FRED overwrites it.** BLS writes the month's row under the
   existing FRED series, such as `CPIAUCSL`. When FRED posts its first published value, that value
   replaces the BLS one, and a mismatch is logged as a warning. Readers never need to know BLS exists.
-  The save step is not built yet; it must follow this rule.
+  FRED's half of the save step, `FredImporter`, follows this rule. BLS's half is not built yet.
 - `BlsClient` sends one `POST` per check, with every series in one request and the key in the
   request body.
 - `BlsClient` is not behind `QuotaHandler` or the quota governor. It uses the standard retry setup.
@@ -2155,8 +2155,24 @@ day's 500. That's acceptable.
 on 2026-12-04 checks BLS beside FRED. Its result goes here. If BLS is also late, this decision gets
 rethought before anything relies on the client.
 
-**Not handled yet:** the save step and the overwrite itself, the release calendar that calls the
-client, and counting the daily limit. PCE is not covered: it comes from BEA (the Bureau of Economic
+**How FRED's save works (built 2026-11-14).** `FredImporter` loads the stored rows for the dates
+it was given, compares them in C#, and saves through EF Core. A new date is added. An unchanged row
+is skipped. A changed row is overwritten, and on a release series the change is logged as a warning
+with the old and new values. Daily market figures such as yields are overwritten without a warning,
+because FRED corrects them routinely. A release figure's `ReleasedAt` is 08:30 New York time on the
+day FRED says it was first published, converted to UTC so summer time is handled. All five release
+series publish at 08:30; the release calendar will replace this fixed time where it is wrong.
+
+**Why compare in C# and not one SQL upsert.** An upsert is one `INSERT … ON CONFLICT DO UPDATE`
+statement. In Postgres 17 it can't return the value it replaced, so the warning would need a second
+query. Loading first leaves a gap between the read and the write where another writer could change
+the row. That can't happen today: the app runs as one process, and FRED's timer is the only thing
+that writes these tables. The quota governor uses an upsert because many requests race for the same
+counter (D-7); here there is one writer. **If BLS's save step runs on its own timer beside FRED's,
+the two could write the same month's row at once, and this choice has to be looked at again.**
+
+**Not handled yet:** BLS's half of the save step, the timer that calls `FredImporter`, the release
+calendar that calls the client, and counting the daily limit. PCE is not covered: it comes from BEA (the Bureau of Economic
 Analysis), not BLS.
 
 Turned down:

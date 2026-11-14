@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done, and so are item 1's FRED client and BLS client. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done, and so are item 1's FRED client, BLS client and the step that saves FRED's figures. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -22,7 +22,8 @@ Everything here was checked against the code on 2026-10-15, after item 8 (the re
 built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audit found had drifted
 from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15, and later that day its
 three jobs and core-price series. On 2026-11-12 the BLS client and the BLS check in
-`ops/bench/fred_delay.py` were added to sections 2, 3, 10, 13 and 15.
+`ops/bench/fred_delay.py` were added to sections 2, 3, 10, 13 and 15. On 2026-11-14 `FredImporter`
+was added to sections 2, 11 and 13.
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -252,9 +253,10 @@ Aurum.App.Infrastructure.Pricing/
 │   └── LatestQuoteCache.cs             ← newest price per symbol, in memory
 ├── Realtime/
 │   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
-├── Macro/                              ← economic figures; fetched only, nothing saves them yet
+├── Macro/                              ← economic figures; FredImporter can save them, nothing calls it yet
 │   ├── FredSeries.cs                   ← the ten FRED series, and which are releases
 │   ├── FredClient.cs                   ← asks FRED for a series and reads the answer
+│   ├── FredImporter.cs                 ← saves one series' rows: adds new ones, overwrites changed ones
 │   ├── FredObservation.cs              ← one period's value, and its publish date for a release
 │   ├── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
 │   ├── BlsSeries.cs                    ← the four BLS series, each tied to the FRED series it fills
@@ -1103,7 +1105,7 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 | `api_quota_windows` | One service's request count for one month. | `PostgresQuotaGovernor` | `PostgresQuotaGovernor`, which `/api/v1/price/sources` also asks |
 | `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check; `/api/v1/events` |
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
-| `macro_series`, `macro_observations` | Economic data series and their values. | Nothing yet (Phase 2) | Nothing yet |
+| `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is 08:30 New York time on its publish date; a daily market figure's is empty. | `FredImporter`, which nothing calls yet (Phase 2) | `FredImporter`, to compare before it writes |
 
 Things that will catch you out:
 
@@ -1234,7 +1236,7 @@ Aurum.Api.Tests/
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no price timer and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
-├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files
+├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
 ├── Validators/                ← one file per input check
@@ -1246,6 +1248,7 @@ Aurum.Api.Tests/
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
 | `PricePollingServiceTests`, `PriceEventSqlTests`, `AurumApiFactoryTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `DeltaEngineReplayTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
+| `FredImporterTests` | `FredImporterReleasedAtTests` (the 08:30 New York rule, winter and summer) |
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 | | `FredClientTests` (a fake network; no request reaches FRED) |

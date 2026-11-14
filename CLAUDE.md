@@ -44,7 +44,7 @@ src/
 ├── Aurum.App.SharedKernel/            ApiResponse<T>, CursorPage<T>, AuditableEntity, SupportedSymbol
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
 ├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed;
-│                                      Macro/ — the FRED client (D-22)
+│                                      Macro/ — the FRED and BLS clients, and FredImporter (D-22, D-23)
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/, Prices/
 ├── Aurum.Api/                         Program.cs (every registration), Controllers/, Hubs/ (SignalR)
 └── Aurum.Api.Tests/

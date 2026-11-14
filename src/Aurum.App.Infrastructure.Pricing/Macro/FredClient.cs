@@ -7,7 +7,7 @@ using Aurum.App.SharedKernel.Constants;
 namespace Aurum.App.Infrastructure.Pricing.Macro;
 
 /// <summary>
-/// Reads observations from FRED's <c>series/observations</c>. Fetches only; saving is a later step.
+/// Reads observations from FRED's <c>series/observations</c>. Fetches only; <see cref="FredImporter"/> saves.
 /// </summary>
 /// <remarks>
 /// The API key is added by <c>QueryKeyAuthHandler</c> below this client, so nothing here can log

@@ -114,6 +114,12 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   test output by the csproj. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market
   holidays); the payrolls file has October 2025 published late, with November. Re-save them with a
   real call rather than editing by hand, and check a new file for the key before committing it.
+- **`FredImporterTests`** uses the Postgres collection and deletes every `macro_series` row in
+  `InitializeAsync` (observations go with them by cascade). Each save gets a fresh `DbContext`, as
+  each poll would. Warnings are read from `ListLogger`. `Second_run_with_same_rows_writes_nothing`
+  also checks `UpdatedAt` didn't move, so it proves no `UPDATE` ran rather than trusting the count.
+  **`FredImporterReleasedAtTests`**, in the same file, needs **no container**: it pins 08:30 New York
+  in winter (13:30Z) and summer (12:30Z).
 - **`DeltaEngineReplayTests`** replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine`
   and `SignificanceClassifier` on a fake clock and asserts the exact event list (D-21). Rows are
   **stretches** (`fromMinute,toMinute,fromMid,toMid,source`); `TickReplay` expands them to one price
