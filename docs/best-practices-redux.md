@@ -1,8 +1,9 @@
 # Redux in React Native: how to organise it
 
-> **None of this exists yet.** There's no Redux in this repository. `app/` is an empty Expo starting
-> point. This guide describes the target for Phase 4, not code you can use today. Examples use
-> made-up names from this app's domain (prices, alerts, sign-in).
+> **None of this exists yet.** There's no Redux in this repository. `app/` is a bare Expo starting
+> point: a placeholder `App.tsx` and a made-up price generator in `src/fixture/`. This guide describes the target from the Phase 1 dashboard onward, not code you can use
+> today. Examples use made-up names from this app's domain (prices, alerts, sign-in); alerts are a
+> Phase 4 feature.
 
 **What Redux is:** a single shared store for data many screens need. Screens read from it, and send it
 "actions" (messages describing what happened) to change it. **Redux Toolkit** (RTK) is the official
@@ -58,7 +59,7 @@ RTK Query files sit in the feature's folder, **not** in a shared `store/api/` fo
 
 The original guide said this was the one kind of file that doesn't take the `.slice.ts` or
 `.reducer.ts` ending "that CLAUDE.md lists". This repository's CLAUDE.md lists no such endings, and
-`docs/best-practices.md` suggests `alerts.reducer.ts`-style names. Settle on one style before Phase 4.
+`docs/best-practices.md` suggests `alerts.reducer.ts`-style names. Settle on one style before work on the Phase 1 dashboard starts.
 
 ---
 

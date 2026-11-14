@@ -14,7 +14,7 @@ Deeper notes live beside the code they describe and load when you work in that f
 dotnet build                                              # whole solution (Aurum.slnx)
 dotnet test                                               # all tests — needs Docker
 dotnet test --filter "FullyQualifiedName~QuotaGovernorTests"   # one class
-dotnet test --filter "FullyQualifiedName~ResolvePeriod"        # one test; no container, sub-second
+dotnet test --filter "FullyQualifiedName~ResolvePeriod"        # one test; its class still starts Postgres
 dotnet format                                             # before committing
 docker compose up --build                                 # full stack: postgres, ollama, api
 
@@ -54,8 +54,10 @@ Three things that look wrong without the reason:
 
 - **`Infrastructure.Pricing` is a fifth project the layer table does not list.** Price sources are
   external HTTP clients and the poller is a background job; neither fits "EF Core queries,
-  repositories, DbContext". It depends on `Infrastructure.Data` because the quota governor writes
-  `api_quota_windows`.
+  repositories, DbContext". It depends on `Infrastructure.Data` because it writes four groups of
+  tables: the quota governor `api_quota_windows`, the poller `price_ticks` and `price_sources`, the
+  delta engine `price_events` (through `PriceEventSql`), and `FredImporter` `macro_series` and
+  `macro_observations`. `LatestQuoteCache` and `DeltaEngine` also read `price_ticks` to warm up.
 - **`Aurum.Api` references all four projects.** It is the composition root and must name every type
   it registers. The layer rule still holds for `Controllers/`: a controller reaching past
   `IMediator` into Infrastructure is the violation.
@@ -96,8 +98,9 @@ settled on `lightweight-charts` (D-2); nothing is wired up.
 
 **There is no Expo Router, Redux, NativeWind, Gluestack UI, `src/subscreens/`, `components/`,
 `babel.config.js`, `jest.config.js` or `eslint.config.js` here.** `docs/best-practices.md` and
-`docs/best-practices-redux.md` are the **target for Phase 4**; examples marked "Found in the original
-app" come from another project. Check a path exists before citing it.
+`docs/best-practices-redux.md` are the **target from the Phase 1 dashboard onward** (the next
+frontend work; Phase 4 adds phone apps and alerts); examples marked "Found in the original app" come
+from another project. Check a path exists before citing it.
 
 ### Data flow (CQRS with MediatR)
 
@@ -115,18 +118,23 @@ The DbContext is `AurumDbContext`. The only feature is `Prices` (queries only �
 
 ### Controller rules
 
-- Thin: receive request → `_mediator.Send()` → return `ApiResponse<T>`
+- Thin: receive request → `mediator.Send()` → return `ApiResponse<T>`
   (`SharedKernel/Common/ApiResponse.cs`). Never anonymous types.
-- Inject `IMediator` + `IAppLogService<TController>`.
+- `sealed`, with `IMediator` + `IAppLogService<TController>` in a primary constructor. Actions
+  return `ActionResult<ApiResponse<T>>` and start with `const string action = nameof(...)`.
+  `PricesController` is the one to copy.
 - Attributes: `[ApiController]`, `[Authorize]`, `[Route("api/v1/{feature}")]`,
   `[Produces("application/json")]`. (Phase 1 read endpoints are open — see the Prices CLAUDE.md.)
-- Every action has try/catch; the catch calls `_appLogService.LogErrorAsync()` and returns
-  `ApiResponse<T>.CreateError()`.
+- Every action has try/catch, in this order: `ValidationException` → 400 (when a validator exists);
+  `OperationCanceledException when (ct.IsCancellationRequested)` → rethrow; `Exception` →
+  `LogErrorAsync(action, ex, ct: CancellationToken.None)` and
+  `CreateError(ErrorMessages.UnexpectedErrorMessage)`.
 - **Security-configuration actions log failures only — no success row.** None exist yet; add the
   enforcing test with the first one. Every other action logs success with
   `LogAsync(LogType.ActionLog, ...)`.
-- Catch `FluentValidation.ValidationException` on command endpoints → 400.
-- `CancellationToken` on every async action. No business logic, DB access, external HTTP or
+- Catch `FluentValidation.ValidationException` on any endpoint whose command or query has a
+  validator → 400.
+- `CancellationToken ct = default` on every async action. No business logic, DB access, external HTTP or
   `async void`.
 
 ### Handler rules
@@ -140,7 +148,9 @@ The DbContext is `AurumDbContext`. The only feature is `Prices` (queries only �
 - Manual entity ↔ DTO mapping. Never return entities. DTOs never reference entities, and vice versa.
 - Pass `CancellationToken` to every async call. No manual validation or transactions.
 - No hardcoded status strings or IDs: use `SupportedSymbol.*` and each source's `SourceCode`
-  constant (`GoldApiIoSource.SourceCode`). Create a constants class if one is missing. Same on the frontend.
+  constant (`GoldApiIoSource.SourceCode`). Constants live in `SharedKernel/Constants/`, one class per
+  topic; add a class there if none fits. A constant that belongs to one class stays on it
+  (`SourceCode`, an options `SectionName`, `private const`). Same on the frontend.
 
 ### Validator and repository rules
 
@@ -158,8 +168,9 @@ Each folder's CLAUDE.md has the full reasoning. These are the ones a change else
 - **GoldAPI's free tier is ~100 requests a month.** Nothing that serves a web request may call a
   price service. Every retry attempt spends quota.
 - **`PostgresQuotaGovernor.AcquireAsync` stays one raw SQL upsert.** Don't rewrite it in EF (D-7).
-- **The injected `TimeProvider` stamps every time the app writes.** `now()` never appears in SQL;
-  raw SQL passes `CreatedAt`/`UpdatedAt` itself.
+- **The injected `TimeProvider` stamps every time the app writes.** `now()` never appears in the app's
+  SQL (only the migration seeds use it, outside the host's clock); raw SQL passes
+  `CreatedAt`/`UpdatedAt` itself.
 - **Poll order is memory → tick save → publish → events** (D-16, D-18, D-19).
 - **`PriceTick.Retention` equals the migration's `INTERVAL '30 days'`.**
 - **Single instance only.** Startup migration, the poller, the event waiting period and SignalR

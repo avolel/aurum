@@ -29,7 +29,8 @@ Each "behavior" is a step every request passes through before its handler:
   changes are saved, or none are), using `IUnitOfWork.ExecuteInTransactionAsync()`. Queries skip it.
 
 **Whether a request gets a transaction depends only on its interface.** `TransactionBehavior` checks
-whether the record implements `ICommand<T>`. It doesn't look at the HTTP method or the name. A record
+whether the record implements `ICommand<T>`, or `ICommand` for a command that returns nothing. It
+doesn't look at the HTTP method or the name. A record
 that implements MediatR's plain `IRequest<T>` gets no transaction and looks the same everywhere else.
 That's why the naming rule (rule 6 below) blocks a merge, and isn't only a style preference.
 
@@ -234,68 +235,73 @@ public class PriceSourcesController : ControllerBase
 
 **After: sends a query through MediatR, and wraps every answer in `ApiResponse<T>`**
 
-```csharp
-// src/Aurum.Api/Controllers/PriceSourcesController.cs
-using MediatR;
+This follows `PricesController` and `PriceEventsController`. `GetPriceSourceByCodeQuery` and
+`PriceSourceDto` are made up for the example.
 
+```csharp
+// src/Aurum.Api/Controllers/PriceSourcesController.cs (illustrative; not built yet)
+
+/// <remarks>No [Authorize]: Phase 1 registers no login method, so it would refuse every call (D-20).</remarks>
 [ApiController]
-[Authorize]
 [Route("api/v1/pricesources")]
 [Produces("application/json")]
-public class PriceSourcesController(
+public sealed class PriceSourcesController(
     IMediator mediator,
-    IAppLogService<PriceSourcesController> appLogService) : ControllerBase
+    IAppLogService<PriceSourcesController> appLogService)
+    : ControllerBase
 {
     [HttpGet("{sourceCode}")]
-    public async Task<IActionResult> GetByCode(string sourceCode, CancellationToken cancellationToken = default)
+    public async Task<ActionResult<ApiResponse<PriceSourceDto>>> GetByCode(
+        string sourceCode, CancellationToken ct = default)
     {
+        const string action = nameof(GetByCode);
+
         try
         {
-            var result = await mediator.Send(new GetPriceSourceByCodeQuery(sourceCode), cancellationToken);
-            if (result == null)
-                return NotFound(ApiResponse<PriceSourceDto>.CreateError("Not found", 404));
+            var source = await mediator.Send(new GetPriceSourceByCodeQuery(sourceCode), ct);
 
-            await appLogService.LogAsync(LogType.ActionLog, "GetPriceSourceByCode", sourceCode, 200, cancellationToken);
-            return Ok(ApiResponse<PriceSourceDto>.CreateSuccess(result));
+            // Not there: still an ApiResponse, sent with its own status
+            var response = source is null
+                ? ApiResponse<PriceSourceDto>.CreateError(ErrorMessages.NotFoundMessage, StatusCodes.Status404NotFound)
+                : ApiResponse<PriceSourceDto>.CreateSuccess(source);
+
+            await appLogService.LogAsync(LogType.ActionLog, action, $"source={sourceCode}", response.StatusCode, ct: ct);
+            return StatusCode(response.StatusCode, response);
+        }
+        // A validator failed: 400, with the reasons grouped by field
+        catch (ValidationException ex)
+        {
+            await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct);
+            return BadRequest(ApiResponse<PriceSourceDto>.CreateValidationError(ex.ToErrors()));
+        }
+        // The caller hung up; nobody reads a reply, and it is not a server fault.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            await appLogService.LogErrorAsync("GetPriceSourceByCodeError", ex, 500, cancellationToken);
-            return StatusCode(500, ApiResponse<PriceSourceDto>.CreateError("Failed to get price source", 500));
-        }
-    }
-
-    [HttpPut("{sourceCode}")]
-    public async Task<IActionResult> SetEnabled(
-        string sourceCode, [FromBody] bool enabled, CancellationToken cancellationToken = default)
-    {
-        try
-        {
-            var result = await mediator.Send(new SetPriceSourceEnabledCommand(sourceCode, enabled), cancellationToken);
-
-            await appLogService.LogAsync(LogType.ActionLog, "SetPriceSourceEnabled", $"{sourceCode}={enabled}", 200, cancellationToken);
-            return Ok(ApiResponse<PriceSourceDto>.CreateSuccess(result));
-        }
-        // A validator failed: 400 with the reasons
-        catch (FluentValidation.ValidationException ex)
-        {
-            var errors = ex.Errors.Select(e => e.ErrorMessage).ToList();
-            return BadRequest(ApiResponse<object>.CreateError(string.Join("; ", errors), 400));
-        }
-        catch (Exception ex)
-        {
-            await appLogService.LogErrorAsync("SetPriceSourceEnabledError", ex, 500, cancellationToken);
-            return StatusCode(500, ApiResponse<PriceSourceDto>.CreateError("Failed to update price source", 500));
+            await appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None);
+            return StatusCode(
+                StatusCodes.Status500InternalServerError,
+                ApiResponse<PriceSourceDto>.CreateError(ErrorMessages.UnexpectedErrorMessage));
         }
     }
 }
 ```
 
+`ErrorMessages.NotFoundMessage` doesn't exist yet; add it to `SharedKernel/Constants/ErrorMessages.cs`
+with the first action that needs it.
+
 **Controller rules:**
 
-- `IMediator` is the main thing the controller uses.
-- `IAppLogService<TController>` logs success and error in every action (rule 4).
-- Catch `FluentValidation.ValidationException` on command endpoints and return 400.
+- `sealed`, with a primary constructor taking `IMediator` and `IAppLogService<TController>`.
+- `IAppLogService<TController>` logs success and error in every action (rule 4), all under
+  `const string action = nameof(...)`.
+- Catch `FluentValidation.ValidationException` on any endpoint whose command or query has a
+  validator, and return 400.
+- Rethrow `OperationCanceledException` when the caller cancelled; log the general error with
+  `CancellationToken.None` so the row is written even after the caller has gone.
 - Remove any input checking by hand that a validator now covers.
 - Keep controllers thin: no business rules, only passing the request on and dealing with the web side.
 
@@ -414,16 +420,18 @@ Copy the entity into a DTO inside the handler before returning.
 
 ### 2. Every async controller action takes a CancellationToken
 
-Every `async Task<IActionResult>` action must have `CancellationToken cancellationToken = default`, and
-pass it on to `_mediator.Send()`, `_appLogService`, and every other async call. That way, if the caller
-gives up, the work stops too.
+Every async action must have `CancellationToken ct = default`, and pass it on to `mediator.Send()`,
+`appLogService.LogAsync()`, and every other async call. That way, if the caller gives up, the work
+stops too. The one exception is `LogErrorAsync` in the general catch, which takes
+`CancellationToken.None` so the error row is still written.
 
 ```csharp
 // ❌ BAD: no CancellationToken
-public async Task<IActionResult> GetByCode(string sourceCode) { ... }
+public async Task<ActionResult<ApiResponse<PriceSourceDto>>> GetByCode(string sourceCode) { ... }
 
 // ✅ GOOD
-public async Task<IActionResult> GetByCode(string sourceCode, CancellationToken cancellationToken = default) { ... }
+public async Task<ActionResult<ApiResponse<PriceSourceDto>>> GetByCode(
+    string sourceCode, CancellationToken ct = default) { ... }
 ```
 
 ### 3. Get dependencies through the constructor, never by looking them up
@@ -435,16 +443,21 @@ the constructor. Looking it up hides what the class needs, and stops tests from 
 // ❌ BAD: looked up by hand
 var feed = HttpContext.RequestServices.GetRequiredService<IPriceFeed>();
 
-// ✅ GOOD: taken in the constructor
-public PriceSourcesController(IMediator mediator, IAppLogService<PriceSourcesController> appLogService) { ... }
+// ✅ GOOD: taken in the primary constructor
+public sealed class PriceSourcesController(
+    IMediator mediator,
+    IAppLogService<PriceSourcesController> appLogService)
+    : ControllerBase { ... }
 ```
 
 ### 4. Every controller action logs success and error
 
 Use `IAppLogService<T>`, never `ILogger<T>`. Every action needs:
 
-- **Success:** `_appLogService.LogAsync(LogType.ActionLog, "ActionName", details, statusCode)`
-- **Error:** `_appLogService.LogErrorAsync("ActionNameError", exception, statusCode)`
+- **Success:** `appLogService.LogAsync(LogType.ActionLog, action, details, statusCode, ct: ct)`
+- **Error:** `appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None)`
+
+`action` is `const string action = nameof(ActionName);`, the same on every row the action writes.
 
 That includes actions that return files (PDFs, downloads): log before returning `File()`.
 
@@ -500,8 +513,15 @@ tick.SourceCode = GoldApiIoSource.SourceCode;
 tick.Symbol = SupportedSymbol.Gold;
 ```
 
-If there's no constants class for a feature yet, create one:
-`Aurum.App.Application/{Feature}/{Feature}Constants.cs`.
+Constants live in `Aurum.App.SharedKernel/Constants/`, one class per topic (`SupportedSymbol`,
+`ErrorMessages`, `PriceEventDirection`, `FredConstants`, `BlsConstants`, `AppLogColumnLengths`).
+SharedKernel is referenced by every layer, so a constant there is visible from a handler, a
+controller and the pricing code without crossing a layer boundary. If no class fits, add one there.
+
+The exception is a constant that belongs to one class: it stays on that class. That covers a price
+source's code (`GoldApiIoSource.SourceCode`), an options class's configuration section
+(`PricingOptions.SectionName`), `FredSeries.Provider`, and `private const` values such as
+`PostgresQuotaGovernor`'s SQL. Moving them would separate a name from the thing it names.
 
 ### 9. Command handlers use repositories, not `AurumDbContext`
 
@@ -605,36 +625,50 @@ public class SetPriceSourcePriorityCommandValidator : AbstractValidator<SetPrice
 
 **Where the test files go:**
 
-- `Controllers/{ControllerName}Tests.cs`
-- `Handlers/{Feature}CommandHandlerTests.cs`
-- `Handlers/{Feature}QueryHandlerTests.cs`
-- `Validators/{Feature}CommandValidatorTests.cs`
+One test file per class, named after the class it tests:
+
+- `Controllers/{ControllerName}Tests.cs` — e.g. `PricesControllerTests.cs`
+- `Handlers/{HandlerName}Tests.cs` — e.g. `GetPriceHistoryQueryHandlerTests.cs`
+- `Validators/{ValidatorName}Tests.cs` — e.g. `GetPriceHistoryQueryValidatorTests.cs`
 
 The examples below use Moq, a library for making fake versions of interfaces.
 
 ### Controller tests
 
-Fake `IMediator`. Never fake services directly.
+Fake `IMediator`. Never fake services directly. This follows `PricesControllerTests`.
 
 ```csharp
-private readonly Mock<IMediator> _mockMediator = new();
-private readonly Mock<IAppLogService<PriceSourcesController>> _mockLogService = new();
+private readonly Mock<IMediator> _mediator = new();
+private readonly Mock<IAppLogService<PriceSourcesController>> _appLog = new();
+
+private PriceSourcesController CreateController() =>
+    new(_mediator.Object, _appLog.Object)
+    {
+        ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+    };
+
+// Actions return ActionResult<ApiResponse<T>>; the ObjectResult is in .Result
+private static (int? StatusCode, ApiResponse<T> Body) Unwrap<T>(ActionResult<ApiResponse<T>> result)
+{
+    var objectResult = Assert.IsAssignableFrom<ObjectResult>(result.Result);
+    return (objectResult.StatusCode, Assert.IsType<ApiResponse<T>>(objectResult.Value));
+}
 
 [Fact]
-public async Task GetByCode_WithKnownCode_ReturnsOk()
+public async Task GetByCode_WithKnownCode_Returns200AndLogsSuccess()
 {
     var dto = new PriceSourceDto("goldapi.io", LastSuccessAt: null, LastFailureAt: null);
-    _mockMediator
-        .Setup(m => m.Send(It.IsAny<GetPriceSourceByCodeQuery>(), It.IsAny<CancellationToken>()))
+    _mediator.Setup(m => m.Send(It.IsAny<GetPriceSourceByCodeQuery>(), It.IsAny<CancellationToken>()))
         .ReturnsAsync(dto);
 
-    var controller = new PriceSourcesController(_mockMediator.Object, _mockLogService.Object);
-    var result = await controller.GetByCode("goldapi.io", CancellationToken.None);
+    var (status, body) = Unwrap(await CreateController().GetByCode("goldapi.io", CancellationToken.None));
 
-    // 200, with the DTO inside the ApiResponse wrapper
-    var okResult = Assert.IsType<OkObjectResult>(result);
-    var body = Assert.IsType<ApiResponse<PriceSourceDto>>(okResult.Value);
-    Assert.Equal(dto, body.Data);
+    Assert.Equal(200, status);
+    Assert.Same(dto, body.Data);
+    _appLog.Verify(
+        l => l.LogAsync(LogType.ActionLog, nameof(PriceSourcesController.GetByCode), It.IsAny<string?>(), 200,
+            It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+        Times.Once);
 }
 ```
 

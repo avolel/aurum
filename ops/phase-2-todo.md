@@ -4,7 +4,7 @@ This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/pha
 `ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
 FRED client fetches figures and the BLS client fetches release-morning figures. `FredImporter` can
 save FRED's figures, but no timer calls it yet. Nothing else has been started.
-I last checked it against the code on 2026-11-11.
+I last checked it against the code on 2026-11-14.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -25,7 +25,8 @@ later batch of app work, together with the Phase 1 dashboard.
 - Item 6 needs 1 to 5. Items 7 and 8 need 6.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
-Item 0 closed D-6. The FRED client added D-22, so new numbers start at D-23.
+Item 0 closed D-6. The FRED client added D-22 and the BLS client added D-23, so new numbers start
+at D-24.
 
 A few terms used below:
 
@@ -223,8 +224,12 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
       scheduled check. `MacroObservation.ReleasedAt` is what the 4-hour background window searches
       on, so it must be the real publish time. FRED gives a release date but no time of day, so the
       time comes from the calendar.
-- [ ] Daily market figures (yields, VIX, the dollar index) are not releases. They leave `ReleasedAt`
-      empty and are used only as "the latest daily figure".
+- Daily market figures (yields, VIX, the dollar index) are not releases.
+  - [x] They leave `ReleasedAt` empty. `FredSeries.IsRelease` is false for them, so `FredClient`
+        sends no release date and `FredImporter` stores null. `Market_series_has_null_ReleasedAt`
+        covers it.
+  - [ ] They are used only as "the latest daily figure". Nothing reads `macro_observations` yet;
+        this belongs to whatever builds the background for an explanation.
 - [x] FRED's limits checked. It has no monthly allowance, only 120 requests a minute per key (on
       FRED's errors page, under 429). Going over can get the key blocked for a while. It stays out
       of `IQuotaGovernor` and uses the standard retry setup (D-22).
@@ -394,8 +399,8 @@ the scored test set was dropped (item 0).
 
 - [ ] New settings and API keys in `appsettings.json`, `.env.example` and `docker-compose.yml`.
       Compose passes on only the variables it lists, so a new key in `.env` needs its line there too.
-      The FRED key and the `Macro:Fred` section are in all three (2026-11-07). Still to add:
-      `Macro__Bls__ApiKey` and the `Macro:Bls` section (BLS client), and the job-to-model map.
+      The FRED key and the `Macro:Fred` section are in all three (2026-11-07). So are the BLS key
+      and the `Macro:Bls` section (2026-11-11). Still to add: the job-to-model map.
 - [ ] The README's setup steps say to create the models' volume once, and to download the models.
       A fresh clone can't start without the volume (item 0).
 - [ ] `CLAUDE.md`, README and `docs/` brought up to date.

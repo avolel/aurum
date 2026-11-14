@@ -132,7 +132,7 @@ real to fall back to. Each service has its own row in the request counter.
 - [x] `ApiNinjasSource`: `/v1/goldprice` returns `{name, price, updated}`. One price only, which
       `PriceQuote.Normalize` already handles. **Gold only: refuse any symbol other than `XAUUSD`**,
       instead of returning gold for whatever was asked.
-- [x] `MetalpriceApiSource`: two traps, both silent:
+- [x] `MetalPriceApiSource`: two traps, both silent:
       - It takes the API key **in the web address**. So the web address must never appear in a
         `PriceSourceException` message or a retry log, or the key leaks.
       - `/v1/latest?base=USD&currencies=XAU` returns *ounces per dollar* (about 0.00042). `Mid` is
@@ -321,7 +321,7 @@ own reviewable batch, and the 3x turned out to need an interval change and a tim
         was checked against a deliberately broken version, and it fails on every run.
 - [x] **D-16 written up.**
 - [x] **Reload at startup** from the newest price per symbol in the database. Otherwise a restart
-      leaves `/v1/price/live` empty for up to a full check interval. The saved price has its own
+      leaves `/api/v1/price/live` empty for up to a full check interval. The saved price has its own
       startup read (`EnsureWarmAsync`) for now, and the poller waits for it before its first check.
       Item 5 was meant to merge the two startup reads. It didn't: the price history doesn't keep the
       bid, ask or received time, so the saved price can't be rebuilt from it (D-17).

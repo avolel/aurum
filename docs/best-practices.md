@@ -1,8 +1,10 @@
 # Aurum — TypeScript and React Native: mistakes to avoid and habits to keep
 
 > **None of this exists yet.** This guide was written for a larger, finished app. Aurum's `app/`
-> folder is an empty starting point: no Redux, no Expo Router, no `src/hooks/`, no models folder.
-> Treat this as the target for Phase 4, not as a description of code you can import today. Check a
+> folder is a bare Expo starting point. It holds a placeholder `App.tsx` and a made-up price
+> generator in `src/fixture/`. It has no Redux, no Expo Router, no `src/hooks/`, no models folder.
+> Treat this as the target from the Phase 1 dashboard onward, not as a description of code you can
+> import today. Parts about alerts and phones describe Phase 4 features. Check a
 > path exists before relying on it. Examples marked "found in the original app" came from that other
 > app. Other examples use made-up names from this app's domain (prices, alerts).
 >
@@ -240,7 +242,7 @@ A Redux "slice" is one piece of the app's shared data, plus the functions that c
 ```
 
 `docs/best-practices-redux.md` suggests different file names (`alertsSlice.ts` and so on). The two
-guides need reconciling before Phase 4 starts.
+guides need reconciling before work on the Phase 1 dashboard starts.
 
 ### 8. Screen state that belongs in the web address
 

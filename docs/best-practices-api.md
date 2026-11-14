@@ -183,21 +183,27 @@ Request → Controller → IMediator.Send() → Behaviors → Handler → Reposi
 ### What every controller has
 
 - These four attributes: `[ApiController]`, `[Authorize]`, `[Route("api/v1/{feature}")]`,
-  `[Produces("application/json")]`.
-- `IMediator`, to send commands and queries.
-- `IAppLogService<TController>`, to log errors in `catch` blocks.
-- A `CancellationToken` on every async action, so work stops if the caller gives up.
+  `[Produces("application/json")]`. The two controllers built so far leave out `[Authorize]`. Phase 1
+  sets up no way to log in, so `[Authorize]` would refuse every call (D-20).
+- `sealed`, with `IMediator` and `IAppLogService<TController>` taken in a primary constructor (the
+  parameters listed on the class line, used directly with no private fields).
+- Actions return `ActionResult<ApiResponse<T>>`, so the response type is in the signature.
+- A `CancellationToken ct = default` on every async action, so work stops if the caller gives up.
+- `const string action = nameof(ActionName);` at the top, used for every log row the action writes.
+- Messages from `ErrorMessages` (`SharedKernel/Constants`), never string literals.
+
+`PricesController` is the one to copy.
 
 ### What a controller does
 
 1. Receives the web request.
-2. Sends a command or query with `_mediator.Send()`.
+2. Sends a command or query with `mediator.Send()`.
 3. Returns an `ApiResponse<T>`.
 
 **About logging twice:** `LoggingBehavior` already writes a generic success or error row for every
 request. CLAUDE.md says every controller action must *also* log success and error itself, with details
 the generic row can't know: IDs, row counts, whether something came from memory. So one request
-usually produces two rows. That's on purpose. **Keep the explicit `_appLogService.LogAsync(...)` calls
+usually produces two rows. That's on purpose. **Keep the explicit `appLogService.LogAsync(...)` calls
 for success and error in every action.**
 
 The one exception is actions that change security settings: those log **failures only**. Don't add
@@ -218,50 +224,64 @@ belongs in a handler.
 ### Example
 
 ```csharp
-// src/Aurum.Api/Controllers/PriceSourcesController.cs (illustrative; not built yet)
+// src/Aurum.Api/Controllers/PricesController.cs — GetHistory, the shape every action follows
 
-[HttpGet("{sourceCode}")]
-public async Task<IActionResult> GetByCode(string sourceCode, CancellationToken cancellationToken = default)
+[HttpGet("history")]
+public async Task<ActionResult<ApiResponse<CursorPage<PriceTickDto>>>> GetHistory(
+    [FromQuery] string? symbol,
+    [FromQuery] DateTimeOffset? from,
+    [FromQuery] DateTimeOffset? to,
+    [FromQuery] int? limit,
+    [FromQuery] string? cursor,
+    CancellationToken ct = default)
 {
+    const string action = nameof(GetHistory);
+    symbol ??= SupportedSymbol.Gold;            // a default, not a rule; rules go in the handler
+
     try
     {
-        var result = await _mediator.Send(new GetPriceSourceByCodeQuery(sourceCode), cancellationToken);
+        var page = await mediator.Send(new GetPriceHistoryQuery(symbol, from, to, limit, cursor), ct);
 
-        // Nothing found: 404, still wrapped in ApiResponse
-        if (result == null)
-            return NotFound(ApiResponse<PriceSourceDto>.CreateError("Not found", 404));
-
-        return Ok(ApiResponse<PriceSourceDto>.CreateSuccess(result));
+        await appLogService.LogAsync(
+            LogType.ActionLog, action, $"symbol={symbol} from={from:O} to={to:O} rows={page.Items.Count}",
+            StatusCodes.Status200OK, ct: ct);
+        return Ok(ApiResponse<CursorPage<PriceTickDto>>.CreateSuccess(page));
+    }
+    // A validator failed: 400, with the reasons grouped by field. Queries with a validator need this too.
+    catch (ValidationException ex)
+    {
+        await appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct);
+        return BadRequest(ApiResponse<CursorPage<PriceTickDto>>.CreateValidationError(ex.ToErrors()));
+    }
+    // The caller hung up: nobody reads a reply, and it is not a server fault, so no error row.
+    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+    {
+        throw;
     }
     catch (Exception ex)
     {
-        await _appLogService.LogErrorAsync("GetPriceSourceByCodeError", ex, 500, cancellationToken);
-        return StatusCode(500, ApiResponse<PriceSourceDto>.CreateError("Failed to get price source", 500));
-    }
-}
-
-[HttpPut("{sourceCode}")]
-public async Task<IActionResult> SetEnabled(
-    string sourceCode, [FromBody] bool enabled, CancellationToken cancellationToken = default)
-{
-    try
-    {
-        var result = await _mediator.Send(new SetPriceSourceEnabledCommand(sourceCode, enabled), cancellationToken);
-        return Ok(ApiResponse<PriceSourceDto>.CreateSuccess(result, "Updated successfully"));
-    }
-    // Input failed a validator: 400 with the reasons
-    catch (FluentValidation.ValidationException ex)
-    {
-        var errors = ex.Errors.Select(e => e.ErrorMessage).ToList();
-        return BadRequest(ApiResponse<object>.CreateError(string.Join("; ", errors), 400));
-    }
-    catch (Exception ex)
-    {
-        await _appLogService.LogErrorAsync("SetPriceSourceEnabledError", ex, 500, cancellationToken);
-        return StatusCode(500, ApiResponse<PriceSourceDto>.CreateError("Failed to update price source", 500));
+        // CancellationToken.None: the error row must be written even if the caller has gone.
+        await appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None);
+        return StatusCode(
+            StatusCodes.Status500InternalServerError,
+            ApiResponse<CursorPage<PriceTickDto>>.CreateError(ErrorMessages.UnexpectedErrorMessage));
     }
 }
 ```
+
+When the handler returns null for "not there", build the response once and send its own status, as
+`GetLive` does for 503:
+
+```csharp
+var response = price is null
+    ? ApiResponse<LivePriceDto>.CreateError(ErrorMessages.NoPriceMessage, StatusCodes.Status503ServiceUnavailable)
+    : ApiResponse<LivePriceDto>.CreateSuccess(price);
+
+await appLogService.LogAsync(LogType.ActionLog, action, $"symbol={symbol}", response.StatusCode, ct: ct);
+return StatusCode(response.StatusCode, response);
+```
+
+An action with no validator (`GetSources`) leaves out the `ValidationException` catch.
 
 ---
 
@@ -285,9 +305,12 @@ the `app_logs` table, through a background queue.
 
 | When | Method | Example |
 |------|--------|---------|
-| **Success** | `LogAsync(LogType.ActionLog, action, details, statusCode)` | `_appLogService.LogAsync(LogType.ActionLog, "GetPriceSources", "Count: 3", 200)` |
-| **Error** | `LogErrorAsync(action, exception, statusCode)` | `_appLogService.LogErrorAsync("GetPriceSourcesError", ex, 500)` |
-| **Error (other form)** | `LogAsync(LogType.ActionLog, action, errorDetails, 500)` | `_appLogService.LogAsync(LogType.ActionLog, "GetPriceSourcesError", $"Error: {e.Message}", 500)` |
+| **Success** | `LogAsync(LogType.ActionLog, action, details, statusCode)` | `appLogService.LogAsync(LogType.ActionLog, action, $"sources={sources.Count}", StatusCodes.Status200OK, ct: ct)` |
+| **Validation failed** | `LogAsync(LogType.ActionLog, action, details, 400)` | `appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct)` |
+| **Error** | `LogErrorAsync(action, exception, statusCode)` | `appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None)` |
+
+`action` is `nameof` the action, the same on every row. The error row is told apart by its log type,
+not by an `"...Error"` suffix.
 
 ### What to put in the details
 
@@ -372,9 +395,10 @@ Always return an `ApiResponse<T>`. Never return an anonymous object (`new { ... 
 | When | What to write |
 |------|---------------|
 | Success with data | `Ok(ApiResponse<T>.CreateSuccess(data))` |
-| Success with a message | `Ok(ApiResponse<string>.CreateSuccess("Updated successfully"))` |
+| Success with only a text to send back | `Ok(ApiResponse<string>.CreateSuccess("Updated successfully"))`. The text goes in `Data`. `CreateSuccess` has no message parameter. |
 | Not found | `NotFound(ApiResponse<T>.CreateError("Not found", 404))` |
 | Bad input | `BadRequest(ApiResponse<T>.CreateError("Invalid input", 400))` |
+| Input failed a validator | `BadRequest(ApiResponse<T>.CreateValidationError(ex.ToErrors()))`. It sends status 400 and each field's errors in `Errors`. `ToErrors()` is in `Aurum.App.Application/Validation/ValidationErrors.cs`. |
 | Server error | `StatusCode(500, ApiResponse<T>.CreateError("Failed", 500))` |
 
 ---
@@ -425,8 +449,11 @@ The examples are made up to show the pattern; none of these endpoints exist yet.
 - [ ] Returns `ApiResponse<T>`: no anonymous objects, no entities
 - [ ] Logs with `IAppLogService<T>` on **both** success and error (including endpoints that return
       files, such as PDFs). Exception: security settings actions log failures only.
-- [ ] Catches `FluentValidation.ValidationException` on command endpoints and returns 400
-- [ ] `CancellationToken cancellationToken = default` on every async action
+- [ ] Catches `FluentValidation.ValidationException` on any endpoint whose command or query has a
+      validator, and returns 400
+- [ ] Rethrows `OperationCanceledException` when `ct.IsCancellationRequested`, before the general catch
+- [ ] `LogErrorAsync(..., ct: CancellationToken.None)` in the general catch
+- [ ] `CancellationToken ct = default` on every async action
 - [ ] Gets everything it needs through its constructor, never by asking
       `HttpContext.RequestServices` for it
 - [ ] Endpoints that change data check the user ID isn't 0 before sending the command. (The planned
@@ -475,12 +502,13 @@ The examples are made up to show the pattern; none of these endpoints exist yet.
 
 - [ ] Controller tests in `Controllers/{ControllerName}Tests.cs`: fake `IMediator`, and test every
       endpoint for success, not found and error
-- [ ] Command handler tests in `Handlers/{Feature}CommandHandlerTests.cs`: success, not found, and
-      check that saving was called
-- [ ] Query handler tests in `Handlers/{Feature}QueryHandlerTests.cs`: data returned, nothing
-      returned, and missing ID
-- [ ] Validator tests in `Validators/{Feature}CommandValidatorTests.cs`: good input passes, each
-      required field fails when empty, and boundary values
+- [ ] One test file per handler, named after it (`Handlers/{HandlerName}Tests.cs`, e.g.
+      `GetPriceHistoryQueryHandlerTests.cs`)
+- [ ] Command handler tests: success, not found, and check that saving was called
+- [ ] Query handler tests: data returned, nothing returned, and missing ID
+- [ ] One test file per validator, named after it (`Validators/{ValidatorName}Tests.cs`, e.g.
+      `GetPriceHistoryQueryValidatorTests.cs`): good input passes, each required field fails when
+      empty, and boundary values
 
 ### Matching the app
 
@@ -494,8 +522,9 @@ The examples are made up to show the pattern; none of these endpoints exist yet.
 - [ ] Addresses follow the rules above: no verbs, lowercase, the right HTTP method
 - [ ] The right status codes
 - [ ] DTOs in `Aurum.App.Application/{Feature}/DTOs/`, never referring to entities
-- [ ] Constants in `Aurum.App.Application/{Feature}/{Feature}Constants.cs`: no hard-coded strings in
-      handlers
+- [ ] Constants in `Aurum.App.SharedKernel/Constants/`, one class per topic: no hard-coded strings in
+      handlers. A constant that belongs to one class stays on it (`GoldApiIoSource.SourceCode`,
+      an options class's `SectionName`, `private const` values)
 - [ ] New repositories set up in `Program.cs` (handlers and validators are found automatically)
 - [ ] No `async void` anywhere
 

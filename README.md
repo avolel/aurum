@@ -10,7 +10,8 @@ explanation for each big price move, written by an AI model running on my own ma
 in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
 figures such as consumer prices, the jobs report and Treasury yields from FRED, the St. Louis Fed's
 free data service (item 1, first step). FRED also carries the figures the Bureau of Labor Statistics
-(BLS) publishes, as they were first published, so the app has no client for the Treasury (D-22).
+(BLS) publishes, as they were first published. It also carries the daily Treasury yields, so the app
+has no client for the Treasury (D-22).
 But FRED posts a new CPI (consumer price index) figure 40 minutes or more after BLS releases it at
 08:30 New York time. That is too late to explain the price move it causes. So on release morning
 the app reads the newest month straight from BLS, and FRED's copy replaces it later (D-23).
@@ -324,7 +325,8 @@ and 50 every 10 seconds (D-23). A free key comes from data.bls.gov/registrationE
 
 **A setting in `.env` only reaches the API if `docker-compose.yml` lists it.** Compose passes on
 the variables named under the `api` service and nothing else, and it gives no warning about the
-rest. The list covers the three price-service keys, the FRED and BLS keys, switching each price service on or off
+rest. The list covers the database connection, the Ollama address, whether the API runs as
+Development or Production (`ASPNETCORE_ENVIRONMENT`, Production when `.env` leaves it out), the three price-service keys, the FRED and BLS keys, switching each price service on or off
 (`PriceSources__ApiNinjas__Enabled=false`), GoldAPI's monthly limit, the check interval and the
 number of tries. Anything else is changed in `src/Aurum.Api/appsettings.json`, or by adding a line
 to `docker-compose.yml`.
@@ -361,7 +363,8 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 285 tests (counted with `dotnet test --list-tests` on 2026-10-15). Most of them start a
+There are 286 test methods (counted on 2026-11-14 by searching for `[Fact]` and `[Theory]`). The 27
+`[Theory]` methods run once per `[InlineData]` line, so more test cases run than that. Most of them start a
 real copy of the database in Docker rather than a fake one, because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 

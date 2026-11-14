@@ -23,7 +23,8 @@ built on top of commit `9280ea4`. On 2026-10-20 I fixed seven statements an audi
 from the code since then. On 2026-11-07 the FRED client was added to sections 2, 3, 10, 13 and 15, and later that day its
 three jobs and core-price series. On 2026-11-12 the BLS client and the BLS check in
 `ops/bench/fred_delay.py` were added to sections 2, 3, 10, 13 and 15. On 2026-11-14 `FredImporter`
-was added to sections 2, 11 and 13.
+was added to sections 2, 11 and 13. Later on 2026-11-14 an audit fixed drift in sections 2, 3, 10,
+11, 12 and 13.
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -154,7 +155,7 @@ aurum/
 │   ├── decisions/decisions.md     ← the decision log
 │   ├── phase-1-todo.md            ← Phase 1's work list, all done
 │   └── phase-2-todo.md            ← Phase 2's work list
-├── docs/                          ← this file and the best-practice guides
+├── docs/                          ← this file, the best-practice guides and `timescaledb_guide.md`
 ├── app/                           ← the mobile/web app: an empty Expo shell for now
 └── src/
     ├── Aurum.App.SharedKernel/            ← small types every project can use
@@ -208,6 +209,7 @@ latest-price cache, the circuit breakers, the request counter and the service se
 | `Constants/PriceEventDirection.cs` | `"Up"` and `"Down"`, for the `price_events` table. |
 | `Constants/FredConstants.cs` | FRED's date format (`yyyy-MM-dd`) and the `"."` it sends for a period with no figure. |
 | `Constants/BlsConstants.cs` | BLS's success status (`REQUEST_SUCCEEDED`), the `"-"` it sends for a period with no figure, and `M13`, its annual average, which the client skips. |
+| `Constants/AppLogColumnLengths.cs` | The size of each `app_logs` text column. The table setup and `AppLogService` both read it, and the service cuts every field to fit, because one value that is too long fails the whole batch. |
 | `Entities/AuditableEntity.cs` | Base class that gives every table `CreatedAt` and `UpdatedAt`. |
 
 **`Aurum.App.Infrastructure.Data`** — the database layer.
@@ -217,7 +219,7 @@ latest-price cache, the circuit breakers, the request counter and the service se
 | `AurumDbContext.cs` | The Entity Framework (EF, the library that maps C# classes to tables) context. Defines every table, column size and index. Fills in `CreatedAt`/`UpdatedAt` on save, using the injected clock. |
 | `AurumDbContextFactory.cs` | Used only by the `dotnet ef` command-line tool, so migrations can run without starting the app. Never runs in production. |
 | `Entities/Pricing/*.cs` | `PriceTick`, `PriceSource`, `PriceEvent`, `ApiQuotaWindow`. |
-| `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. Tables exist; nothing reads or writes them yet (Phase 2). |
+| `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. The first migration creates their tables. `FredImporter` writes them, but nothing calls it yet (Phase 2). |
 | `Entities/Logging/AppLog.cs` | One row of the app's own durable log. |
 | `Repositories/IUnitOfWork.cs` | `IUnitOfWork` and `UnitOfWork`: save changes, or run work inside one database transaction. |
 | `Migrations/` | Six migrations: initial schema, extra price-service rows, app logs, price events, and dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns, one migration each. |
@@ -235,22 +237,30 @@ Aurum.App.Infrastructure.Pricing/
 │   ├── IPriceSource.cs                 ← "one price service"
 │   ├── GoldApiIoSource.cs              ← GoldAPI
 │   ├── ApiNinjasSource.cs              ← API Ninjas
+│   ├── ApiNinjasGoldResponse.cs        ← the shape of API Ninjas' JSON answer
 │   ├── MetalPriceApiSource.cs          ← MetalpriceAPI
+│   ├── MetalApiGoldResponse.cs         ← the shape of MetalpriceAPI's JSON answer
 │   ├── QueryKeyAuthHandler.cs          ← adds MetalpriceAPI's or FRED's key to the web address
+│   ├── RegisteredPriceSource.cs        ← one service code `Program.cs` registered, for the startup checks
 │   ├── IPriceFeed.cs                   ← "get me a price from anyone"
 │   ├── FailoverPriceFeed.cs            ← tries each service in order
 │   ├── SourceCircuit.cs                ← one service's circuit breaker
 │   ├── SourceCircuitStore.cs           ← holds one circuit per service
+│   ├── CircuitSnapshot.cs              ← one circuit's state, read under one lock, for `/sources`
+│   ├── PriceFeedCircuitOptions.cs      ← `PriceFeedCircuit` settings: failures to open, break length
 │   ├── PriceQuote.cs                   ← a price, checked and cleaned up
 │   ├── PriceFeedResult.cs              ← a price plus which services were tried
 │   ├── SourceAttempt.cs                ← what happened when one service was tried
+│   ├── SourceAttemptOutcome.cs         ← success, failure, out of allowance, or skipped (breaker open)
 │   └── PriceSourceException.cs         ← the three failure types
 ├── Quota/
 │   ├── IQuotaGovernor.cs               ← "may I send one more request?"
 │   ├── PostgresQuotaGovernor.cs        ← the answer, kept in the database
 │   └── QuotaHandler.cs                 ← asks the governor before every request leaves
 ├── Cache/
-│   └── LatestQuoteCache.cs             ← newest price per symbol, in memory
+│   ├── ILatestQuoteCache.cs            ← "the newest price per symbol"; the endpoint handlers read it
+│   ├── LatestQuoteCache.cs             ← newest price per symbol, in memory
+│   └── LatestQuote.cs                  ← what is held, and the snapshot with its age worked out on read
 ├── Realtime/
 │   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
 ├── Macro/                              ← economic figures; FredImporter can save them, nothing calls it yet
@@ -264,7 +274,10 @@ Aurum.App.Infrastructure.Pricing/
 │   ├── BlsObservation.cs               ← one month's value, or none when BLS sends "-"
 │   └── BlsOptions.cs                   ← `Macro:Bls` settings: web address and key
 └── Deltas/
+    ├── IDeltaEngine.cs                 ← "how far did the price move"; the hub and handlers read it
     ├── DeltaEngine.cs                  ← works out price moves over six windows
+    ├── DeltaEngineOptions.cs           ← `DeltaEngine` settings: memory size and the closeness rule
+    ├── Sample.cs                       ← one held price: time, middle price, service number (40 bytes)
     ├── TickRingBuffer.cs               ← a fixed-size list of recent prices
     ├── DeltaWindow.cs                  ← the six windows: 1m, 5m, 15m, 1h, 4h, 1d
     ├── DeltaSnapshot.cs                ← the result: one move per window, or "no answer"
@@ -312,7 +325,8 @@ it goes in this file.
 1. **Logging.** Serilog writes JSON lines to the console.
 2. **Controllers.** `AddControllers()` finds every controller in `Aurum.Api`, and after the app is
    built `MapControllers()` gives each one its web address. A new controller needs no other
-   registration (D-20).
+   registration (D-20). `AddOpenApi()` registers the description of every endpoint. Only in
+   Development does the app serve it, with a Swagger page (a web page for trying the endpoints).
 3. **The clock.** `TimeProvider.System` is registered once. Every timestamp the app writes comes
    from it, which lets tests swap in a fake clock.
 4. **The database.** Reads `ConnectionStrings:DefaultConnection`. **If it is empty, the app refuses
@@ -1027,7 +1041,8 @@ underscore in a variable name stands for a nested section, so
 
 **`docker-compose.yml` passes on only the variables it lists**, not everything in `.env`. A setting
 put in `.env` without a matching line there never reaches the app, and nothing warns you. The list
-is: the connection string, the three price-service keys, `Macro__Fred__ApiKey`, `Macro__Bls__ApiKey`, each service's `Enabled`, GoldAPI's
+is: `ASPNETCORE_ENVIRONMENT` (Production unless `.env` sets it, so Swagger stays off),
+`ASPNETCORE_HTTP_PORTS` (fixed at 8080), the connection string, the three price-service keys, `Macro__Fred__ApiKey`, `Macro__Bls__ApiKey`, each service's `Enabled`, GoldAPI's
 `MonthlyRequestLimit`, `PricePolling__PollInterval`, `PriceFeed__Resilience__MaxAttempts` and
 `Ollama__BaseUrl`. Anything else is changed in `appsettings.json`, or by adding a line to
 `docker-compose.yml`.
@@ -1069,11 +1084,16 @@ fix.
 | `ConnectionStrings:DefaultConnection` is empty. | `Program.cs` |
 | An enabled service has no `ApiKey`, no `BaseUrl`, or a `MonthlyRequestLimit` below 1. | `PriceSourcesOptionsValidator` |
 | A registered service has no settings entry, or two entries share a `SourceCode`. | `PriceSourcesOptionsValidator` |
+| An enabled settings entry has no service class registered for its `SourceCode`. | `PriceSourcesOptionsValidator` |
+| An enabled service uses `RollingThirtyDays` without a `PeriodAnchor` (the date its 30 days count from). | `PriceSourcesOptionsValidator` |
 | No service is enabled, or two share the lowest `Priority`. | `PriceSourcesOptionsValidator` |
 | **The first service's allowance can't pay for a whole month of polls**, counting every try. | `PriceSourcesOptionsValidator` |
+| `RequestTimeout` is not positive, or `TotalTimeout` is not longer than it. | `PriceSourcesOptionsValidator` |
 | `TotalTimeout` is too short for `MaxAttempts` tries plus the waits between them. | `PriceSourcesOptionsValidator.MinimumTotalTimeout` |
+| `TotalTimeout` is not shorter than `PollInterval`, so one poll could still be retrying when the next starts. | `PriceSourcesOptionsValidator` |
+| `PriceFeed:Resilience:MaxAttempts` is outside 1 to 5. | `[Range]` on `PriceFeedResilienceOptions` |
 | `PollInterval` is not positive, or `StaleAfter` is not longer than it. | `Program.cs` / `PricePollingOptions` |
-| The circuit break is not longer than `PollInterval`. | `PriceFeedCircuitOptionsValidator` |
+| `FailureThreshold` is below 1, or the circuit break is not longer than `PollInterval`. | `PriceFeedCircuitOptionsValidator` |
 | `MaxSamplesPerSymbol` can't hold 36 hours of prices at `PollInterval`. | `DeltaEngineOptions.BufferCoversLongestWindow` |
 | A `Significance:Windows` key isn't one of the six window codes (a typo would switch that window off). | `SignificanceOptions.WindowKeysAreKnown` |
 | A `MinPercent` or `Cooldown` is zero or less, or `CrossSourceMagnitudeMultiplier` is below 1. | `SignificanceOptions.ValuesAreInRange` |
@@ -1122,7 +1142,9 @@ Things that will catch you out:
   migration that touches `price_ticks`.
 - **Every timestamp comes from the injected clock.** `AurumDbContext` takes a `TimeProvider` and uses
   it to fill `CreatedAt` and `UpdatedAt`. Raw SQL skips that, so raw SQL must pass those two values
-  itself, as the quota governor and `PriceEventSql` do. The SQL `now()` function is never used.
+  itself, as the quota governor and `PriceEventSql` do. The app's own SQL never uses the SQL
+  `now()` function. The two migrations that add `price_sources` rows do use it, because a migration
+  runs outside the app and the app's clock can't reach it.
 
 ---
 
@@ -1214,6 +1236,8 @@ AppLogQueue (holds up to 10,000) ──► AppLogDrainService
 - `HttpRequestContextAccessor` fills in the user and request details. Outside a web request (for
   example, in the poller) it returns empty values instead of failing.
 - The poller logs with the ordinary `ILogger<T>` (console only), not `IAppLogService<T>`.
+- `AppLogService` cuts every text field to its column size from `AppLogColumnLengths`. One value
+  that is too long would fail the whole batch, and every row in it would be lost.
 
 ---
 
@@ -1237,10 +1261,11 @@ Aurum.Api.Tests/
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
 ├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests
+├── Modules/AppLogs/           ← the log service's field cutting, and the background writer
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
 ├── Validators/                ← one file per input check
-└── Common/                    ← the paging bookmark and page-size rules
+└── Common/                    ← the paging bookmark, the page-size rules and the pipeline steps
 ```
 
 | Needs Docker (real Postgres) | No container, runs in milliseconds |
@@ -1249,6 +1274,7 @@ Aurum.Api.Tests/
 | `PricePollingServiceTests`, `PriceEventSqlTests`, `AurumApiFactoryTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `DeltaEngineReplayTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
 | `FredImporterTests` | `FredImporterReleasedAtTests` (the 08:30 New York rule, winter and summer) |
+| `AppLogDrainServiceTests` | `AppLogServiceTests` (each field cut to its column size) |
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 | | `FredClientTests` (a fake network; no request reaches FRED) |
@@ -1358,7 +1384,7 @@ come from another project, and their names do not exist here. The main gaps:
 |---|---|
 | Controllers | Two, serving four read endpoints (section 12). |
 | Commands, feature repositories, the generic repository | None yet. The only feature, `Prices`, only reads, so its handlers query the database directly. |
-| Redux, Expo Router, `components/` | None installed. The app is an empty shell, and these are the target for Phase 4. |
+| Redux, Expo Router, `components/` | None installed. The app is an empty shell, and these are the target from the Phase 1 dashboard onward. |
 | Mapping between database rows and DTOs (the plain classes the API sends) | Done by hand in each handler. AutoMapper is not used, because every version has an unfixed security advisory. |
 
 ---

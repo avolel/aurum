@@ -601,6 +601,8 @@ the computer's clock. That's this exact bug, returning in exactly the way it hid
 Making it required means the compiler points out every place a context is created. There are two:
 `Program.cs`, where it comes from the app's setup, and `PostgresFixture.CreateDbContext` in the tests.
 It's optional *there* only because a wrong default in tests fails a test instead of shipping.
+*Note:* a third place creates one too. `AurumDbContextFactory`, which the database tooling
+(`dotnet ef`) uses, passes the real clock (`TimeProvider.System`).
 
 `Audit_timestamps_come_from_the_injected_clock` enforces this.
 
@@ -1281,7 +1283,7 @@ claim are exactly that, whether or not something further down saves the day.
 **DECIDED:**
 
 - `LatestQuoteCache` keeps the newest price for each symbol in memory, for the whole time the app is
-  running. Item 8's `/v1/price/live` will answer from it without reading the database.
+  running. Item 8's `/api/v1/price/live` will answer from it without reading the database.
 - It only accepts a price that is newer than the one it already holds, judged by `ObservedAt` (the
   time the service says the price was taken). An older or equal price is dropped.
 - How old a price is (`Age`) is worked out at the moment someone asks: the app's clock minus
@@ -1342,7 +1344,7 @@ services that were called (`AttemptedSources`).
 
 **The reload is a method the poller waits for, not a separate background service.** Background
 services start in the order they're registered. Relying on that is a rule nobody re-reads before
-adding another one, and getting it wrong shows up as an empty `/v1/price/live` that looks like a
+adding another one, and getting it wrong shows up as an empty `/api/v1/price/live` that looks like a
 normal fresh start. Item 5's history needs the same startup read, so matching it now means the two can
 later be merged by deleting one of them.
 
@@ -1369,7 +1371,7 @@ Showing the age is the requirement. A cache that enforces freshness by deleting 
 the age a person needs to see is the one thing it destroys.
 
 Turned down: **item 8 reading the newest price from the database on every request.** It's correct and
-simple. But every `/v1/price/live` call becomes a read of the prices table. And because that table
+simple. But every `/api/v1/price/live` call becomes a read of the prices table. And because that table
 deletes anything over 30 days old, the endpoint's answer after a long outage would depend on a cleanup
 job.
 
@@ -1764,7 +1766,7 @@ sleeps for 250 milliseconds.
 - **No CORS policy.** CORS is the browser rule that blocks a web page from calling a server at another
   address unless the server allows it. The dashboard is a later batch of work and will need one then.
 - **Events are not sent over SignalR.** The todo asks for the price and moves only. Apps will read
-  saved events from item 8's `/v1/events`.
+  saved events from item 8's `/api/v1/events`.
 - **Messages can arrive out of order.** Rarely, the price sent on subscribe and a broadcast from a poll
   can reach the app in either order. The app should keep whichever has the newer `ObservedAt`. This
   is for the dashboard work.
@@ -2085,7 +2087,8 @@ Those two are still upper bounds, because FRED may have changed the series again
 figure. The jobs figures are posted by a different team at FRED than CPI, so the CPI match does not
 prove the jobs reading. The polled jobs run on 2026-12-04 checks it.
 
-**Not handled yet:** saving the rows. Paging is not handled either: if FRED reports more rows than
+**Not handled yet:** a timer that fetches and saves the rows. `FredImporter` saves them (D-23), but
+nothing calls it yet. Paging is not handled either: if FRED reports more rows than
 it sent, the client throws instead of asking for the next page.
 
 Turned down:
@@ -2166,8 +2169,8 @@ series publish at 08:30; the release calendar will replace this fixed time where
 **Why compare in C# and not one SQL upsert.** An upsert is one `INSERT … ON CONFLICT DO UPDATE`
 statement. In Postgres 17 it can't return the value it replaced, so the warning would need a second
 query. Loading first leaves a gap between the read and the write where another writer could change
-the row. That can't happen today: the app runs as one process, and FRED's timer is the only thing
-that writes these tables. The quota governor uses an upsert because many requests race for the same
+the row. That can't happen today: the app runs as one process, and `FredImporter` is the only thing
+that writes these tables. Nothing calls it on a timer yet. The quota governor uses an upsert because many requests race for the same
 counter (D-7); here there is one writer. **If BLS's save step runs on its own timer beside FRED's,
 the two could write the same month's row at once, and this choice has to be looked at again.**
 

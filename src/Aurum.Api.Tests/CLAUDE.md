@@ -20,8 +20,9 @@ be checked for whether it is actually racing before it is believed.
 ## What every feature's tests must cover
 
 Framework: xUnit + Moq. **Every new CQRS feature needs controller, handler and validator test
-files.** Naming: `Controllers/{ControllerName}Tests.cs`,
-`Handlers/{Feature}{Command|Query}HandlerTests.cs`, `Validators/{Feature}CommandValidatorTests.cs`.
+files.** One test file per class, named after the class: `Controllers/{ControllerName}Tests.cs`,
+`Handlers/{HandlerName}Tests.cs`, `Validators/{ValidatorName}Tests.cs` (e.g.
+`GetPriceHistoryQueryHandlerTests.cs`, `GetPriceHistoryQueryValidatorTests.cs`).
 Methods: `{MethodName}_{Scenario}_{ExpectedResult}` (e.g. `Handle_WithValidId_ReturnsDto`).
 
 - **Controllers:** mock `IMediator` and `IAppLogService<TController>`, never services. Set
@@ -130,5 +131,5 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
 - **`QuotaHandlerTests`** drives the handler through a real `HttpClient` over a stub inner handler,
   because `HttpClient` does its own exception handling on the way out — bypassing it would not prove
   `QuotaExhaustedException` reaches `PricePollingService`'s catch. `Infrastructure/ListLogger.cs`
-  captures log entries where the log line *is* the deliverable (so far only the governor's denial
-  message).
+  captures log entries where the log line *is* the deliverable (the governor's denial
+  message, and `FredImporter`'s changed-value warning).

@@ -47,7 +47,8 @@ check uniqueness across chunks. A key on `Id` alone makes `create_hypertable` fa
 
 ## Which tables are not hypertables
 
-`price_events` and `app_logs` are ordinary Postgres tables.
+Every other table is an ordinary Postgres table: `price_events`, `app_logs`, `price_sources`,
+`api_quota_windows`, `macro_series` and `macro_observations`.
 
 `price_events` holds the big price moves the app detects. It gets a few dozen rows a day, so it gains
 nothing from chunks. More importantly, events are the product's history and must last longer than
