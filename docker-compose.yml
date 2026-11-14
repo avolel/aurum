@@ -1,10 +1,10 @@
 name: aurum
 
 services:
-  # timescaledb-ha bundles both TimescaleDB and pgvector. D-3 in the phase plan:
-  # picking it now avoids building a custom image when Phase 2 needs pgvector.
-  # ops/db/init/ runs once on an empty data volume and will fail loudly if the
-  # image does not actually ship the extensions we depend on.
+  # timescaledb-ha bundles both TimescaleDB and pgvector (D-3 in ops/decisions/decisions.md),
+  # so Phase 2's pgvector needs no custom image.
+  # ops/db/init/ runs once on an empty data volume and fails loudly if the
+  # image does not ship the extensions the app depends on.
   postgres:
     image: timescale/timescaledb-ha:pg17
     container_name: aurum-postgres

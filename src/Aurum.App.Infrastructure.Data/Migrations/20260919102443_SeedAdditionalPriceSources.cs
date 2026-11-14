@@ -10,11 +10,10 @@ namespace Aurum.App.Infrastructure.Data.Migrations
     /// <remarks>
     /// <para>
     /// Schema-free: this exists only because <c>price_ticks.SourceCode</c> is a foreign key to
-    /// <c>price_sources.Code</c>. Both sources are configured and enabled in
-    /// <c>appsettings.json</c>, but <c>PricePollingService</c> selects the lowest
-    /// <c>Priority</c> unconditionally, so <c>goldapi.io</c> has served every poll so far and the
-    /// missing rows have never been reached. The first failover (phase-1-todo item 3) would insert
-    /// a tick carrying an unregistered code, and <c>SaveChangesAsync</c> would throw a foreign-key
+    /// <c>price_sources.Code</c>. When this was written, <c>PricePollingService</c> always picked
+    /// <c>goldapi.io</c>, so the missing rows had never been reached. The first failover
+    /// (phase-1-todo item 3) would have inserted
+    /// a tick carrying an unregistered code, and <c>SaveChangesAsync</c> would have thrown a foreign-key
     /// violation *after* the request was sent and the quota lease spent — a lost tick and a lost
     /// request charged to a provider that answered correctly.
     /// </para>
@@ -24,10 +23,10 @@ namespace Aurum.App.Infrastructure.Data.Migrations
     /// no fake clock can reach here. This matches the seed in <c>InitialSchema</c>.
     /// </para>
     /// <para>
-    /// <c>Priority</c> and <c>IsEnabled</c> are seeded to match <c>appsettings.json</c> but are
-    /// descriptive, not authoritative: the chain orders on <c>IPriceSource.Priority</c>, which is
-    /// bound from configuration. These columns exist so an operator reading the table sees the
-    /// intended shape of the chain; they can drift from config and nothing reads them to decide.
+    /// The <c>Priority</c> and <c>IsEnabled</c> columns seeded here were later dropped
+    /// (<c>DropPriceSourceIsEnabled</c>, <c>DropPriceSourcePriority</c>; D-20). Configuration alone
+    /// sets whether a source is used and in what order (<c>PriceSourcesOptions.EnabledInFailoverOrder</c>).
+    /// This SQL must stay as it is: it runs before those drops on a fresh database.
     /// </para>
     /// </remarks>
     public partial class SeedAdditionalPriceSources : Migration
