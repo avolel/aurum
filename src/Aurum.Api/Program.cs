@@ -165,6 +165,16 @@ builder.Services.AddOptions<FredOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services.AddOptions<MacroPollingOptions>()
+    .BindConfiguration(MacroPollingOptions.SectionName)
+    .Validate(
+        o => o.RefreshInterval > TimeSpan.Zero,
+        $"{MacroPollingOptions.SectionName}:RefreshInterval must be set to a positive interval.")
+    .Validate<TimeProvider>(
+        (o, clock) => o.HistoryStart < DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime),
+        $"{MacroPollingOptions.SectionName}:HistoryStart must be set to a past date.")
+    .ValidateOnStart();
+
 // Standard retries only, no QuotaHandler: FRED limits per minute, not per month (D-22).
 var fredClient = builder.Services.AddHttpClient<FredClient>((sp, http) =>
     http.BaseAddress = sp.GetRequiredService<IOptions<FredOptions>>().Value.BaseUrl);
