@@ -100,9 +100,9 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   received as `JsonElement` so assertions check the wire (camelCase, nulls inside the dictionary). It
   does not use `Program.cs`.
 - **`AurumApiFactory`** (`WebApplicationFactory<Program>`) boots the real `Program.cs` against the
-  collection's Postgres. It **removes `PricePollingService` and replaces every `IPriceSource` with a
-  faulting `ScriptedPriceSource`**: a poller in a test fires on its own timer and spends real
-  requests. So nothing fills the cache; a test that needs a held price calls
+  collection's Postgres. It **removes `PricePollingService` and `MacroPollingService`, and replaces
+  every `IPriceSource` with a faulting `ScriptedPriceSource`**: a poller in a test fires on its own
+  timer and spends real requests (or calls the real FRED). So nothing fills the cache; a test that needs a held price calls
   `ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not
   `ConfigureAppConfiguration` — `Program.cs` reads the connection string before `Build()`, and only
   host settings are visible that early. API keys are set per config key (`GoldApiIo`, …) and

@@ -35,7 +35,7 @@ internal sealed class FredImporter(AurumDbContext db, ILogger<FredImporter> logg
                 Title = series.Title,
                 Units = series.Units,
                 Frequency = series.Frequency,
-            };            
+            };
             db.MacroSeries.Add(seriesRow);
         }
 

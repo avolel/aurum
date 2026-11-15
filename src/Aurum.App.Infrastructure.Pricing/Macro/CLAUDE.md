@@ -1,8 +1,8 @@
 # The FRED client (D-22)
 
 `FredClient` fetches one `FredSeries` from `fred/series/observations` and returns
-`FredObservation`s, oldest first. `FredImporter` (below) saves them; nothing calls either yet.
-Registered in `Program.cs` as a typed client.
+`FredObservation`s, oldest first. `FredImporter` (below) saves them; `MacroPollingService` (at the
+end) calls both. Registered in `Program.cs` as a typed client.
 
 - **Core CPI (`CPILFESL`), payrolls (`PAYEMS`) and unemployment (`UNRATE`) are FRED series**: BLS's
   own API serves revised values only. FRED posts them 40+ minutes after BLS's 8:30, so on release
@@ -30,7 +30,7 @@ Registered in `Program.cs` as a typed client.
 # The FRED importer (D-23)
 
 `FredImporter.SaveAsync(series, rows, ct)` saves one series' rows and returns `(Inserted, Updated)`.
-Database only; the caller fetches. Not registered in `Program.cs` yet, and no timer calls it.
+Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPollingService` calls it.
 
 - **Load, compare in C#, save through EF; not a raw upsert.** D-23's warning needs the old value,
   which Postgres 17 can't return from `ON CONFLICT DO UPDATE`. Safe only with one writer: one
@@ -76,3 +76,21 @@ it right after 08:30, for the month just released. Registered in `Program.cs` as
 - A blank `Macro:Bls:ApiKey` fails boot (D-9's rule).
 - Not yet proven that BLS has the figure at 08:30 sharp; the 2026-12-04 run of
   `ops/bench/fred_delay.py` checks it.
+
+# The macro timer (`Jobs/MacroPollingService.cs`)
+
+A `BackgroundService` that runs once at startup, then every `Macro:Polling:RefreshInterval`
+(6 hours). Each pass fetches every series in `FredSeries.All` and saves it through `FredImporter`.
+
+- **It is the only macro writer** (D-23). BLS's release-morning save must be added inside it, not on
+  a timer of its own, or two writers can race on the same month's row.
+- **Where a fetch starts:** `FetchFrom` returns 60 days before the newest stored `ObservedOn`, so a
+  late month or a corrected market figure is picked up. A series with no rows starts at
+  `Macro:Polling:HistoryStart` (2006-01-01). That is the past-figure load: FRED returns 20 years in
+  one request. `HistoryStart` is read only for an empty series, so changing it reloads nothing.
+- **One scope, and one try, per series.** A failed save leaves its rows tracked in the `DbContext`,
+  and a shared context would try to write them again with the next series. A failing series is
+  logged and retried next pass; the others carry on.
+- Both settings are checked at startup in `Program.cs`: a non-positive interval or a missing or
+  future `HistoryStart` stops the app. They live in `appsettings.json` only, since neither is secret.
+- `AurumApiFactory` removes it, so no test calls the real FRED.

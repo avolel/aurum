@@ -214,11 +214,12 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
         dates, skips unchanged rows and overwrites changed ones. A changed value on a release series
         is logged as a warning (D-23). `ReleasedAt` is 08:30 New York time on the publish date.
         `FredImporterTests` covers it against a real database.
-  - [ ] `FredPollingService`: every `Macro:Fred:RefreshInterval` (6 hours), fetch each series from
-        60 days before its newest stored date (a year back when empty) and save it. Register it in
-        `Program.cs`, and remove it in `AurumApiFactory` so tests never call the real FRED.
-- [ ] Load past figures too, not only the latest, back as far as item 5's seed needs. Without them
-      the seed has prices but no economic background.
+  - [x] `MacroPollingService` (2026-11-14): every `Macro:Polling:RefreshInterval` (6 hours), it
+        fetches each series from 60 days before its newest stored date and saves it. Named for
+        macro, not FRED, because BLS's save step must run in the same service (D-23). Registered in
+        `Program.cs`; `AurumApiFactory` removes it, so tests never call the real FRED.
+- [x] Load past figures too, not only the latest (2026-11-14). An empty series loads from
+      `Macro:Polling:HistoryStart`, 2006-01-01, in one request.
 - [ ] A release calendar, so a new figure is fetched right after its known publish time (8:30 New
       York time for most; the Fed's rate decisions come out at 14:00) instead of at the next
       scheduled check. `MacroObservation.ReleasedAt` is what the 4-hour background window searches
