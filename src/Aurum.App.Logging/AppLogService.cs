@@ -2,7 +2,7 @@ using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Aurum.App.SharedKernel.Constants;
 using System.Diagnostics.CodeAnalysis;
 
-namespace Aurum.App.Application.AppLogs;
+namespace Aurum.App.Logging;
 
 /// <inheritdoc />
 public sealed class AppLogService<T>(
@@ -38,7 +38,7 @@ public sealed class AppLogService<T>(
     {
         Enqueue(entry =>
         {
-            entry.LogType = AppLogs.LogType.ActionLog.ToString();
+            entry.LogType = LogType.ActionLog.ToString();
             entry.Action = action;
 
             // ToString(), not Message, to keep inner exceptions (where the SQLSTATE lives).

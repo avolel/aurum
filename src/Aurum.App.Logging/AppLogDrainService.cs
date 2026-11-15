@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Aurum.App.Application.AppLogs;
+namespace Aurum.App.Logging;
 
 /// <summary>
 /// Drains <see cref="IAppLogQueue"/> into <c>app_logs</c> in batches.

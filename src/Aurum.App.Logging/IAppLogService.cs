@@ -1,4 +1,4 @@
-namespace Aurum.App.Application.AppLogs;
+namespace Aurum.App.Logging;
 
 public enum LogType
 {

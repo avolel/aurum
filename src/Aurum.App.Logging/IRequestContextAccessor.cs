@@ -1,4 +1,4 @@
-namespace Aurum.App.Application.AppLogs;
+namespace Aurum.App.Logging;
 
 /// <summary>
 /// The ambient facts about the inbound request that every log row is enriched with.
@@ -19,11 +19,11 @@ public sealed record RequestContext(
 }
 
 /// <summary>
-/// Supplies <see cref="RequestContext"/> without the Application layer referencing
+/// Supplies <see cref="RequestContext"/> without this project referencing
 /// <c>IHttpContextAccessor</c>.
 /// </summary>
 /// <remarks>
-/// This layer must not touch HTTP (<c>docs/best-practices-api.md</c>), so the implementation lives in
+/// This project, like Application, must not touch HTTP (<c>docs/best-practices-api.md</c>), so the implementation lives in
 /// <c>Aurum.Api</c>. Background jobs get <see cref="RequestContext.None"/>.
 /// </remarks>
 public interface IRequestContextAccessor
