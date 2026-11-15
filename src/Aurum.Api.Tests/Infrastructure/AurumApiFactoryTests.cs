@@ -28,6 +28,7 @@ public sealed class AurumApiFactoryTests(PostgresFixture postgres) : IAsyncLifet
         var services = _factory.Services;
 
         Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is PricePollingService);
+        Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is MacroPollingService);
         Assert.All(services.GetServices<IPriceSource>(), s => Assert.IsType<ScriptedPriceSource>(s));
         Assert.Equal(AurumApiFactory.SourceCodes.Order(), services.GetServices<IPriceSource>().Select(s => s.Code).Order());
     }

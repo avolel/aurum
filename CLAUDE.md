@@ -111,8 +111,8 @@ Request → Controller → IMediator.Send() → Pipeline Behaviors → Handler �
 
 Pipeline: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler.
 The DbContext is `AurumDbContext`. The only feature is `Prices` (queries only — see
-`src/Aurum.App.Application/Prices/CLAUDE.md`). The only scheduled work is `PricePollingService`, a
-`BackgroundService` outside MediatR. A feature with commands adds `Commands/`,
+`src/Aurum.App.Application/Prices/CLAUDE.md`). The scheduled work is `PricePollingService` and
+`MacroPollingService`, two `BackgroundService`s outside MediatR. A feature with commands adds `Commands/`,
 `Handlers/Commands/`, a validator per command and `Infrastructure.Data/Repositories/{Feature}/`;
 `docs/cqrs-guide.md` shows the shape. **No new service layer** — handlers replace services.
 

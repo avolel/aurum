@@ -195,6 +195,12 @@ builder.Services.AddHttpClient<BlsClient>((sp, http) =>
         http.BaseAddress = sp.GetRequiredService<IOptions<BlsOptions>>().Value.BaseUrl)
     .AddStandardResilienceHandler();
 
+// Scoped: it holds the request's AurumDbContext.
+builder.Services.AddScoped<FredImporter>();
+
+// The only macro writer (D-23).
+builder.Services.AddHostedService<MacroPollingService>();
+
 // ── Health ────────────────────────────────────────────────────────────────────────────────────
 
 // /health is liveness; /health/ready checks dependencies, selected by the "ready" tag.
