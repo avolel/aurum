@@ -12,6 +12,7 @@ COPY src/Aurum.Api/Aurum.Api.csproj src/Aurum.Api/
 COPY src/Aurum.App.Application/Aurum.App.Application.csproj src/Aurum.App.Application/
 COPY src/Aurum.App.Infrastructure.Data/Aurum.App.Infrastructure.Data.csproj src/Aurum.App.Infrastructure.Data/
 COPY src/Aurum.App.Infrastructure.Pricing/Aurum.App.Infrastructure.Pricing.csproj src/Aurum.App.Infrastructure.Pricing/
+COPY src/Aurum.App.Logging/Aurum.App.Logging.csproj src/Aurum.App.Logging/
 COPY src/Aurum.App.SharedKernel/Aurum.App.SharedKernel.csproj src/Aurum.App.SharedKernel/
 RUN dotnet restore src/Aurum.Api/Aurum.Api.csproj
 
@@ -19,6 +20,7 @@ COPY src/Aurum.Api/ src/Aurum.Api/
 COPY src/Aurum.App.Application/ src/Aurum.App.Application/
 COPY src/Aurum.App.Infrastructure.Data/ src/Aurum.App.Infrastructure.Data/
 COPY src/Aurum.App.Infrastructure.Pricing/ src/Aurum.App.Infrastructure.Pricing/
+COPY src/Aurum.App.Logging/ src/Aurum.App.Logging/
 COPY src/Aurum.App.SharedKernel/ src/Aurum.App.SharedKernel/
 RUN dotnet publish src/Aurum.Api/Aurum.Api.csproj -c Release -o /app/publish --no-restore
 
