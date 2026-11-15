@@ -23,7 +23,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- All four, because Program.cs is the composition root and every registration lives there.
+    <!-- All five, because Program.cs is the composition root and every registration lives there.
+         Controllers also use Logging directly, through IAppLogService.
          The layer table in docs/best-practices-api.md gives this project "Depends On: Application,
          SharedKernel", which is the rule for *code* in Controllers/ — a controller that reaches
          past IMediator into Infrastructure is the violation that rule is about. The extra two
@@ -32,6 +33,7 @@
     <ProjectReference Include="..\Aurum.App.Application\Aurum.App.Application.csproj" />
     <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
     <ProjectReference Include="..\Aurum.App.Infrastructure.Pricing\Aurum.App.Infrastructure.Pricing.csproj" />
+    <ProjectReference Include="..\Aurum.App.Logging\Aurum.App.Logging.csproj" />
     <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
   </ItemGroup>
 

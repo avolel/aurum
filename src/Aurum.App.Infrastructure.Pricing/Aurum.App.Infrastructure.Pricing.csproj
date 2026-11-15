@@ -31,6 +31,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
+    <!-- Lets this module use IAppLogService without referencing Application, which references
+         this module (D-20). Nothing here uses it yet. -->
+    <ProjectReference Include="..\Aurum.App.Logging\Aurum.App.Logging.csproj" />
     <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
   </ItemGroup>
 
