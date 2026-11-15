@@ -5,6 +5,7 @@
     <Project Path="src/Aurum.App.Application/Aurum.App.Application.csproj" />
     <Project Path="src/Aurum.App.Infrastructure.Data/Aurum.App.Infrastructure.Data.csproj" />
     <Project Path="src/Aurum.App.Infrastructure.Pricing/Aurum.App.Infrastructure.Pricing.csproj" />
+    <Project Path="src/Aurum.App.Logging/Aurum.App.Logging.csproj" />
     <Project Path="src/Aurum.App.SharedKernel/Aurum.App.SharedKernel.csproj" />
   </Folder>
 </Solution>
