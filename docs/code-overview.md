@@ -160,8 +160,9 @@ aurum/
 └── src/
     ├── Aurum.App.SharedKernel/            ← small types every project can use
     ├── Aurum.App.Infrastructure.Data/     ← the database: tables, migrations, saving
+    ├── Aurum.App.Logging/                 ← app logging: rows queued, then saved to `app_logs` in the background
     ├── Aurum.App.Infrastructure.Pricing/  ← fetching, counting, caching and measuring prices
-    ├── Aurum.App.Application/             ← the read endpoints' logic, request plumbing, app logging
+    ├── Aurum.App.Application/             ← the read endpoints' logic, request plumbing
     ├── Aurum.Api/                         ← the program that starts; wires everything together
     └── Aurum.Api.Tests/                   ← every test, run against a real Postgres
 ```
@@ -173,27 +174,37 @@ An arrow means "can use code from".
 ```mermaid
 flowchart TD
     Api[Aurum.Api<br/>starts the app, registers everything]
-    App[Aurum.App.Application<br/>read endpoints' handlers, request pipeline, app logs]
+    App[Aurum.App.Application<br/>read endpoints' handlers, request pipeline]
     Pricing[Aurum.App.Infrastructure.Pricing<br/>price services, counter, cache, moves]
+    Log[Aurum.App.Logging<br/>app log service, queue, background writer]
     Data[Aurum.App.Infrastructure.Data<br/>DbContext, tables, migrations]
     Kernel[Aurum.App.SharedKernel<br/>ApiResponse, constants, base entity]
 
     Api --> App
     Api --> Pricing
+    Api --> Log
     Api --> Data
     Api --> Kernel
     App --> Data
     App --> Pricing
+    App --> Log
     Pricing --> Data
+    Pricing --> Log
+    Log --> Data
+    Log --> Kernel
     Data --> Kernel
 ```
 
-`Aurum.Api` uses all four other projects because it is the one place that creates every object the
-app needs (see section 3). `Aurum.App.Infrastructure.Pricing` is a fifth project the layer table in
+`Aurum.Api` uses all five other projects because it is the one place that creates every object the
+app needs (see section 3). `Aurum.App.Infrastructure.Pricing` is a project the layer table in
 `docs/best-practices-api.md` does not list. It exists because calling outside web services and
 running a background timer are neither "database code" nor "business rules", which are the only two
 boxes that table offers. `Aurum.App.Application` uses it so the endpoint handlers can read the
 latest-price cache, the circuit breakers, the request counter and the service settings (D-20).
+
+`Aurum.App.Logging` sits below both of them so both can write to the app log. It used to be a folder
+in Application. The pricing code couldn't use it there: Application already uses Pricing, and two
+projects can't use each other, because the build refuses a loop (D-24).
 
 ### What is in each project
 
@@ -286,6 +297,17 @@ Aurum.App.Infrastructure.Pricing/
     └── PriceEventSql.cs                ← saves an event, unless one was saved too recently
 ```
 
+**`Aurum.App.Logging`** — the app's own log, saved to the `app_logs` table (see "App logging" in
+section 12).
+
+| File | What it is |
+|---|---|
+| `IAppLogService.cs` | `IAppLogService<T>`, the interface controllers and the pipeline log through, and the `LogType` list. |
+| `AppLogService.cs` | Builds each row, fills in the request details, cuts each field to its column size, and queues it. |
+| `IAppLogQueue.cs` | The queue between the caller and the background writer. It holds up to 10,000 rows. |
+| `AppLogDrainService.cs` | The background writer: saves queued rows in batches of up to 100. |
+| `IRequestContextAccessor.cs` | How a row gets the user, address and request id without this project knowing about web requests. `Aurum.Api` supplies the real one. |
+
 **`Aurum.App.Application`** — the logic behind the endpoints, and the steps every request passes
 through.
 
@@ -295,7 +317,6 @@ through.
 | `Validation/ValidationErrors.cs` | Turns a failed input check into the `Errors` list of an `ApiResponse`. |
 | `Common/CQRS/` | `ICommand<T>` (a request that changes data) and `IQuery<T>` (a request that only reads). CQRS stands for "command query responsibility segregation", which here just means reads and writes are separate request types. |
 | `Common/Behaviors/` | Three steps every request passes through before its handler: logging, validation, and a database transaction for commands. |
-| `AppLogs/` | `IAppLogService<T>`: writes log rows to the `app_logs` table without slowing the request down. |
 
 **`Aurum.Api`** — the program you start.
 
@@ -1217,7 +1238,8 @@ Rules worth knowing:
 
 ### App logging
 
-`IAppLogService<T>` writes rows to `app_logs` without making the caller wait for the database:
+`IAppLogService<T>`, in `src/Aurum.App.Logging/`, writes rows to `app_logs` without making the
+caller wait for the database:
 
 ```
 request thread                     background
@@ -1235,7 +1257,8 @@ AppLogQueue (holds up to 10,000) ──► AppLogDrainService
   ended.
 - `HttpRequestContextAccessor` fills in the user and request details. Outside a web request (for
   example, in the poller) it returns empty values instead of failing.
-- The poller logs with the ordinary `ILogger<T>` (console only), not `IAppLogService<T>`.
+- The poller logs with the ordinary `ILogger<T>` (console only), not `IAppLogService<T>`. Since
+  D-24 the pricing code can use `IAppLogService<T>`, but nothing there does yet.
 - `AppLogService` cuts every text field to its column size from `AppLogColumnLengths`. One value
   that is too long would fail the whole batch, and every row in it would be lost.
 

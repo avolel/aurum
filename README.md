@@ -265,6 +265,8 @@ ops/phase-2-todo.md                Phase 2's work list: AI explanations for big 
 docs/                              guides on how the code is organised
 src/Aurum.App.SharedKernel/        small pieces every project uses
 src/Aurum.App.Infrastructure.Data/ the database: tables, changes to them, saving
+src/Aurum.App.Logging/             the app's own log: rows are queued, then saved to the database
+                                   in the background
 src/Aurum.App.Infrastructure.Pricing/
   Sources/                         the three price services, the fallback order, the circuit breaker
   Quota/                           the request counter
@@ -274,7 +276,7 @@ src/Aurum.App.Infrastructure.Pricing/
   Realtime/                        the interface the timer uses to send prices to apps
   Macro/                           fetches economic figures from FRED, and from BLS on release
                                    morning; saves FRED's, but nothing runs it yet
-src/Aurum.App.Application/         the rules for handling requests, and logging
+src/Aurum.App.Application/         the rules for handling requests
   Prices/                          the four read endpoints' queries, input checks and answers
 src/Aurum.Api/                     the web API; Program.cs sets everything up
   Controllers/                     the web addresses; each one passes the request on and wraps the answer
@@ -283,7 +285,7 @@ src/Aurum.Api.Tests/               tests, run against a real database
 app/                               the start of the mobile app; nothing much in it yet
 ```
 
-The code is split into five projects, based on the layout in `docs/best-practices-api.md`, with two
+The code is split into six projects, based on the layout in `docs/best-practices-api.md`, with two
 differences recorded in D-5:
 
 - The code that talks to outside price services and runs the timer has its own project,

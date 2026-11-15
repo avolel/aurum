@@ -30,17 +30,19 @@ breaking a rule below usually won't compile.
 
 | Layer | Project | What it does | Uses | Never does |
 |-------|---------|--------------|------|------------|
-| **Web** | `Aurum.Api` | Receives web requests, checks logins, wraps answers in `ApiResponse<T>`, hands work to MediatR | Application, SharedKernel | Business rules, database access, calls to outside web services |
-| **Application** | `Aurum.App.Application` | Commands, queries, handlers, validators, turning entities into DTOs | Infrastructure.Data, Infrastructure.Pricing, SharedKernel | Anything to do with web requests or controllers |
+| **Web** | `Aurum.Api` | Receives web requests, checks logins, wraps answers in `ApiResponse<T>`, hands work to MediatR | Application, Logging, SharedKernel | Business rules, database access, calls to outside web services |
+| **Application** | `Aurum.App.Application` | Commands, queries, handlers, validators, turning entities into DTOs | Infrastructure.Data, Infrastructure.Pricing, Logging, SharedKernel | Anything to do with web requests or controllers |
+| **Logging** | `Aurum.App.Logging` | The app's own log: `IAppLogService<T>` puts rows in a queue, and a background service saves them to `app_logs` | Infrastructure.Data, SharedKernel | Anything to do with web requests (`Aurum.Api` supplies the request details), business rules |
 | **Database** | `Aurum.App.Infrastructure.Data` | Database queries, repositories, the database context (`AurumDbContext`) | SharedKernel | DTOs, business rules, turning entities into DTOs |
 | **Shared** | `Aurum.App.SharedKernel` | Small types every layer uses (`ApiResponse<T>`, `CursorPage<T>`) | Nothing | Anything specific to one feature |
 
 Two differences in this repository, explained in D-5 of `ops/decisions/decisions.md`:
 
-- There's a fifth project, `Aurum.App.Infrastructure.Pricing`, for the outside price services and the
-  price timer. It doesn't fit any row above. The Application layer uses it so the price handlers can
-  read the latest price, the circuit breakers and the request counter (D-20).
-- `Aurum.Api` actually uses all four other projects, because `Program.cs` is where everything is set
+- There's one more project, `Aurum.App.Infrastructure.Pricing`, for the outside price services and
+  the price timer. It doesn't fit any row above. The Application layer uses it so the price handlers
+  can read the latest price, the circuit breakers and the request counter (D-20). It can also use
+  Logging.
+- `Aurum.Api` actually uses all five other projects, because `Program.cs` is where everything is set
   up and it has to name everything. The "Uses" rule above still applies to the code in
   `Controllers/`: a controller must never go around MediatR to reach database or pricing code.
 
@@ -300,6 +302,8 @@ the `app_logs` table, through a background queue.
 - **Doesn't slow the request down**: rows go into a queue (`IAppLogQueue`), and a background service
   (`AppLogDrainService`) saves them in batches.
 - **Use it instead of `ILogger<T>`** in controllers and other classes.
+- **Lives in its own project**, `src/Aurum.App.Logging/`. The pricing code can use it too, because
+  it no longer sits in the Application project, which the pricing code can't use (D-24).
 
 ### Which method to call
 

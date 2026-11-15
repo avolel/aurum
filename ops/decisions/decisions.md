@@ -53,6 +53,7 @@ When you add a decision, add a line for it here too.
 - [D-21 — The replay test is written as stretches, and the test API removes the poller and the price services](#d-21--the-replay-test-is-written-as-stretches-and-the-test-api-removes-the-poller-and-the-price-services)
 - [D-22 — FRED figures are stored as first published, and FRED stays out of the quota chain](#d-22--fred-figures-are-stored-as-first-published-and-fred-stays-out-of-the-quota-chain)
 - [D-23 — BLS supplies the release-morning figure, and FRED's first published value replaces it](#d-23--bls-supplies-the-release-morning-figure-and-freds-first-published-value-replaces-it)
+- [D-24 — App logging is its own project](#d-24--app-logging-is-its-own-project)
 
 ## The machine these decisions were made on
 
@@ -192,8 +193,8 @@ Two things that follow from it:
 ## D-5 — How the code is divided up
 
 **REPLACED (2026-09-26). Originally: one project, `Aurum.Api`, with a folder per feature area, and
-each area setting up its own services through one `Add<Module>Module` method. Now: five projects
-following the layer table in `docs/best-practices-api.md`, with every service set up in
+each area setting up its own services through one `Add<Module>Module` method. Now: six projects
+(five until D-24) following the layer table in `docs/best-practices-api.md`, with every service set up in
 `src/Aurum.Api/Program.cs`.**
 
 The original reasoning still stands on its own terms, and I've kept it here rather than deleting it.
@@ -213,17 +214,18 @@ The layout, and the two places it differs from the table:
 ```
 src/Aurum.App.SharedKernel/            depends on nothing, by design
 src/Aurum.App.Infrastructure.Data/     the database: context, tables, changes, saving
+src/Aurum.App.Logging/                 the app's own log (moved out of Application by D-24)
 src/Aurum.App.Infrastructure.Pricing/  price services, request counting, circuit breakers, the timer
-src/Aurum.App.Application/             request handling rules, pipeline steps, app logs
+src/Aurum.App.Application/             request handling rules, pipeline steps
 src/Aurum.Api/                         Program.cs, controllers
 ```
 
-`Aurum.App.Infrastructure.Pricing` is a fifth project the table doesn't list. The price services are
+`Aurum.App.Infrastructure.Pricing` is a project the table doesn't list. The price services are
 outside web services the app calls, and the price timer is a background job. Neither is "database
 queries and saving", and neither is a business rule. Putting them in `Infrastructure.Data` would have
 broken that project's own "never makes web calls" rule on day one.
 
-`Aurum.Api` can see all four other projects, not just the two the table allows. That's because it's
+`Aurum.Api` can see all five other projects, not just the ones the table allows. That's because it's
 where everything gets connected together, and it has to be able to name everything it connects. The
 table's rule still applies to the code in `Controllers/`. The thing it actually forbids is a
 controller going around MediatR to reach database or pricing code directly.
@@ -2184,3 +2186,45 @@ Turned down:
   the same figure and pick between them.
 - **Holding the explanation until FRED posts.** For jobs that could be two hours, far past the
   5-minute goal.
+
+## D-24 — App logging is its own project
+
+**DECIDED:**
+
+- The app's own log moves out of `src/Aurum.App.Application/AppLogs/` into a new project,
+  `Aurum.App.Logging`. That covers `IAppLogService<T>`, the queue, the background writer
+  (`AppLogDrainService`) and `IRequestContextAccessor`. The code itself did not change.
+- The new project uses only `Infrastructure.Data` (for the `AppLog` table) and `SharedKernel` (for the
+  column sizes).
+- `Infrastructure.Pricing`, `Application`, `Aurum.Api` and the tests all refer to it.
+- `Application` refers to it directly, even though it would also get it through `Infrastructure.Pricing`.
+  `LoggingBehavior` uses it, so relying on the pricing project's reference would break the build the
+  day that reference is removed.
+- Nothing in the pricing code uses it yet. The poller, `FredImporter` and the rest still write only
+  to the console through `ILogger<T>`. Switching them over is a separate change.
+
+Decided and built by me on 2026-11-15.
+
+**Why.** The pricing code had no way to write to `app_logs`. The log service lived in the
+Application project, and Application already uses the pricing project (D-20). For the pricing code
+to use the log service, the pricing project would have had to refer back to Application. .NET refuses
+two projects that refer to each other, so that doesn't build. That's why the poller and
+`FredImporter` log to the console only: their failures can't be searched in `app_logs`, and they are
+gone once the container's own log is cleared. With the log service in a project below both, either
+one can use it.
+
+**What it costs.** One more project to list in `Aurum.slnx` and in `src/Aurum.Api/Dockerfile`. If the
+Dockerfile is missing the new project, the image build fails at the restore step, so the mistake shows
+up straight away rather than at runtime.
+
+Turned down:
+
+- **Putting it in `Infrastructure.Data`.** Both Application and the pricing project already use that
+  project, so it would also have fixed the problem without a new project. But it would put a
+  background service and the details of each web request (user, IP address) into the database
+  project, whose job is tables and saving. The database project would also need the hosting package
+  for that one class.
+- **Making the pricing project refer to Application.** The two projects would refer to each other,
+  and that doesn't build.
+- **Undoing D-20, so Application stops using the pricing project.** D-20 already turned this down:
+  it needs a copy of three interfaces kept in step by hand, only to make room for this.

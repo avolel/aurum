@@ -762,5 +762,5 @@ public async Task Validate_SourceCodeOneOverMaxLength_HasError()
 | `src/Aurum.App.Infrastructure.Data/Repositories/IUnitOfWork.cs` | Saving, and running work in one transaction |
 | `src/Aurum.App.SharedKernel/Common/CursorPage.cs` | `CursorPage<T>` and `Cursor`, for lists that come back one page at a time |
 | `src/Aurum.App.SharedKernel/Common/Pagination.cs` | `PaginationHelper.ClampPageSize`, which keeps a page size between 1 and 500 |
-| `src/Aurum.App.Application/AppLogs/` | App logging. It's not a command/query feature. Every controller uses it. |
+| `src/Aurum.App.Logging/` | App logging, in its own project (D-24). It's not a command/query feature. Every controller uses it. |
 | `src/Aurum.Api/Program.cs` | Where MediatR and FluentValidation are set up |
