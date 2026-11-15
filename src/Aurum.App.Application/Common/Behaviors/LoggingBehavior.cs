@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 using FluentValidation;
 using MediatR;
 using Microsoft.Extensions.Logging;

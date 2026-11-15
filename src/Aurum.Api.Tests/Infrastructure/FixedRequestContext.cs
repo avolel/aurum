@@ -1,4 +1,4 @@
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 
 namespace Aurum.Api.Tests.Infrastructure;
 

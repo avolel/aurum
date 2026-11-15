@@ -1,4 +1,4 @@
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 using Aurum.App.Application.Common.Behaviors;
 using Aurum.App.Application.Common.CQRS;
 using Aurum.App.Infrastructure.Data.Repositories;

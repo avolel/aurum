@@ -1,5 +1,5 @@
 using Aurum.Api.Controllers;
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 using Aurum.App.Application.Prices.DTOs;
 using Aurum.App.Application.Prices.Queries;
 using Aurum.App.SharedKernel.Common;
