@@ -1,11 +1,12 @@
 using Aurum.App.SharedKernel.Constants;
+using Aurum.App.Logging;
 
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
 public class MetalPriceApiSource(
     HttpClient http,
     TimeProvider clock,
-    ILogger<MetalPriceApiSource> logger) : IPriceSource
+    IAppLogService<MetalPriceApiSource> logger) : IPriceSource
 {
     public const string SourceCode = "metalprice-api";
 
@@ -51,7 +52,12 @@ public class MetalPriceApiSource(
         else
         {
             observedAt = receivedAt;
-            logger.LogWarning("{Source} returned no usable timestamp; using receipt time for {Symbol}.", Code, symbol);
+            await logger.LogAsync(
+                LogType.SystemLog,
+                "MissingTimestamp",
+                $"{Code} returned no usable timestamp; using receipt time for {symbol}.",
+                level: LogLevel.Warning,
+                ct: ct);
         }
 
         // This provider does not quote bid and ask, so its price is the mid.

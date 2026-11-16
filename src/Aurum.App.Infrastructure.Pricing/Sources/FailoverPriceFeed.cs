@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using Polly.Timeout;
+using Aurum.App.Logging;
 
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
@@ -15,7 +16,7 @@ internal sealed class FailoverPriceFeed(
     IEnumerable<IPriceSource> sources,
     IOptions<PriceSourcesOptions> options,
     SourceCircuitStore circuits,
-    ILogger<FailoverPriceFeed> logger) : IPriceFeed
+    IAppLogService<FailoverPriceFeed> logger) : IPriceFeed
 {
     /// <summary>
     /// <c>price_sources.LastFailureReason</c> is 512 characters. Cut here, where the string is built:
@@ -86,9 +87,13 @@ internal sealed class FailoverPriceFeed(
             catch (Exception ex)
             {
                 // A bug in one source must not take down the chain; the type name marks it as a bug.
-                logger.LogError(ex,
-                    "{Source} threw an unexpected {ExceptionType}; treating it as a fault.",
-                    source.Code, ex.GetType().Name);
+                await logger.LogErrorAsync(
+                    nameof(GetLatestQuoteAsync),
+                    ex,
+                    details: $"{source.Code} threw an unexpected exception; treating it as a fault.",
+                    logType: LogType.SystemLog, ct: ct
+                );
+
                 attempts.Add(RecordFault(circuit, source.Code, ex));
             }
         }

@@ -3,7 +3,6 @@ using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -33,7 +32,7 @@ public class DeltaEngineTests
             scopes ?? new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new DeltaEngineOptions { MaxSamplesPerSymbol = capacity }),
             clock,
-            NullLogger<DeltaEngine>.Instance);
+            new ListAppLog<DeltaEngine>());
 
         return (engine, clock);
     }

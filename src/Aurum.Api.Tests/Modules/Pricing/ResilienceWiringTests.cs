@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Data;
+using Aurum.App.Logging;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Quota;
 using Aurum.App.Infrastructure.Pricing.Sources;
@@ -57,7 +58,9 @@ public class ResilienceWiringTests(PostgresFixture fixture) : IAsyncLifetime
         var services = new ServiceCollection();
 
         services.AddSingleton(_clock);
+        // AddLogging for the framework's resilience handler; ListAppLog for QuotaHandler and the sources.
         services.AddLogging(b => b.AddProvider(NullLoggerProvider.Instance));
+        services.AddSingleton(typeof(IAppLogService<>), typeof(ListAppLog<>));
         services.AddSingleton(TestPriceSources.For(
             SourceCode,
             monthlyRequestLimit,

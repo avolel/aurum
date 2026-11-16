@@ -4,7 +4,6 @@ using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -45,7 +44,7 @@ public class DeltaEngineWarmupTests(PostgresFixture fixture) : IAsyncLifetime
             services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>());
 
         var engine = new DeltaEngine(
-            scopes, Options.Create(new DeltaEngineOptions()), clock, NullLogger<DeltaEngine>.Instance);
+            scopes, Options.Create(new DeltaEngineOptions()), clock, new ListAppLog<DeltaEngine>());
 
         return (engine, scopes);
     }

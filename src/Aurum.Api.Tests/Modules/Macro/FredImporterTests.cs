@@ -15,7 +15,7 @@ public class FredImporterTests(PostgresFixture fixture) : IAsyncLifetime
     private static readonly DateOnly Sept = new(2025, 9, 1);
     private static readonly DateOnly Aug = new(2025, 8, 1);
 
-    private readonly ListLogger<FredImporter> _logger = new();
+    private readonly ListAppLog<FredImporter> _logger = new();
 
     // Deleting the series cascades to its observations.
     public async Task InitializeAsync()
@@ -41,7 +41,7 @@ public class FredImporterTests(PostgresFixture fixture) : IAsyncLifetime
             .ToListAsync(Ct);
     }
 
-    private IEnumerable<string> Warnings => _logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Message);
+    private IEnumerable<string> Warnings => _logger.Entries.Where(e => e.Level == LogLevel.Warning).Select(e => e.Details!);
 
     [Fact]
     public async Task Creates_the_series_row_once()

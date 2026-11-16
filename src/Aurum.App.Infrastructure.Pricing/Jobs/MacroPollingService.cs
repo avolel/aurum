@@ -1,5 +1,6 @@
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Pricing.Macro;
+using Aurum.App.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -17,7 +18,7 @@ internal sealed class MacroPollingService(
     IServiceScopeFactory scopeFactory,
     TimeProvider clock,
     IOptions<MacroPollingOptions> options,
-    ILogger<MacroPollingService> logger) : BackgroundService
+    IAppLogService<MacroPollingService> logger) : BackgroundService
 {
     // Re-read the last two months, so a late month or a corrected market figure is picked up.
     private const int OverlapDays = 60;
@@ -42,7 +43,12 @@ internal sealed class MacroPollingService(
                 catch (Exception ex)
                 {
                     // One bad series must not stop the others.
-                    logger.LogError(ex, "Refreshing {Series} from FRED failed; trying again next pass.", series.Code);
+                    await logger.LogErrorAsync("MacroPollingService",
+                        ex,
+                        details: $"Refreshing {series.Code} from FRED failed; trying again next pass.",
+                        logType: LogType.SystemLog,
+                        ct: stoppingToken
+                    );
                 }
             }
         }
@@ -75,8 +81,11 @@ internal sealed class MacroPollingService(
         var (inserted, updated) = await scope.ServiceProvider.GetRequiredService<FredImporter>()
             .SaveAsync(series, rows, ct);
 
-        logger.LogInformation(
-            "FRED {Series} from {From:yyyy-MM-dd}: {Fetched} fetched, {Inserted} inserted, {Updated} updated.",
-            series.Code, from, rows.Count, inserted, updated);
+        await logger.LogAsync(LogType.SystemLog,
+            "RefreshedFredSeries",
+            $"FRED {series.Code} from {from:yyyy-MM-dd}: {rows.Count} fetched, {inserted} inserted, {updated} updated.",
+            level: LogLevel.Information,
+            ct: ct
+        );
     }
 }

@@ -1,5 +1,6 @@
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Macro;
+using Aurum.App.Logging;
 using Microsoft.EntityFrameworkCore;
 
 namespace Aurum.App.Infrastructure.Pricing.Macro;
@@ -13,7 +14,7 @@ namespace Aurum.App.Infrastructure.Pricing.Macro;
 /// value has to be logged with its old value (D-23). Safe only with one writer, which holds while the
 /// app is single-instance and FRED is its only macro writer.
 /// </remarks>
-internal sealed class FredImporter(AurumDbContext db, ILogger<FredImporter> logger)
+internal sealed class FredImporter(AurumDbContext db, IAppLogService<FredImporter> logger)
 {
     // Every release series publishes at 08:30 New York time.
     private static readonly TimeOnly ReleaseTime = new(8, 30);
@@ -73,9 +74,11 @@ internal sealed class FredImporter(AurumDbContext db, ILogger<FredImporter> logg
             // release-morning row (D-23). Market series are corrected routinely, so no warning.
             if (series.IsRelease && stored.Value != row.Value)
             {
-                logger.LogWarning(
-                    "FRED's {Series} for {ObservedOn:yyyy-MM-dd} is {New}; replacing stored {Old}.",
-                    series.Code, row.ObservedOn, row.Value, stored.Value);
+                await logger.LogAsync(LogType.SystemLog,
+                    "ReleaseValueChanged",
+                    $"FRED's {series.Code} for {row.ObservedOn:yyyy-MM-dd} is {row.Value}; replacing stored {stored.Value}.",
+                    level: LogLevel.Warning,
+                    ct: ct);
             }
 
             stored.Value = row.Value;

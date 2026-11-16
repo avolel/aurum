@@ -309,7 +309,7 @@ public partial class Program
         clientBuilder.AddHttpMessageHandler(sp => new QuotaHandler(
             sp.GetRequiredService<IServiceScopeFactory>(),
             sourceCode,
-            sp.GetRequiredService<ILogger<QuotaHandler>>()));
+            sp.GetRequiredService<IAppLogService<QuotaHandler>>()));
 
         configureAuth(clientBuilder, GetOptions);
 

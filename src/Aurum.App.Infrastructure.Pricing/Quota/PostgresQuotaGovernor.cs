@@ -1,6 +1,7 @@
 using System.Globalization;
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
+using Aurum.App.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
@@ -24,7 +25,7 @@ namespace Aurum.App.Infrastructure.Pricing.Quota;
 public class PostgresQuotaGovernor(
     AurumDbContext db,
     TimeProvider clock,
-    ILogger<PostgresQuotaGovernor> logger,
+    IAppLogService<PostgresQuotaGovernor> logger,
     IOptions<PriceSourcesOptions> sources) : IQuotaGovernor
 {
     private const string AcquireSql = """
@@ -71,14 +72,21 @@ public class PostgresQuotaGovernor(
         var status = await GetStatusAsync(sourceCode, ct);
         if (status.ProviderRejected)
         {
-            logger.LogDebug(
-                "{Source} denied: provider rejected us earlier in period {Period}; budget clamped until {ResetsAt:O}.",
-                sourceCode, periodKey, periodEndsAt);
+            await logger.LogAsync(LogType.SystemLog,
+                "ProviderRejected",
+                $"{sourceCode} denied: provider rejected us earlier in period {periodKey}; budget clamped until {periodEndsAt:O}.",
+                level: LogLevel.Information,
+                ct: ct
+            );
         }
         else
         {
-            logger.LogDebug("{Source} denied: no budget left in period {Period} ({Used}/{Limit}).",
-                sourceCode, periodKey, status.Used, status.Limit);
+            await logger.LogAsync(LogType.SystemLog,
+                "BudgetExhausted",
+                $"{sourceCode} denied: no budget left in period {periodKey} ({status.Used}/{status.Limit}); resets at {periodEndsAt:O}.",
+                level: LogLevel.Information,
+                ct: ct
+            );
         }
         return new QuotaLease(Granted: false, Remaining: 0, ResetsAt: periodEndsAt);
     }

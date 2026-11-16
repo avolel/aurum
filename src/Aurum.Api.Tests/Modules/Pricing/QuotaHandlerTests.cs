@@ -5,7 +5,6 @@ using Aurum.App.Infrastructure.Data;
 using Aurum.Api.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Aurum.Api.Tests.Modules.Pricing;
@@ -79,7 +78,7 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
         services.AddDbContext<AurumDbContext>(o => o.UseNpgsql(fixture.ConnectionString));
         services.AddSingleton<TimeProvider>(_clock);
         services.AddScoped<IQuotaGovernor>(sp => new PostgresQuotaGovernor(
-            sp.GetRequiredService<AurumDbContext>(), _clock, NullLogger<PostgresQuotaGovernor>.Instance,
+            sp.GetRequiredService<AurumDbContext>(), _clock, new ListAppLog<PostgresQuotaGovernor>(),
             TestPriceSources.For(SourceCode)));
 
         var provider = services.BuildServiceProvider();
@@ -89,7 +88,7 @@ public class QuotaHandlerTests(PostgresFixture fixture) : IAsyncLifetime
         var handler = new QuotaHandler(
             provider.GetRequiredService<IServiceScopeFactory>(),
             SourceCode,
-            NullLogger<QuotaHandler>.Instance)
+            new ListAppLog<QuotaHandler>())
         {
             InnerHandler = inner,
         };

@@ -5,7 +5,6 @@ using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -44,7 +43,7 @@ public class LatestQuoteCacheTests
             TestPriceSources.ForChain((Primary, 1, true), (Backup, 2, true)),
             clock,
             polling,
-            NullLogger<LatestQuoteCache>.Instance);
+            new ListAppLog<LatestQuoteCache>());
 
         return (cache, clock);
     }
