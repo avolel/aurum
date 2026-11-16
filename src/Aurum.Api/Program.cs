@@ -63,11 +63,11 @@ builder.Services.AddTransient(typeof(IPipelineBehavior<,>), typeof(TransactionBe
 // ── Application logging ───────────────────────────────────────────────────────────────────────
 
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddScoped<IRequestContextAccessor, HttpRequestContextAccessor>();
+builder.Services.AddSingleton<IRequestContextAccessor, HttpRequestContextAccessor>();
 
 // Singleton because it owns the channel; a scoped queue would drop its rows when the scope ends.
 builder.Services.AddSingleton<IAppLogQueue, AppLogQueue>();
-builder.Services.AddScoped(typeof(IAppLogService<>), typeof(AppLogService<>));
+builder.Services.AddSingleton(typeof(IAppLogService<>), typeof(AppLogService<>));
 builder.Services.AddHostedService<AppLogDrainService>();
 
 // ── Pricing options ───────────────────────────────────────────────────────────────────────────
