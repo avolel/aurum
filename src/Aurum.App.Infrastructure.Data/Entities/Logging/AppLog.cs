@@ -16,6 +16,9 @@ public class AppLog : AuditableEntity
     /// <summary>The <c>LogType</c> name, stored as text so a new member is not a migration.</summary>
     public string LogType { get; set; } = null!;
 
+    /// <summary>The <c>LogLevel</c> name, e.g. <c>Information</c> or <c>Error</c>. Text, like <see cref="LogType"/>.</summary>
+    public string Level { get; set; } = null!;
+
     /// <summary>What was attempted, e.g. <c>GetPriceSources</c>. Not a message — a stable key.</summary>
     public string Action { get; set; } = null!;
 

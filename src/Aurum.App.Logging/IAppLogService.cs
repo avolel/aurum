@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+
 namespace Aurum.App.Logging;
 
 public enum LogType
@@ -28,11 +30,14 @@ public interface IAppLogService<T>
         string? details = null,
         int? statusCode = null,
         long? durationMs = null,
+        LogLevel level = LogLevel.Information,
         CancellationToken ct = default);
 
     Task LogErrorAsync(
         string action,
         Exception exception,
         int statusCode = 500,
+        string? details = null,
+        LogType logType = LogType.ActionLog,
         CancellationToken ct = default);
 }

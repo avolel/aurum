@@ -53,6 +53,7 @@ public class AppLogDrainServiceTests(PostgresFixture fixture) : IAsyncLifetime
             queue.TryEnqueue(new AppLog
             {
                 LogType = LogType.ActionLog.ToString(),
+                Level = nameof(Microsoft.Extensions.Logging.LogLevel.Information),
                 Action = Action,
                 Details = round,
                 CreatedAt = now,

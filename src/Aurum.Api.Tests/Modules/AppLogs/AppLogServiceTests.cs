@@ -1,6 +1,7 @@
 using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Logging;
 using Aurum.App.Infrastructure.Data.Entities.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 
@@ -94,5 +95,40 @@ public class AppLogServiceTests
         Assert.Equal("curl/8.5.0", entry.UserAgent);
         Assert.Equal("GET", entry.HttpMethod);
         Assert.Null(entry.UserId); // null must not become ""
+    }
+
+    [Fact]
+    public async Task LogAsync_NoLevel_StoresInformation()
+    {
+        var (service, queue) = Build(RequestContext.None);
+
+        await service.LogAsync(LogType.ActionLog, "GetSources");
+
+        Assert.Equal("Information", Single(queue).Level);
+    }
+
+    [Fact]
+    public async Task LogAsync_WithLevel_StoresIt()
+    {
+        var (service, queue) = Build(RequestContext.None);
+
+        await service.LogAsync(LogType.SystemLog, "Poll", level: LogLevel.Warning);
+
+        Assert.Equal("Warning", Single(queue).Level);
+    }
+
+    [Fact]
+    public async Task LogErrorAsync_WithDetailsAndLogType_StoresErrorDetailsFirstAndLogType()
+    {
+        var (service, queue) = Build(RequestContext.None);
+
+        await service.LogErrorAsync(
+            "Poll", new InvalidOperationException("boom"), details: "source=goldapi", logType: LogType.SystemLog);
+
+        var entry = Single(queue);
+        Assert.Equal("Error", entry.Level);
+        Assert.Equal("SystemLog", entry.LogType);
+        Assert.StartsWith("source=goldapi\n", entry.Details);
+        Assert.Contains("boom", entry.Details);
     }
 }

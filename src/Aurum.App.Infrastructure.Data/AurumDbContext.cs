@@ -101,6 +101,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
         {
             e.ToTable("app_logs");
             e.Property(x => x.LogType).HasMaxLength(AppLogColumnLengths.MaxLogTypeLength).IsRequired();
+            e.Property(x => x.Level).HasMaxLength(AppLogColumnLengths.MaxLevelLength).IsRequired();
             e.Property(x => x.Action).HasMaxLength(AppLogColumnLengths.MaxActionLength).IsRequired();
             e.Property(x => x.Details).HasMaxLength(AppLogColumnLengths.MaxDetailsLength);
             e.Property(x => x.ExceptionType).HasMaxLength(AppLogColumnLengths.MaxExceptionTypeLength);

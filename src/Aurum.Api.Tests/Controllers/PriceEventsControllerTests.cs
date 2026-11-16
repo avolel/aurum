@@ -9,6 +9,7 @@ using FluentValidation.Results;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace Aurum.Api.Tests.Controllers;
@@ -53,7 +54,7 @@ public class PriceEventsControllerTests
         Assert.Same(Page, body.Data);
         _appLog.Verify(
             l => l.LogAsync(LogType.ActionLog, nameof(PriceEventsController.GetEvents), It.IsAny<string?>(), 200,
-                It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+                It.IsAny<long?>(), LogLevel.Information, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -108,7 +109,7 @@ public class PriceEventsControllerTests
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message);
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PriceEventsController.GetEvents), failure, 500, CancellationToken.None),
+            l => l.LogErrorAsync(nameof(PriceEventsController.GetEvents), failure, 500, null, LogType.ActionLog, CancellationToken.None),
             Times.Once);
     }
 }

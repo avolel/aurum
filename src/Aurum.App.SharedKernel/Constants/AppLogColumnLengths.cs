@@ -19,4 +19,5 @@ public static class AppLogColumnLengths
     public const int MaxCorrelationIdLength = 64;
     public const int MaxSourceLength = 128;
     public const int MaxLogTypeLength = 32;
+    public const int MaxLevelLength = 16;
 }

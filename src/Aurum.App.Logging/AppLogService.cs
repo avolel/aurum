@@ -1,6 +1,7 @@
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Aurum.App.SharedKernel.Constants;
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 
 namespace Aurum.App.Logging;
 
@@ -16,11 +17,13 @@ public sealed class AppLogService<T>(
         string? details = null,
         int? statusCode = null,
         long? durationMs = null,
+        LogLevel level = LogLevel.Information,
         CancellationToken ct = default)
     {
         Enqueue(entry =>
         {
             entry.LogType = logType.ToString();
+            entry.Level = level.ToString();
             entry.Action = action;
             entry.Details = Truncate(details, AppLogColumnLengths.MaxDetailsLength);
             entry.StatusCode = statusCode;
@@ -34,15 +37,20 @@ public sealed class AppLogService<T>(
         string action,
         Exception exception,
         int statusCode = 500,
+        string? details = null,
+        LogType logType = LogType.ActionLog,
         CancellationToken ct = default)
     {
         Enqueue(entry =>
         {
-            entry.LogType = LogType.ActionLog.ToString();
+            entry.LogType = logType.ToString();
+            entry.Level = LogLevel.Error.ToString();
             entry.Action = action;
 
             // ToString(), not Message, to keep inner exceptions (where the SQLSTATE lives).
-            entry.Details = Truncate(exception.ToString(), AppLogColumnLengths.MaxDetailsLength);
+            // The caller's details go first so the cut to the column length never drops them.
+            var text = details is null ? exception.ToString() : $"{details}\n{exception}";
+            entry.Details = Truncate(text, AppLogColumnLengths.MaxDetailsLength);
             entry.ExceptionType = Truncate(exception.GetType().FullName, AppLogColumnLengths.MaxExceptionTypeLength);
             entry.StackTrace = Truncate(exception.StackTrace, AppLogColumnLengths.MaxStackTraceLength);
             entry.StatusCode = statusCode;
@@ -72,6 +80,7 @@ public sealed class AppLogService<T>(
             UpdatedAt = now,
             Action = string.Empty,
             LogType = string.Empty,
+            Level = string.Empty,
         };
 
         populate(entry);
