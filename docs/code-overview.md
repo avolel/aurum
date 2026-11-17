@@ -230,7 +230,7 @@ projects can't use each other, because the build refuses a loop (D-24).
 | `AurumDbContext.cs` | The Entity Framework (EF, the library that maps C# classes to tables) context. Defines every table, column size and index. Fills in `CreatedAt`/`UpdatedAt` on save, using the injected clock. |
 | `AurumDbContextFactory.cs` | Used only by the `dotnet ef` command-line tool, so migrations can run without starting the app. Never runs in production. |
 | `Entities/Pricing/*.cs` | `PriceTick`, `PriceSource`, `PriceEvent`, `ApiQuotaWindow`. |
-| `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. The first migration creates their tables. `FredImporter` writes them, but nothing calls it yet (Phase 2). |
+| `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. The first migration creates their tables. `FredImporter` writes them, called by `MacroPollingService`. |
 | `Entities/Logging/AppLog.cs` | One row of the app's own durable log. |
 | `Repositories/IUnitOfWork.cs` | `IUnitOfWork` and `UnitOfWork`: save changes, or run work inside one database transaction. |
 | `Migrations/` | Six migrations: initial schema, extra price-service rows, app logs, price events, and dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns, one migration each. |
@@ -243,7 +243,8 @@ Aurum.App.Infrastructure.Pricing/
 ├── PriceSourcesOptionsValidator.cs     ← refuses bad price-service settings at startup
 ├── PriceFeedCircuitOptionsValidator.cs ← refuses bad circuit-breaker settings at startup
 ├── Jobs/
-│   └── PricePollingService.cs          ← the 15-minute timer; the heart of the app
+│   ├── PricePollingService.cs          ← the 15-minute timer; the heart of the app
+│   └── MacroPollingService.cs          ← the 6-hour timer that refreshes every FRED series
 ├── Sources/
 │   ├── IPriceSource.cs                 ← "one price service"
 │   ├── GoldApiIoSource.cs              ← GoldAPI
@@ -274,12 +275,13 @@ Aurum.App.Infrastructure.Pricing/
 │   └── LatestQuote.cs                  ← what is held, and the snapshot with its age worked out on read
 ├── Realtime/
 │   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
-├── Macro/                              ← economic figures; FredImporter can save them, nothing calls it yet
+├── Macro/                              ← economic figures; MacroPollingService fetches and saves FRED's
 │   ├── FredSeries.cs                   ← the ten FRED series, and which are releases
 │   ├── FredClient.cs                   ← asks FRED for a series and reads the answer
 │   ├── FredImporter.cs                 ← saves one series' rows: adds new ones, overwrites changed ones
 │   ├── FredObservation.cs              ← one period's value, and its publish date for a release
 │   ├── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
+│   ├── MacroPollingOptions.cs          ← `Macro:Polling` settings: how often, and how far back to start
 │   ├── BlsSeries.cs                    ← the four BLS series, each tied to the FRED series it fills
 │   ├── BlsClient.cs                    ← one request for a year of all four; checks BLS's status
 │   ├── BlsObservation.cs               ← one month's value, or none when BLS sends "-"
@@ -302,7 +304,7 @@ section 12).
 
 | File | What it is |
 |---|---|
-| `IAppLogService.cs` | `IAppLogService<T>`, the interface controllers and the pipeline log through, and the `LogType` list. |
+| `IAppLogService.cs` | `IAppLogService<T>`, the interface every class in the app logs through, and the `LogType` list. |
 | `AppLogService.cs` | Builds each row, fills in the request details, cuts each field to its column size, and queues it. |
 | `IAppLogQueue.cs` | The queue between the caller and the background writer. It holds up to 10,000 rows. |
 | `AppLogDrainService.cs` | The background writer: saves queued rows in batches of up to 100. |
@@ -343,7 +345,8 @@ asks for them) which class to create for each interface, and how long each one l
 `Add<Something>Module` helper methods anywhere (D-5). If you add a new class that needs creating,
 it goes in this file.
 
-1. **Logging.** Serilog writes JSON lines to the console.
+1. **Logging.** Serilog writes the framework's own lines (ASP.NET, EF and each web request) to the
+   console as JSON. The app's own lines don't go there: they're saved in `app_logs` (step 6, D-25).
 2. **Controllers.** `AddControllers()` finds every controller in `Aurum.Api`, and after the app is
    built `MapControllers()` gives each one its web address. A new controller needs no other
    registration (D-20). `AddOpenApi()` registers the description of every endpoint. Only in
@@ -356,8 +359,8 @@ it goes in this file.
 5. **The request pipeline.** Registers MediatR (the library that routes a request object to its
    handler), every FluentValidation validator, and the three pipeline steps. The order of those
    three lines is the order a request passes through them.
-6. **App logging.** Registers the log queue (one for the whole app), the log service, and the
-   background job that writes queued rows to `app_logs`.
+6. **App logging.** Registers the log queue, the log service and the request-details reader, all
+   one for the whole app, and the background job that writes queued rows to `app_logs`.
 7. **Settings.** Binds six settings sections and registers the checks for each. `ValidateOnStart()`
    means a bad setting stops the app at startup, with a message naming the setting, instead of
    failing later.
@@ -375,7 +378,9 @@ it goes in this file.
     of CPI and jobs figures from BLS (the Bureau of Labor Statistics) on release morning, because
     FRED posts them 40 minutes or more later (D-23). BLS takes its key in the request body, so it
     has no `QueryKeyAuthHandler`, and no request counter either: its limit is 500 requests a day.
-    Nothing calls either client yet.
+    Binds and checks `Macro:Polling`, registers `FredImporter` (one per scope) and adds
+    `MacroPollingService` as a background job. It refreshes every FRED series straight away, then
+    every `RefreshInterval`. Nothing calls `BlsClient` yet.
 12. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
 13. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
@@ -392,9 +397,10 @@ This matters, because getting it wrong causes bugs that only show up under load.
 | Object | Lifetime | Why |
 |---|---|---|
 | `TimeProvider`, `SourceCircuitStore`, `LatestQuoteCache`, `DeltaEngine`, `IAppLogQueue` | One for the whole app ("singleton") | They hold memory that must survive between polls or requests. |
+| `IAppLogService<T>`, `IRequestContextAccessor` | Singleton | They hold no state, and the request details are read fresh on every call. One copy for the whole app lets the poller, the cache and other singletons log (D-25). |
 | `SignalRPriceBroadcaster` | Singleton | The poller is a singleton and holds it. It keeps no state; SignalR's hub context, which it uses, is a singleton too. |
 | `PriceHub` | New for every call from an app | SignalR creates a hub for each call and throws it away. Anything that must last goes in the cache, the engine or SignalR's groups. |
-| `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IAppLogService<T>`, `IUnitOfWork` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, or one poll. |
+| `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IUnitOfWork` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, or one poll. |
 | Each price service class, `FredClient` and `BlsClient` | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
 
 **The singletons never hold a `DbContext`.** When they need the database (for warm-up at startup),
@@ -505,7 +511,8 @@ API Ninjas is slow and every try times out. GoldAPI answers on the first try.
 | 7 | goldapi.io: breaker closed. Try 1 answers 200 OK with a price of 4,412.30. | 2 | goldapi.io: 1 |
 | 8 | Save to memory, then to the database. | 1 | |
 
-That poll took about 36 seconds and spent 4 requests. The console shows (price and lag made up):
+That poll took about 36 seconds and spent 4 requests. It saves these two rows in `app_logs` (the
+`Details` column; price and lag made up). The first is at the `Warning` level:
 
 ```
 Primary api-ninjas did not serve this poll; goldapi.io did after api-ninjas -> goldapi.io.
@@ -558,15 +565,18 @@ do   // poll once straight away, then every interval
     }
     catch (AllSourcesFailedException ex)
     {
-        // A fault or an open breaker: just wait for the next tick
-        logger.LogError(ex, "Every source failed this poll; will retry on the next interval.");
+        // A fault or an open breaker: wait for the next tick
+        await logger.LogErrorAsync(nameof(PricePollingService), ex,
+            details: "Every source failed this poll; will retry on the next interval.",
+            logType: LogType.SystemLog, ct: stoppingToken);
     }
     // … shutdown and unexpected errors are also caught, so the loop never dies
 }
 while (await timer.WaitForNextTickAsync(stoppingToken));
 ```
 
-What a healthy poll prints to the console (Serilog writes JSON; the message text is shown here):
+What a healthy start and first poll save in `app_logs` (the `Details` column of each row, all at the
+`Information` level):
 
 ```
 Primary api-ninjas at 00:15:00: 2976 polls, up to 8928 of 10000 requests per period.
@@ -1079,6 +1089,7 @@ is: `ASPNETCORE_ENVIRONMENT` (Production unless `.env` sets it, so Swagger stays
 | `Significance` | `ThresholdProfile`, `CrossSourceMagnitudeMultiplier`, `Windows:<code>:MinPercent`, `Windows:<code>:Cooldown` | `default-v1`, 2.0, see below | Which moves become events, and how long a window stays quiet after one. |
 | `Macro:Fred` | `BaseUrl`, `ApiKey` | `https://api.stlouisfed.org/fred/`, blank — **must be set** | FRED, for economic figures. `BaseUrl` must end in a slash, or the request path replaces `/fred`. Compose fills the key from `.env`'s `Macro__Fred__ApiKey`. |
 | `Macro:Bls` | `BaseUrl`, `ApiKey` | `https://api.bls.gov/publicAPI/v2/`, blank — **must be set** | BLS, for the newest month of CPI and jobs figures on release morning (D-23). `BaseUrl` must end in a slash, or the request path replaces `/v2`. Compose fills the key from `.env`'s `Macro__Bls__ApiKey`. |
+| `Macro:Polling` | `RefreshInterval`, `HistoryStart` | 6 hours, `2006-01-01` | How often `MacroPollingService` refreshes FRED. `HistoryStart` is where a series with no saved rows starts; a series that has rows re-reads from 60 days before its newest one. |
 | `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2, `gemma4:12b-it-qat` (D-6). **Nothing reads it yet.** Local models are for this personal build; production would use a paid cloud AI service instead. |
 
 The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
@@ -1121,6 +1132,7 @@ fix.
 | `Significance:ThresholdProfile` is empty, which includes the whole section being missing. | `[Required]` on `SignificanceOptions` |
 | `Macro:Fred:ApiKey` is blank, or `Macro:Fred:BaseUrl` is missing. | `[Required]` on `FredOptions` |
 | `Macro:Bls:ApiKey` is blank, or `Macro:Bls:BaseUrl` is missing. | `[Required]` on `BlsOptions` |
+| `Macro:Polling:RefreshInterval` is not positive, or `HistoryStart` is not a past date. | `Program.cs` |
 
 The month check, worked through with the shipped values: 31 days ÷ 15 minutes = 2,976 polls. Each
 poll can take up to 3 tries, so up to 8,928 requests. API Ninjas allows 10,000, so it passes. GoldAPI's
@@ -1146,7 +1158,7 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 | `api_quota_windows` | One service's request count for one month. | `PostgresQuotaGovernor` | `PostgresQuotaGovernor`, which `/api/v1/price/sources` also asks |
 | `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check; `/api/v1/events` |
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
-| `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is 08:30 New York time on its publish date; a daily market figure's is empty. | `FredImporter`, which nothing calls yet (Phase 2) | `FredImporter`, to compare before it writes |
+| `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is 08:30 New York time on its publish date; a daily market figure's is empty. | `FredImporter`, called by `MacroPollingService` | `FredImporter`, to compare before it writes; `MacroPollingService`, for each series' newest date |
 
 Things that will catch you out:
 
@@ -1176,7 +1188,7 @@ Every web request to a controller takes this path:
 ```
 Web request
   → Controller                      thin: builds a command or query, calls _mediator.Send()
-  → LoggingBehavior                 times it, writes a row to app_logs, warns if over 500ms
+  → LoggingBehavior                 times it, writes a row to app_logs (Warning if over 500ms)
   → ValidationBehavior              runs the FluentValidation rules; throws if any fail
   → TransactionBehavior             commands only: wraps the handler in one database transaction
   → Handler                         the actual logic; maps entities to response objects by hand
@@ -1239,11 +1251,13 @@ Rules worth knowing:
 ### App logging
 
 `IAppLogService<T>`, in `src/Aurum.App.Logging/`, writes rows to `app_logs` without making the
-caller wait for the database:
+caller wait for the database. Every class in the app logs through it, web requests and background
+jobs alike. Only the queue and its background writer use .NET's ordinary `ILogger<T>`, because the
+log can't report its own failure through itself (D-25):
 
 ```
-request thread                     background
-──────────────                     ──────────
+caller (request or job)            background
+───────────────────────            ──────────
 AppLogService.LogAsync
    │ builds an AppLog row,
    │ fills user, address, request id
@@ -1257,8 +1271,13 @@ AppLogQueue (holds up to 10,000) ──► AppLogDrainService
   ended.
 - `HttpRequestContextAccessor` fills in the user and request details. Outside a web request (for
   example, in the poller) it returns empty values instead of failing.
-- The poller logs with the ordinary `ILogger<T>` (console only), not `IAppLogService<T>`. Since
-  D-24 the pricing code can use `IAppLogService<T>`, but nothing there does yet.
+- Every row has a `Level`: `Information`, `Warning` or `Error`. `LogErrorAsync` always writes
+  `Error`. Web requests write `LogType` `ActionLog`, and background jobs write `SystemLog`.
+- `Action` is a short fixed name, such as `GetLive` or `BudgetExhausted`, so rows can be grouped.
+  The readable message is in `Details`.
+- **Nothing reaches the console**, so `docker logs` doesn't show the poller. Look in `app_logs`.
+- **While Postgres is down, rows are lost.** The background writer can't save the batch, and only its
+  console line about the loss remains. Nothing deletes old rows yet either.
 - `AppLogService` cuts every text field to its column size from `AppLogColumnLengths`. One value
   that is too long would fail the whole batch, and every row in it would be lost.
 
@@ -1277,13 +1296,13 @@ Aurum.Api.Tests/
 │   ├── ScriptedPriceSource.cs ← a fake price service that returns what the test says
 │   ├── ScriptedPriceFeed.cs   ← a fake feed, for poller tests
 │   ├── CountingHandler.cs     ← a fake network that counts requests
-│   ├── ListLogger.cs          ← captures log lines so a test can check them
+│   ├── ListAppLog.cs          ← a stand-in log service that keeps each row so a test can check it
 │   ├── RecordingBroadcaster.cs ← a fake sender that remembers each send, and can look or throw
 │   ├── TickReplay.cs          ← turns the hand-written replay file into prices and feeds them in
-│   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no price timer and no real services
+│   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no timers and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
-├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests
+├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; MacroPollingServiceTests
 ├── Modules/AppLogs/           ← the log service's field cutting, and the background writer
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
@@ -1302,6 +1321,7 @@ Aurum.Api.Tests/
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 | | `FredClientTests` (a fake network; no request reaches FRED) |
 | | `BlsClientTests` (a fake network; no request reaches BLS) |
+| | `MacroPollingServiceTests` (where each refresh starts reading from) |
 
 Run one class, or a set of fast tests:
 
@@ -1318,7 +1338,7 @@ and the engine directly and kept out of the server's container, so SignalR's own
 time.
 
 `AurumApiFactory` is the test version of the whole API. It starts the app from the real `Program.cs`,
-pointed at the test database, but removes the price timer and swaps the three price services for
+pointed at the test database, but removes both timers and swaps the three price services for
 stand-ins that fail without making a web request. A timer inside a test fires when it likes, so
 results would change from run to run, and it would spend real requests from a 100-request month.
 Because nothing polls, the saved price starts empty. A test that needs one records it into

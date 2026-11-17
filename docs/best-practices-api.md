@@ -63,7 +63,7 @@ Controller → IMediator.Send() → LoggingBehavior → ValidationBehavior → T
 Each "behavior" is a step every request passes through before reaching its handler:
 
 - **LoggingBehavior**: writes one row per request to the `app_logs` table (through
-  `IAppLogService`), and writes a warning to the console if the request took over 500 milliseconds.
+  `IAppLogService`). A request that took over 500 milliseconds gets its row at the `Warning` level.
 - **ValidationBehavior**: runs the FluentValidation rules for that request, and throws a
   `ValidationException` if any fail.
 - **TransactionBehavior**: for commands only, runs the handler inside a database transaction (so
@@ -289,8 +289,8 @@ An action with no validator (`GetSources`) leaves out the `ValidationException` 
 
 ## App logging with `IAppLogService<T>`
 
-This is the standard way to log from controllers and other classes. It writes action and audit rows to
-the `app_logs` table, through a background queue.
+This is the only way to log in this app, from controllers, handlers and background jobs alike. It
+writes rows to the `app_logs` table through a background queue. Nothing goes to the console (D-25).
 
 ### How it works
 
@@ -301,7 +301,12 @@ the `app_logs` table, through a background queue.
   such as in the price timer, these are left empty instead of causing an error.
 - **Doesn't slow the request down**: rows go into a queue (`IAppLogQueue`), and a background service
   (`AppLogDrainService`) saves them in batches.
-- **Use it instead of `ILogger<T>`** in controllers and other classes.
+- **Use it instead of `ILogger<T>`** everywhere. Only the queue and its background writer keep
+  `ILogger<T>`, because the log can't report its own failure through itself.
+- **One copy for the whole app** (a singleton). It holds no state and reads the request details on
+  every call, so long-lived classes such as the price timer can take it directly.
+- **Every row has a level**: `Information` by default, `Warning` when the caller passes
+  `level: LogLevel.Warning`, and always `Error` from `LogErrorAsync`.
 - **Lives in its own project**, `src/Aurum.App.Logging/`. The pricing code can use it too, because
   it no longer sits in the Application project, which the pricing code can't use (D-24).
 
@@ -311,20 +316,27 @@ the `app_logs` table, through a background queue.
 |------|--------|---------|
 | **Success** | `LogAsync(LogType.ActionLog, action, details, statusCode)` | `appLogService.LogAsync(LogType.ActionLog, action, $"sources={sources.Count}", StatusCodes.Status200OK, ct: ct)` |
 | **Validation failed** | `LogAsync(LogType.ActionLog, action, details, 400)` | `appLogService.LogAsync(LogType.ActionLog, action, ex.Message, StatusCodes.Status400BadRequest, ct: ct)` |
+| **Warning** | `LogAsync(logType, action, details, level: LogLevel.Warning)` | `logger.LogAsync(LogType.SystemLog, "MissingTimestamp", $"{Code} returned no usable timestamp; using receipt time for {symbol}.", level: LogLevel.Warning, ct: ct)` |
 | **Error** | `LogErrorAsync(action, exception, statusCode)` | `appLogService.LogErrorAsync(action, ex, ct: CancellationToken.None)` |
+| **Error in a background job** | `LogErrorAsync(action, exception, details:, logType: LogType.SystemLog)` | `logger.LogErrorAsync(nameof(TryPublishAsync), ex, details: $"Sending {symbol} to live clients failed; the poll carries on.", logType: LogType.SystemLog, ct: ct)` |
 
-`action` is `nameof` the action, the same on every row. The error row is told apart by its log type,
-not by an `"...Error"` suffix.
+In a controller, `action` is `nameof` the action, the same on every row. Elsewhere it is a short fixed
+name for the event, such as `BudgetExhausted`. The error row is told apart by its `Level` (`Error`)
+and its `ExceptionType`, not by an `"...Error"` suffix.
 
 ### What to put in the details
 
-- For errors: `$"Error: {e.GetType().Name}: {e.Message}"`
+- A readable message, as an interpolated string: `$"symbol={symbol} rows={page.Items.Count}"`.
+- For errors, nothing about the exception: `LogErrorAsync` saves the full exception text, inner
+  exceptions included, and its type. Pass `details:` only for context the exception doesn't carry,
+  such as which source or series failed.
 
 ### Which layer logs what
 
 | Layer | Tool | Why |
 |-------|------|-----|
 | **Controller** | `IAppLogService<T>` | Audit trail: who did what, when, and from where |
+| **Background job** | `IAppLogService<T>`, `LogType.SystemLog` | What the price timer and FRED did, searchable next to request rows |
 | **Handler** | Nothing by hand; `LoggingBehavior` does it | Success and error for every request |
 | **Repository** | Usually nothing | Errors pass up to the handler and controller |
 
@@ -383,7 +395,7 @@ them at runtime. Here's where each kind of class is set up:
 | **FluentValidation validators** | Automatic | Found by scanning the Application project |
 | **Repositories** | `src/Aurum.Api/Program.cs` | `builder.Services.AddScoped<IPriceSourceRepository, PriceSourceRepository>()` |
 | **`IUnitOfWork`** | `src/Aurum.Api/Program.cs` (already there) | `builder.Services.AddScoped<IUnitOfWork, UnitOfWork>()` |
-| **App logging** | `src/Aurum.Api/Program.cs` (already there) | `builder.Services.AddScoped(typeof(IAppLogService<>), typeof(AppLogService<>))` |
+| **App logging** | `src/Aurum.Api/Program.cs` (already there) | `builder.Services.AddSingleton(typeof(IAppLogService<>), typeof(AppLogService<>))` |
 
 **Everything that isn't found automatically is set up in `Program.cs`.** There's no separate setup file
 per layer (D-5).

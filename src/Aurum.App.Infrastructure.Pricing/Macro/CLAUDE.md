@@ -48,8 +48,9 @@ Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPoll
   only). All five release series publish at 08:30. The zone is looked up in a static field, so a host
   without tzdata throws `TypeInitializationException` on first use; `aspnet:10.0` has it (checked
   2026-11-13).
-- Logs through `ILogger<FredImporter>`, like the rest of this module. Switching to `IAppLogService`
-  is possible since D-24 (Pricing references `Aurum.App.Logging`) but not done.
+- Logs through `IAppLogService<FredImporter>` to `app_logs` (D-25). A changed release value is a
+  `ReleaseValueChanged` row at `Warning`. `MacroPollingService` writes a `RefreshedFredSeries` row per
+  series, and a failed series is an `Error` row with `LogType.SystemLog`.
 - One `SaveChangesAsync` per call; `ApplyAuditFields` stamps the times from the injected
   `TimeProvider`.
 

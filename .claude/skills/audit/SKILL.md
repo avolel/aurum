@@ -90,7 +90,7 @@ Read the rules first, so the code is judged against what the repository says abo
 5. Configuration: `docker-compose.yml`, `.env.example`, `appsettings*.json`, `.csproj` files, the
    `Dockerfile`
 6. Backend code, project by project: `SharedKernel`, `Infrastructure.Data` (migrations included),
-   `Infrastructure.Pricing`, `Application`, `Api`
+   `Logging`, `Infrastructure.Pricing`, `Application`, `Api`
 7. Tests, `src/Aurum.Api.Tests/`
 8. Frontend, everything under `app/` on the list
 

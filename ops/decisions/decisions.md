@@ -54,6 +54,7 @@ When you add a decision, add a line for it here too.
 - [D-22 — FRED figures are stored as first published, and FRED stays out of the quota chain](#d-22--fred-figures-are-stored-as-first-published-and-fred-stays-out-of-the-quota-chain)
 - [D-23 — BLS supplies the release-morning figure, and FRED's first published value replaces it](#d-23--bls-supplies-the-release-morning-figure-and-freds-first-published-value-replaces-it)
 - [D-24 — App logging is its own project](#d-24--app-logging-is-its-own-project)
+- [D-25 — The app's own log lines go to the database only](#d-25--the-apps-own-log-lines-go-to-the-database-only)
 
 ## The machine these decisions were made on
 
@@ -239,9 +240,9 @@ controller going around MediatR to reach database or pricing code directly.
   far more to the rest of the code than this one exception does.
 
   *Since D-20:* `SourceCircuitStore` is public, so the sources endpoint can read every circuit. Its
-  constructor and `For()` stay internal. Seven internal types are named in `Program.cs`:
+  constructor and `For()` stay internal. Nine internal types are named in `Program.cs`:
   `QueryKeyAuthHandler`, `RegisteredPriceSource`, the two settings checkers, `LatestQuoteCache`,
-  `DeltaEngine` and `FailoverPriceFeed`.
+  `DeltaEngine`, `FailoverPriceFeed`, `FredImporter` and `MacroPollingService`.
 - `Program.AddPriceSource<T>` had to become a method on the `Program` class, not a function written
   inside `Program.cs`'s top-level code. Functions written that way can't be reached from the test
   project. `ResilienceWiringTests` pins down the order of two lines in that method: the retry setup
@@ -528,8 +529,8 @@ never exceeded.
 
 ### Logging when a request is refused
 
-**The counter writes a low-level debug message that says why it refused. Nothing stops that message
-from repeating.**
+**The counter writes a row to `app_logs`, at the Information level, that says why it refused.
+Nothing stops that row from repeating.** (Until D-25 this was a Debug-level console message.)
 
 I thought about having the counter remember "I already logged this month" and discarded it. A new
 counter is created for each unit of work, so that memory would start empty every time and never stop
@@ -1454,7 +1455,8 @@ also hand back the oldest price still *inside* the window, which is the wrong st
 
 **Prices that arrive out of order are dropped, never re-sorted.** Time order is what makes the binary
 search work. A price at or before the newest held one, including one with the exact same time, is
-dropped, logged at debug level, and added to `DeltaSnapshot.DroppedOutOfOrder`. That counter matters
+dropped and added to `DeltaSnapshot.DroppedOutOfOrder`. (It was also logged at debug level until
+D-25 removed that line.) That counter matters
 because from outside, "the price stopped moving" and "the app is dropping every price" look the same.
 Re-sorting would give a list that's in order but isn't what the app actually saw. This matches the
 latest-price rule in D-16, so the latest price and the moves beside it can't disagree.
@@ -2090,7 +2092,8 @@ figure. The jobs figures are posted by a different team at FRED than CPI, so the
 prove the jobs reading. The polled jobs run on 2026-12-04 checks it.
 
 **Not handled yet:** a timer that fetches and saves the rows. `FredImporter` saves them (D-23), but
-nothing calls it yet. Paging is not handled either: if FRED reports more rows than
+nothing called it at first. *Since 2026-11-15:* `MacroPollingService` fetches and saves every series
+every six hours. Paging is not handled either: if FRED reports more rows than
 it sent, the client throws instead of asking for the next page.
 
 Turned down:
@@ -2172,12 +2175,11 @@ series publish at 08:30; the release calendar will replace this fixed time where
 statement. In Postgres 17 it can't return the value it replaced, so the warning would need a second
 query. Loading first leaves a gap between the read and the write where another writer could change
 the row. That can't happen today: the app runs as one process, and `FredImporter` is the only thing
-that writes these tables. Nothing calls it on a timer yet. The quota governor uses an upsert because many requests race for the same
+that writes these tables. `MacroPollingService` calls it on a timer (since 2026-11-15). The quota governor uses an upsert because many requests race for the same
 counter (D-7); here there is one writer. **If BLS's save step runs on its own timer beside FRED's,
 the two could write the same month's row at once, and this choice has to be looked at again.**
 
-**Not handled yet:** BLS's half of the save step, the timer that calls `FredImporter`, the release
-calendar that calls the client, and counting the daily limit. PCE is not covered: it comes from BEA (the Bureau of Economic
+**Not handled yet:** BLS's half of the save step, the release calendar that calls the client, and counting the daily limit. PCE is not covered: it comes from BEA (the Bureau of Economic
 Analysis), not BLS.
 
 Turned down:
@@ -2200,8 +2202,8 @@ Turned down:
 - `Application` refers to it directly, even though it would also get it through `Infrastructure.Pricing`.
   `LoggingBehavior` uses it, so relying on the pricing project's reference would break the build the
   day that reference is removed.
-- Nothing in the pricing code uses it yet. The poller, `FredImporter` and the rest still write only
-  to the console through `ILogger<T>`. Switching them over is a separate change.
+- When this was decided, nothing in the pricing code used it yet. D-25 switched the poller,
+  `FredImporter` and the rest over from `ILogger<T>`.
 
 Decided and built by me on 2026-11-15.
 
@@ -2209,8 +2211,8 @@ Decided and built by me on 2026-11-15.
 Application project, and Application already uses the pricing project (D-20). For the pricing code
 to use the log service, the pricing project would have had to refer back to Application. .NET refuses
 two projects that refer to each other, so that doesn't build. That's why the poller and
-`FredImporter` log to the console only: their failures can't be searched in `app_logs`, and they are
-gone once the container's own log is cleared. With the log service in a project below both, either
+`FredImporter` logged to the console only (until D-25): their failures couldn't be searched in
+`app_logs`, and they were gone once the container's own log was cleared. With the log service in a project below both, either
 one can use it.
 
 **What it costs.** One more project to list in `Aurum.slnx` and in `src/Aurum.Api/Dockerfile`. If the
@@ -2228,3 +2230,72 @@ Turned down:
   and that doesn't build.
 - **Undoing D-20, so Application stops using the pricing project.** D-20 already turned this down:
   it needs a copy of three interfaces kept in step by hand, only to make room for this.
+
+## D-25 — The app's own log lines go to the database only
+
+**DECIDED:**
+
+- Every class that logged through `ILogger<T>` now logs through `IAppLogService<T>`, so its lines
+  are saved in the `app_logs` table. That covers the three price services, the fallback list, the
+  request counter and `QuotaHandler`, the latest-price cache, the price-move calculator, both timers
+  (`PricePollingService` and `MacroPollingService`), `FredImporter` and `LoggingBehavior`.
+- Two classes keep `ILogger<T>`: the queue (`AppLogQueue`) and its background writer
+  (`AppLogDrainService`). The log can't report its own failure through itself.
+- **These lines no longer reach the console**, so `docker logs` doesn't show what the price timer is
+  doing. Look in `app_logs` instead. Framework output (ASP.NET, EF and Serilog's request log) still
+  goes to the console as before.
+- `app_logs` has a new `Level` column, using .NET's own `LogLevel` names (`Information`, `Warning`,
+  `Error`). `LogErrorAsync` always writes `Error`. `LogAsync` writes `Information` unless the caller
+  passes another level. The migration `AddAppLogLevel` set old rows to `Information`, and to `Error`
+  where the row has an exception type.
+- `LogErrorAsync` takes optional `details` and a log type. The details are saved before the
+  exception text, so cutting the text to the column's 4000 characters never removes them.
+  Background jobs write `SystemLog`; web requests write `ActionLog`.
+- `IAppLogService<T>` and `IRequestContextAccessor` are registered as singletons, which means one
+  shared copy for the whole app. Until now they were one per web request. The singletons let
+  long-lived classes, such as the timers and the cache, take the log service directly.
+- The two Debug-level lines are deleted: "dropped a price that wasn't newer" in the cache and in the
+  price-move calculator. The request counter's refusal line stays, at the Information level, because
+  D-7 needs it.
+- A slow request (over 500 milliseconds) now has no separate console warning. Its usual success row
+  is saved at the `Warning` level instead of `Information`, and `DurationMs` shows how slow it was.
+- Tests use `ListAppLog<T>`, a stand-in log service that keeps every call. `ListLogger<T>` is deleted.
+
+Decided and built by me on 2026-11-16.
+
+**Why.** The price timer's failures, the request counter's refusals and FRED's changed values were
+only on the console. They couldn't be searched next to the web request rows, and they were gone when
+the container's log was cleared. D-24 made it possible for the pricing code to use the app log. This
+change makes it do so.
+
+The log service can be a singleton because everything it uses is already one: the queue, the clock
+and ASP.NET's `IHttpContextAccessor`. It reads the current web request each time it writes a row,
+so it never holds on to one request's details. When the app starts in Development, .NET checks that
+no singleton uses a one-per-request service. `AurumApiFactoryTests` starts the app that way, so it
+would fail if that ever went wrong.
+
+**What it costs.**
+
+- **While Postgres is down, the log rows about the outage are lost.** The background writer can't
+  save a batch, so it drops it. Only its console line saying how many rows were lost remains. The
+  errors that explain an outage are the ones most likely to be lost.
+- **The console is quiet.** Someone used to reading `docker logs` sees almost nothing from the app
+  itself, and needs a database connection to see what it's doing.
+- **`app_logs` still has nothing that deletes old rows.** Every price check now adds at least one
+  row (about 96 a day at the 15-minute interval), plus a row for every web request. Nothing removes
+  them yet.
+
+Turned down:
+
+- **Copying each line to the console as well.** It would keep `docker logs` useful, but every line
+  would be written twice, in two formats that could drift apart.
+- **Writing some lines to the console and others to the database.** Every class would need a rule
+  for which goes where, and a line in the wrong place is hard to find.
+- **No levels.** Without them, a warning and an error look the same as a routine row, and the only way
+  to find problems would be to search the text.
+- **A new one-per-request copy of the log service for each line.** It would keep the old lifetime,
+  but it adds a step to every log call and gains nothing, because the service holds no per-request
+  state.
+- **Keeping the Debug lines.** In the database they would add a row for every out-of-order price.
+  That's noise nobody reads, and nothing turns them off.
+

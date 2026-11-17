@@ -22,7 +22,7 @@ Controller → IMediator.Send() → LoggingBehavior → ValidationBehavior → T
 Each "behavior" is a step every request passes through before its handler:
 
 - **LoggingBehavior**: writes one row per request to the `app_logs` table (through
-  `IAppLogService`), and writes a console warning for anything slower than 500 milliseconds.
+  `IAppLogService`). A request slower than 500 milliseconds gets its row at the `Warning` level.
 - **ValidationBehavior**: runs the FluentValidation rules for the request, and throws a
   `ValidationException` if any fail.
 - **TransactionBehavior**: for commands only, runs the handler inside a database transaction (all its
@@ -520,7 +520,7 @@ controller and the pricing code without crossing a layer boundary. If no class f
 
 The exception is a constant that belongs to one class: it stays on that class. That covers a price
 source's code (`GoldApiIoSource.SourceCode`), an options class's configuration section
-(`PricingOptions.SectionName`), `FredSeries.Provider`, and `private const` values such as
+(`PricePollingOptions.SectionName`), `FredSeries.Provider`, and `private const` values such as
 `PostgresQuotaGovernor`'s SQL. Moving them would separate a name from the thing it names.
 
 ### 9. Command handlers use repositories, not `AurumDbContext`

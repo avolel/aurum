@@ -15,12 +15,13 @@ public enum LogType
 }
 
 /// <summary>
-/// The application's durable log. Use this, not <c>ILogger&lt;T&gt;</c>, anywhere the record needs
-/// to survive the process and be queryable — controllers, handlers and the MediatR behaviors.
+/// The application's durable log, saved to <c>app_logs</c> and never the console. Use this, not
+/// <c>ILogger&lt;T&gt;</c>, everywhere: controllers, handlers, behaviors and background jobs (D-25).
 /// </summary>
 /// <remarks>
 /// Non-blocking: calls enqueue onto <see cref="IAppLogQueue"/>, so logging a 500 cannot cause a
-/// second one. <c>ILogger&lt;T&gt;</c> is still right for stdout-only lines such as the poller's.
+/// second one. Only the queue and its drain keep <c>ILogger&lt;T&gt;</c>: the log can't report its
+/// own failure through itself.
 /// </remarks>
 public interface IAppLogService<T>
 {

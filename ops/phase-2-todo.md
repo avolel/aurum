@@ -2,9 +2,10 @@
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
 `ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
-FRED client fetches figures and the BLS client fetches release-morning figures. `FredImporter` can
-save FRED's figures, but no timer calls it yet. Nothing else has been started.
-I last checked it against the code on 2026-11-14.
+FRED client fetches figures and the BLS client fetches release-morning figures.
+`MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. Nothing
+calls the BLS client yet. Nothing else has been started.
+I last checked it against the code on 2026-11-16.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -25,8 +26,8 @@ later batch of app work, together with the Phase 1 dashboard.
 - Item 6 needs 1 to 5. Items 7 and 8 need 6.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
-Item 0 closed D-6. The FRED client added D-22 and the BLS client added D-23, so new numbers start
-at D-24.
+Item 0 closed D-6. The FRED client added D-22 and the BLS client added D-23. D-24 and D-25 cover
+app logging, so new numbers start at D-26.
 
 A few terms used below:
 
@@ -229,8 +230,9 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
   - [x] They leave `ReleasedAt` empty. `FredSeries.IsRelease` is false for them, so `FredClient`
         sends no release date and `FredImporter` stores null. `Market_series_has_null_ReleasedAt`
         covers it.
-  - [ ] They are used only as "the latest daily figure". Nothing reads `macro_observations` yet;
-        this belongs to whatever builds the background for an explanation.
+  - [ ] They are used only as "the latest daily figure". Nothing uses the figures yet (the macro
+        timer only reads each series' newest date); this belongs to whatever builds the background
+        for an explanation.
 - [x] FRED's limits checked. It has no monthly allowance, only 120 requests a minute per key (on
       FRED's errors page, under 429). Going over can get the key blocked for a while. It stays out
       of `IQuotaGovernor` and uses the standard retry setup (D-22).

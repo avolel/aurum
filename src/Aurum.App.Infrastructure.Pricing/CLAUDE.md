@@ -12,9 +12,8 @@ PricePollingService  →  IPriceFeed (FailoverPriceFeed)
                             └─ IPriceSource, in priority order
                                   └─ HttpClient (typed)
                                         └─ resilience pipeline   total timeout → retry (MaxAttempts) → per-attempt timeout
-                                              └─ QuotaHandler (DelegatingHandler)
-                                                    └─ auth handler
-                                                          └─ IQuotaGovernor → api_quota_windows
+                                              └─ QuotaHandler (DelegatingHandler) ── asks IQuotaGovernor → api_quota_windows
+                                                    └─ auth handler (MetalPriceApi only; the other two send the key as a default header)
 ```
 
 Read top to bottom as the order a request passes through. Placement decisions that look arbitrary:
@@ -55,7 +54,8 @@ Read top to bottom as the order a request passes through. Placement decisions th
   is zero regardless of the counter. The clamp never lives in the counter: "0 used of 100, rejected"
   is deliberate, and it is the only signal that our accounting has drifted from the provider's.
 - `AcquireAsync` reads the row back on the **denial path only**, to log whether the cause was a spent
-  budget or a provider rejection. That read is outside the atomic statement, so it is diagnostic
+  budget or a provider rejection. The line is an `app_logs` row at `Information` (D-25), with action
+  `BudgetExhausted` or `ProviderRejected`. That read is outside the atomic statement, so it is diagnostic
   only — it can be stale. Nothing may branch on it.
 - **The circuit breaker's state is the opposite rule from the governor's.** `SourceCircuit` is
   in-memory, authoritative, and never rehydrated at startup; the governor is durable. A spent request
@@ -83,8 +83,9 @@ Read top to bottom as the order a request passes through. Placement decisions th
   as healthy. `PriceSourcesOptionsValidator` fails boot when the budget cannot fund the cadence.
   Backups are exempt (D-10): holding every source to the full period pegs the cadence to the smallest
   budget. A backup that empties its budget during a long primary outage is counted and clamped by the
-  governor; the cost is visible only in `PricePollingService`'s startup coverage log. The validator
-  also refuses a tie for the lowest `Priority` and a configuration with nothing enabled.
+  governor; the cost is visible only in `PricePollingService`'s startup coverage rows in `app_logs`
+  (`PricePollingBudgetCoverage`). The validator also refuses a tie for the lowest `Priority` and a
+  configuration with nothing enabled.
 - **The injected `TimeProvider` is the sole authority for every timestamp the app writes**; `now()`
   never appears in governor SQL. `AurumDbContext` takes it as a **required** constructor parameter so
   no construction site falls back to wall clock — that fallback once made two rows in the same table
