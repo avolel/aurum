@@ -7,19 +7,18 @@ using Microsoft.Extensions.Logging;
 namespace Aurum.App.Application.Common.Behaviors;
 
 /// <summary>
-/// Records every MediatR request to <c>app_logs</c> and warns on slow ones. First in the pipeline,
+/// Records every MediatR request to <c>app_logs</c>, at Warning when it was slow. First in the pipeline,
 /// so it measures validation and the transaction as well as the handler.
 /// </summary>
 /// <remarks>
 /// Logs and rethrows: the controller owns the response, and swallowing would look like success.
 /// </remarks>
 public sealed class LoggingBehavior<TRequest, TResponse>(
-    IAppLogService<TRequest> appLog,
-    ILogger<LoggingBehavior<TRequest, TResponse>> logger)
+    IAppLogService<TRequest> appLog)
     : IPipelineBehavior<TRequest, TResponse>
     where TRequest : notnull
 {
-    /// <summary>A handler slower than this is a problem worth a line in stdout.</summary>
+    /// <summary>A request slower than this is logged at Warning, so a search by level finds it.</summary>
     private static readonly TimeSpan SlowRequestThreshold = TimeSpan.FromMilliseconds(500);
 
     public async Task<TResponse> Handle(
@@ -35,14 +34,12 @@ public sealed class LoggingBehavior<TRequest, TResponse>(
             var response = await next();
             var elapsed = Stopwatch.GetElapsedTime(started);
 
+            // One row either way: DurationMs already says how slow, so a second row would repeat it.
             await appLog.LogAsync(
                 LogType.ActionLog, action, details: null, statusCode: 200,
-                durationMs: (long)elapsed.TotalMilliseconds, ct: cancellationToken);
-
-            if (elapsed > SlowRequestThreshold)
-            {
-                logger.LogWarning("{Action} took {ElapsedMs}ms.", action, elapsed.TotalMilliseconds);
-            }
+                durationMs: (long)elapsed.TotalMilliseconds,
+                level: elapsed > SlowRequestThreshold ? LogLevel.Warning : LogLevel.Information,
+                ct: cancellationToken);
 
             return response;
         }

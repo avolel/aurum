@@ -4,7 +4,6 @@ using Aurum.App.Application.Common.CQRS;
 using Aurum.App.Infrastructure.Data.Repositories;
 using FluentValidation;
 using MediatR;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -36,7 +35,7 @@ public class PipelineBehaviorTests
     // --- LoggingBehavior ---
 
     private static LoggingBehavior<TestQuery, int> Logging(Mock<IAppLogService<TestQuery>> appLog) =>
-        new(appLog.Object, NullLogger<LoggingBehavior<TestQuery, int>>.Instance);
+        new(appLog.Object);
 
     [Fact]
     public async Task LoggingBehavior_OnSuccess_LogsActionWith200()
@@ -50,6 +49,26 @@ public class PipelineBehaviorTests
         appLog.Verify(l => l.LogAsync(
             LogType.ActionLog, nameof(TestQuery), null, 200, It.IsAny<long?>(), LogLevel.Information, It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    // Real time: the behavior measures with Stopwatch, which no fake clock drives. 600ms clears the
+    // 500ms threshold with room for a slow CI machine.
+    [Fact]
+    public async Task LoggingBehavior_OnSlowRequest_LogsOneRowAtWarning()
+    {
+        var appLog = new Mock<IAppLogService<TestQuery>>();
+
+        await Logging(appLog).Handle(new TestQuery("gold"), async _ =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
+            return 7;
+        }, Ct);
+
+        appLog.Verify(l => l.LogAsync(
+            LogType.ActionLog, nameof(TestQuery), null, 200, It.Is<long?>(ms => ms >= 500), LogLevel.Warning,
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+        appLog.VerifyNoOtherCalls();
     }
 
     [Fact]

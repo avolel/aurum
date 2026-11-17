@@ -5,7 +5,7 @@ namespace Aurum.Api.Tests.Infrastructure;
 
 /// <summary>
 /// An <see cref="IAppLogService{T}"/> that keeps every call, for tests where the log row is the
-/// deliverable. Replaces <see cref="ListLogger{T}"/> as classes move off <c>ILogger</c>.
+/// deliverable.
 /// </summary>
 /// <remarks>
 /// Locked because a background service under test can log while the test thread reads.
