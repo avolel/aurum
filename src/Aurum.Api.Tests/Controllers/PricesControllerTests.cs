@@ -1,5 +1,5 @@
 using Aurum.Api.Controllers;
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 using Aurum.App.Application.Prices.DTOs;
 using Aurum.App.Application.Prices.Queries;
 using Aurum.App.SharedKernel.Common;
@@ -9,6 +9,7 @@ using FluentValidation.Results;
 using MediatR;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace Aurum.Api.Tests.Controllers;
@@ -48,7 +49,7 @@ public class PricesControllerTests
         Assert.Same(Gold, body.Data);
         _appLog.Verify(
             l => l.LogAsync(LogType.ActionLog, nameof(PricesController.GetLive), It.IsAny<string?>(), 200,
-                It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+                It.IsAny<long?>(), LogLevel.Information, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -104,7 +105,7 @@ public class PricesControllerTests
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message); // never the exception's own text
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PricesController.GetLive), failure, 500, CancellationToken.None),
+            l => l.LogErrorAsync(nameof(PricesController.GetLive), failure, 500, null, LogType.ActionLog, CancellationToken.None),
             Times.Once);
     }
 
@@ -120,7 +121,7 @@ public class PricesControllerTests
             () => CreateController().GetLive(SupportedSymbol.Gold, cancelled.Token));
 
         _appLog.Verify(
-            l => l.LogErrorAsync(It.IsAny<string>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            l => l.LogErrorAsync(It.IsAny<string>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<LogType>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -145,7 +146,7 @@ public class PricesControllerTests
         Assert.Same(HistoryPage, body.Data);
         _appLog.Verify(
             l => l.LogAsync(LogType.ActionLog, nameof(PricesController.GetHistory), It.IsAny<string?>(), 200,
-                It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+                It.IsAny<long?>(), LogLevel.Information, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -205,7 +206,7 @@ public class PricesControllerTests
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message);
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PricesController.GetHistory), failure, 500, CancellationToken.None),
+            l => l.LogErrorAsync(nameof(PricesController.GetHistory), failure, 500, null, LogType.ActionLog, CancellationToken.None),
             Times.Once);
     }
 
@@ -229,7 +230,7 @@ public class PricesControllerTests
         Assert.Same(Sources, body.Data);
         _appLog.Verify(
             l => l.LogAsync(LogType.ActionLog, nameof(PricesController.GetSources), It.IsAny<string?>(), 200,
-                It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+                It.IsAny<long?>(), LogLevel.Information, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -258,7 +259,7 @@ public class PricesControllerTests
         Assert.Equal(500, status);
         Assert.Equal(ErrorMessages.UnexpectedErrorMessage, body.Message);
         _appLog.Verify(
-            l => l.LogErrorAsync(nameof(PricesController.GetSources), failure, 500, CancellationToken.None),
+            l => l.LogErrorAsync(nameof(PricesController.GetSources), failure, 500, null, LogType.ActionLog, CancellationToken.None),
             Times.Once);
     }
 }

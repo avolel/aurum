@@ -11,7 +11,6 @@ using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -83,10 +82,10 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
 
         // The real cache rather than a stub: the order tests below are about what it holds after
         // the poller has written to it, and a stub would assert the poller called a method.
-        var cache = new LatestQuoteCache(scopes, sources, clock, polling, NullLogger<LatestQuoteCache>.Instance);
+        var cache = new LatestQuoteCache(scopes, sources, clock, polling, new ListAppLog<LatestQuoteCache>());
 
         var deltas = new DeltaEngine(
-            scopes, Options.Create(new DeltaEngineOptions()), clock, NullLogger<DeltaEngine>.Instance);
+            scopes, Options.Create(new DeltaEngineOptions()), clock, new ListAppLog<DeltaEngine>());
 
         // Only 5m has a threshold, so a test controls exactly which window can fire.
         var significance = new SignificanceOptions { ThresholdProfile = "test-v1", CrossSourceMagnitudeMultiplier = 2m };
@@ -96,7 +95,7 @@ public class PricePollingServiceTests(PostgresFixture fixture) : IAsyncLifetime
         var poller = new PricePollingService(
             scopes, sources, clock, polling, Options.Create(new PriceFeedResilienceOptions()),
             cache, deltas, Options.Create(significance),
-            broadcaster ?? new RecordingBroadcaster(), NullLogger<PricePollingService>.Instance);
+            broadcaster ?? new RecordingBroadcaster(), new ListAppLog<PricePollingService>());
 
         return (poller, clock, cache, deltas);
     }

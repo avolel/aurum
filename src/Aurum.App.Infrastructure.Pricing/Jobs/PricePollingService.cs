@@ -5,6 +5,7 @@ using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Realtime;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
+using Aurum.App.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -26,7 +27,7 @@ public class PricePollingService(
     IDeltaEngine deltas,
     IOptions<SignificanceOptions> significance,
     IPriceBroadcaster broadcaster,
-    ILogger<PricePollingService> logger) : BackgroundService
+    IAppLogService<PricePollingService> logger) : BackgroundService
 {
     /// <summary>
     /// Enabled sources in failover order, for the coverage log. Same ordering
@@ -61,9 +62,12 @@ public class PricePollingService(
             {
                 // Every source is out of budget. Sleep to the EARLIEST reset, or funded sources sit idle.
                 var wait = resetsAt - clock.GetUtcNow();
-                logger.LogError(
-                    "Every source is out of quota; pausing polling for {Wait} until {ResetsAt:O}.",
-                    wait, resetsAt);
+                await logger.LogErrorAsync("PricePollingService",
+                    ex,
+                    details: $"Every source is out of quota; pausing polling for {wait} until {resetsAt:O}.",
+                    logType: LogType.SystemLog,
+                    ct: stoppingToken
+                );
 
                 if (wait > TimeSpan.Zero)
                 {
@@ -73,7 +77,12 @@ public class PricePollingService(
             catch (AllSourcesFailedException ex)
             {
                 // Faults or open circuits clear in minutes, so stay on the cadence.
-                logger.LogError(ex, "Every source failed this poll; will retry on the next interval.");
+                await logger.LogErrorAsync("PricePollingService",
+                    ex,
+                    details: "Every source failed this poll; will retry on the next interval.",
+                    logType: LogType.SystemLog,
+                    ct: stoppingToken
+                );
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -81,7 +90,12 @@ public class PricePollingService(
             }
             catch (Exception ex)
             {
-                logger.LogError(ex, "Price poll failed; will retry on the next interval.");
+                await logger.LogErrorAsync("PricePollingService",
+                    ex,
+                    details: "Price poll failed; will retry on the next interval.",
+                    logType: LogType.SystemLog,
+                    ct: stoppingToken
+                );
             }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
@@ -106,7 +120,12 @@ public class PricePollingService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "{What} warm-up failed; it fills from the first poll instead.", what);
+            await logger.LogErrorAsync("PricePollingService",
+                ex,
+                details: $"{what} warm-up failed; it fills from the first poll instead.",
+                logType: LogType.SystemLog,
+                ct: stoppingToken
+            );
         }
 
         return true;
@@ -124,25 +143,23 @@ public class PricePollingService(
         var attempts = resilience.Value.MaxAttempts;
         var primary = _enabled[0];
         var polls = PriceSourcesOptionsValidator.LongestPeriod / pollInterval;
-        logger.LogInformation(
-            "Primary {Source} at {Interval}: {Polls:F0} polls, up to {Requests:F0} of {Limit} requests per period.",
-            primary.SourceCode,
-            pollInterval,
-            polls,
-            polls * attempts,
-            primary.MonthlyRequestLimit);
+
+        // Discarded, not awaited: this method is synchronous and AppLogService only queues.
+        _ = logger.LogAsync(LogType.SystemLog,
+            "PricePollingBudgetCoverage",
+            $"Primary {primary.SourceCode} at {pollInterval}: {polls:F0} polls, up to {polls * attempts:F0} of {primary.MonthlyRequestLimit} requests per period.",
+            level: LogLevel.Information
+        );
 
         foreach (var backup in _enabled.Skip(1))
         {
             // Worst case: everything above it is down.
             var coverage = pollInterval * backup.MonthlyRequestLimit;
-            logger.LogInformation(
-                "Backup {Source}: {Limit} requests = {Days:F1} days of full outage coverage at one try per poll, {WorstDays:F1} at {Attempts}.",
-                backup.SourceCode,
-                backup.MonthlyRequestLimit,
-                coverage.TotalDays,
-                coverage.TotalDays / attempts,
-                attempts);
+            _ = logger.LogAsync(LogType.SystemLog,
+                "PricePollingBudgetCoverage",
+                $"Backup {backup.SourceCode}: {backup.MonthlyRequestLimit} requests = {coverage.TotalDays:F1} days of full outage coverage at one try per poll, {coverage.TotalDays / attempts:F1} at {attempts}.",
+                level: LogLevel.Information
+            );
         }
     }
 
@@ -181,16 +198,17 @@ public class PricePollingService(
 
         if (result.UsedFallback)
         {
-            logger.LogWarning(
-                "Primary {Primary} did not serve this poll; {Actual} did after {Attempts}.",
-                result.PrimarySourceCode, result.Quote.SourceCode,
-                string.Join(" -> ", result.AttemptedSources));
+            await logger.LogAsync(LogType.SystemLog,
+                "UsedFallback",
+                $"Primary {result.PrimarySourceCode} did not serve this poll; {result.Quote.SourceCode} did after {string.Join(" -> ", result.AttemptedSources)}.",
+                level: LogLevel.Warning,
+                ct: ct);
         }
 
-        logger.LogInformation(
-            "Tick {Symbol} mid={Mid} from {Source}, {StalenessMs}ms stale.",
-            result.Quote.Symbol, result.Quote.Mid, result.Quote.SourceCode,
-            (result.Quote.ReceivedAt - result.Quote.ObservedAt).TotalMilliseconds);
+        await logger.LogAsync(LogType.SystemLog,
+            "Tick",
+            $"Tick {result.Quote.Symbol} mid={result.Quote.Mid} from {result.Quote.SourceCode}, {(result.Quote.ReceivedAt - result.Quote.ObservedAt).TotalMilliseconds}ms stale.",
+            ct: ct);
     }
 
     /// <summary>
@@ -211,7 +229,11 @@ public class PricePollingService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Sending {Symbol} to live clients failed; the poll carries on.", symbol);
+            await logger.LogErrorAsync(nameof(TryPublishAsync),
+                ex,
+                details: $"Sending {symbol} to live clients failed; the poll carries on.",
+                logType: LogType.SystemLog,
+                ct: ct);
         }
     }
 
@@ -235,10 +257,10 @@ public class PricePollingService(
 
             if (await PriceEventSql.InsertAsync(db, priceEvent, cooldown, clock.GetUtcNow(), ct))
             {
-                logger.LogInformation(
-                    "Price event {Symbol} {Window} {Direction} {DeltaPercent}% ({Rule}).",
-                    priceEvent.Symbol, priceEvent.WindowCode, priceEvent.Direction,
-                    priceEvent.DeltaPercent, priceEvent.TriggeredRule);
+                await logger.LogAsync(LogType.SystemLog,
+                    "PriceEvent",
+                    $"Price event {priceEvent.Symbol} {priceEvent.WindowCode} {priceEvent.Direction} {priceEvent.DeltaPercent}% ({priceEvent.TriggeredRule}).",
+                    ct: ct);
             }
         }
     }

@@ -63,6 +63,11 @@ namespace Aurum.App.Infrastructure.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<string>("Level")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<string>("LogType")
                         .IsRequired()
                         .HasMaxLength(32)

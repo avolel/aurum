@@ -7,8 +7,8 @@ their own rows in `InitializeAsync`.
 
 `InternalsVisibleTo` is set on `Infrastructure.Data`, `Infrastructure.Pricing` and `Aurum.Api` so
 tests reach internal seams — `PostgresQuotaGovernor.ResolvePeriod`, `SourceCircuit`,
-`SourceCircuitStore`, `FailoverPriceFeed`, `Program.AddPriceSource<T>` — without widening any public
-surface.
+`SourceCircuitStore`'s constructor and `For()` (the class itself is public), `FailoverPriceFeed`,
+`Program.AddPriceSource<T>` — without widening any public surface.
 
 Several tests pin a decision rather than find a bug — `Transport_failure_still_spends_the_lease` is
 the executable form of "no refunds". Deleting one because it "tests nothing" removes the guard.
@@ -107,8 +107,8 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   `ConfigureAppConfiguration` — `Program.cs` reads the connection string before `Build()`, and only
   host settings are visible that early. API keys are set per config key (`GoldApiIo`, …) and
   `Macro:Fred:ApiKey` and `Macro:Bls:ApiKey` are set, because blank keys refuse to boot (D-9).
-- **`BlsClientTests`** needs **no container**: `BlsClient` over a `CountingHandler` stub that records
-  the `POST` body. `Modules/Macro/bls-2026.json` is a real BLS answer for all four series from
+- **`BlsClientTests`** needs **no container**: `BlsClient` over a `CountingHandler` stub; the test's
+  callback keeps the `POST` body. `Modules/Macro/bls-2026.json` is a real BLS answer for all four series from
   2026-11-11. The refusal body is BLS's real one, key included, so the scrub test is honest.
 - **`FredClientTests`** needs **no container**: the real `QueryKeyAuthHandler` over a
   `CountingHandler` stub. `Modules/Macro/*.json` are real FRED answers from 2026-11-07, copied to the
@@ -117,8 +117,9 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   real call rather than editing by hand, and check a new file for the key before committing it.
 - **`FredImporterTests`** uses the Postgres collection and deletes every `macro_series` row in
   `InitializeAsync` (observations go with them by cascade). Each save gets a fresh `DbContext`, as
-  each poll would. Warnings are read from `ListLogger`. `Second_run_with_same_rows_writes_nothing`
-  also checks `UpdatedAt` didn't move, so it proves no `UPDATE` ran rather than trusting the count.
+  each poll would. Warnings are the `ListAppLog` entries at `LogLevel.Warning`.
+  `Second_run_with_same_rows_writes_nothing` also checks `UpdatedAt` didn't move, so it proves no
+  `UPDATE` ran rather than trusting the count.
   **`FredImporterReleasedAtTests`**, in the same file, needs **no container**: it pins 08:30 New York
   in winter (13:30Z) and summer (12:30Z).
 - **`DeltaEngineReplayTests`** replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine`
@@ -130,6 +131,11 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   list has repeats: the classifier has no waiting period; that lives in the insert (D-18).
 - **`QuotaHandlerTests`** drives the handler through a real `HttpClient` over a stub inner handler,
   because `HttpClient` does its own exception handling on the way out — bypassing it would not prove
-  `QuotaExhaustedException` reaches `PricePollingService`'s catch. `Infrastructure/ListLogger.cs`
-  captures log entries where the log line *is* the deliverable (the governor's denial
-  message, and `FredImporter`'s changed-value warning).
+  `QuotaExhaustedException` reaches `PricePollingService`'s catch.
+- **`Infrastructure/ListAppLog.cs`** is an `IAppLogService<T>` that keeps every call, used wherever a
+  class under test needs a log service. Tests read its `Entries` where the row *is* the deliverable:
+  the governor's denial `Details` (`QuotaGovernorTests`) and `FredImporter`'s changed-value warning.
+  It is locked, because a background service can log while the test reads. `ResilienceWiringTests`
+  registers it as the open generic `IAppLogService<>`. The controller and pipeline tests mock
+  `IAppLogService<T>` with Moq instead. A new optional parameter on it breaks their `Verify`
+  expressions, because an expression tree must name every argument.

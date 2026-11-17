@@ -15,7 +15,8 @@ has no client for the Treasury (D-22).
 But FRED posts a new CPI (consumer price index) figure 40 minutes or more after BLS releases it at
 08:30 New York time. That is too late to explain the price move it causes. So on release morning
 the app reads the newest month straight from BLS, and FRED's copy replaces it later (D-23).
-`FredImporter` can save FRED's figures to the database, but nothing calls it or either client yet. `ops/bench/fred_delay.py` measures how late each
+`MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. Nothing
+calls the BLS client yet. `ops/bench/fred_delay.py` measures how late each
 provider posts a figure; the jobs report on 2026-12-04 is its next run.
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
@@ -247,10 +248,10 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-23** so far. `ops/phase-2-todo.md` lists the next work in an order
+The decision log has **D-1 to D-25** so far. `ops/phase-2-todo.md` lists the next work in an order
 where each item can be checked when it is finished. Its first item closed D-6, the FRED client
 added D-22, and the BLS client added D-23. A decision number is only given out when the decision is
-actually made, so the next one will be D-24.
+actually made, so the next one will be D-26.
 
 ## Where things are
 
@@ -265,16 +266,18 @@ ops/phase-2-todo.md                Phase 2's work list: AI explanations for big 
 docs/                              guides on how the code is organised
 src/Aurum.App.SharedKernel/        small pieces every project uses
 src/Aurum.App.Infrastructure.Data/ the database: tables, changes to them, saving
+src/Aurum.App.Logging/             the app's own log: rows are queued, then saved to the database
+                                   in the background
 src/Aurum.App.Infrastructure.Pricing/
   Sources/                         the three price services, the fallback order, the circuit breaker
   Quota/                           the request counter
   Cache/                           the latest price, kept in memory
   Deltas/                          how much the price moved, and which moves become events
-  Jobs/                            the timer that checks the price
+  Jobs/                            the two timers: one checks the price, one refreshes FRED's figures
   Realtime/                        the interface the timer uses to send prices to apps
   Macro/                           fetches economic figures from FRED, and from BLS on release
-                                   morning; saves FRED's, but nothing runs it yet
-src/Aurum.App.Application/         the rules for handling requests, and logging
+                                   morning; saves FRED's (nothing calls the BLS client yet)
+src/Aurum.App.Application/         the rules for handling requests
   Prices/                          the four read endpoints' queries, input checks and answers
 src/Aurum.Api/                     the web API; Program.cs sets everything up
   Controllers/                     the web addresses; each one passes the request on and wraps the answer
@@ -283,7 +286,7 @@ src/Aurum.Api.Tests/               tests, run against a real database
 app/                               the start of the mobile app; nothing much in it yet
 ```
 
-The code is split into five projects, based on the layout in `docs/best-practices-api.md`, with two
+The code is split into six projects, based on the layout in `docs/best-practices-api.md`, with two
 differences recorded in D-5:
 
 - The code that talks to outside price services and runs the timer has its own project,
@@ -363,7 +366,7 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 286 test methods (counted on 2026-11-14 by searching for `[Fact]` and `[Theory]`). The 27
+There are 293 test methods (counted on 2026-11-16 by searching for `[Fact]` and `[Theory]`). The 27
 `[Theory]` methods run once per `[InlineData]` line, so more test cases run than that. Most of them start a
 real copy of the database in Docker rather than a fake one, because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
@@ -398,7 +401,7 @@ Tests worth knowing about:
   a switch between services that must not look like a move. A small amount of noise is added from a
   fixed seed, so the prices are the same every run. It needs no Docker (D-21).
 - **`AurumApiFactory`** starts the whole API from `Program.cs` inside a test, against the test
-  database. It removes the price timer and swaps the three price services for stand-ins that never
+  database. It removes both timers (prices and FRED) and swaps the three price services for stand-ins that never
   make a web request. A test that used it could otherwise spend real requests from a 100-request
   month (D-21).
 

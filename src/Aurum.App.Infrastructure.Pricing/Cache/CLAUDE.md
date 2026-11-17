@@ -25,8 +25,8 @@ first poll and calls `Record` after every successful one.
   to "never had a price", and the age is the product requirement. Do not "upgrade" it.
 - **Newest-only by `ObservedAt`, strictly.** The comparison lives inside `AddOrUpdate`'s update
   delegate; a `TryGetValue`-then-indexer rewrite reopens the check-then-set gap. The delegate may run
-  more than once under contention, so it must stay side-effect free — the debug log for a dropped
-  quote is decided afterwards by `ReferenceEquals(held, incoming)`.
+  more than once under contention, so it must stay side-effect free. A dropped quote is not logged
+  (D-25 deleted that Debug line).
 - **`Age = clock.GetUtcNow() - Quote.ObservedAt`, computed in `Get`, never stored.** Not
   `ReceivedAt`: a provider answering 200 with a frozen `ObservedAt` would look fresh forever.
   `Age_is_measured_from_ObservedAt_not_ReceivedAt` pins this.

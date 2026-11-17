@@ -4,7 +4,6 @@ using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.Api.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -35,7 +34,7 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     public Task DisposeAsync() => Task.CompletedTask;
 
     private IQuotaGovernor NewGovernor(AurumDbContext db)
-        => new PostgresQuotaGovernor(db, _clock, NullLogger<PostgresQuotaGovernor>.Instance, _sources);
+        => new PostgresQuotaGovernor(db, _clock, new ListAppLog<PostgresQuotaGovernor>(), _sources);
 
     /// <summary>
     /// Budget survives a process restart. A second governor over a fresh DbContext stands in for
@@ -184,15 +183,15 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     {
         await SeedWindowAsync(requestLimit: 100);
         await using var db = fixture.CreateDbContext(_clock);
-        var logger = new ListLogger<PostgresQuotaGovernor>();
+        var logger = new ListAppLog<PostgresQuotaGovernor>();
         var governor = new PostgresQuotaGovernor(db, _clock, logger, _sources);
 
         await governor.ReportProviderRejectionAsync(SourceCode, Ct);
         Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
 
-        var denial = Assert.Single(logger.Entries, e => e.Message.Contains("denied"));
-        Assert.Contains("rejected", denial.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("no budget left", denial.Message, StringComparison.OrdinalIgnoreCase);
+        var denial = Assert.Single(logger.Entries, e => e.Details!.Contains("denied"));
+        Assert.Contains("rejected", denial.Details, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no budget left", denial.Details, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -203,15 +202,15 @@ public class QuotaGovernorTests(PostgresFixture fixture) : IAsyncLifetime
     {
         await SeedWindowAsync(requestLimit: 1);
         await using var db = fixture.CreateDbContext(_clock);
-        var logger = new ListLogger<PostgresQuotaGovernor>();
+        var logger = new ListAppLog<PostgresQuotaGovernor>();
         var governor = new PostgresQuotaGovernor(db, _clock, logger, _sources);
 
         Assert.True((await governor.AcquireAsync(SourceCode, Ct)).Granted);
         Assert.False((await governor.AcquireAsync(SourceCode, Ct)).Granted);
 
-        var denial = Assert.Single(logger.Entries, e => e.Message.Contains("denied"));
-        Assert.Contains("no budget left", denial.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("rejected", denial.Message, StringComparison.OrdinalIgnoreCase);
+        var denial = Assert.Single(logger.Entries, e => e.Details!.Contains("denied"));
+        Assert.Contains("no budget left", denial.Details, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rejected", denial.Details, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

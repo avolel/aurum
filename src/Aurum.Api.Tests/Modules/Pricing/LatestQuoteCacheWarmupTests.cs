@@ -5,7 +5,6 @@ using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -52,7 +51,7 @@ public class LatestQuoteCacheWarmupTests(PostgresFixture fixture) : IAsyncLifeti
                 (primary == GoldApi ? ApiNinjas : GoldApi, 2, true)),
             clock,
             Options.Create(new PricePollingOptions { PollInterval = TimeSpan.FromMinutes(15) }),
-            NullLogger<LatestQuoteCache>.Instance);
+            new ListAppLog<LatestQuoteCache>());
     }
 
     [Fact]

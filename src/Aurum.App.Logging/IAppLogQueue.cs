@@ -3,7 +3,7 @@ using System.Threading.Channels;
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Microsoft.Extensions.Logging;
 
-namespace Aurum.App.Application.AppLogs;
+namespace Aurum.App.Logging;
 
 /// <summary>Hand-off between the request thread and the drain.</summary>
 public interface IAppLogQueue

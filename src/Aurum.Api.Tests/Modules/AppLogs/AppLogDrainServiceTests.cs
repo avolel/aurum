@@ -1,5 +1,5 @@
 using Aurum.Api.Tests.Infrastructure;
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -53,6 +53,7 @@ public class AppLogDrainServiceTests(PostgresFixture fixture) : IAsyncLifetime
             queue.TryEnqueue(new AppLog
             {
                 LogType = LogType.ActionLog.ToString(),
+                Level = nameof(Microsoft.Extensions.Logging.LogLevel.Information),
                 Action = Action,
                 Details = round,
                 CreatedAt = now,

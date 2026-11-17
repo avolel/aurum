@@ -37,7 +37,7 @@ dotnet ef migrations script --idempotent --project src/Aurum.App.Infrastructure.
 
 ## Architecture
 
-Five projects. The layer table in `docs/best-practices-api.md` is the contract.
+Six projects. The layer table in `docs/best-practices-api.md` is the contract.
 
 ```
 src/
@@ -45,20 +45,25 @@ src/
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
 ├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed;
 │                                      Macro/ — the FRED and BLS clients, and FredImporter (D-22, D-23)
-├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, AppLogs/, Prices/
+├── Aurum.App.Logging/                 IAppLogService<T>, its queue and drain, IRequestContextAccessor (D-24)
+├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, Prices/
 ├── Aurum.Api/                         Program.cs (every registration), Controllers/, Hubs/ (SignalR)
 └── Aurum.Api.Tests/
 ```
 
-Three things that look wrong without the reason:
+Four things that look wrong without the reason:
 
-- **`Infrastructure.Pricing` is a fifth project the layer table does not list.** Price sources are
+- **`Infrastructure.Pricing` is a project the layer table does not list.** Price sources are
   external HTTP clients and the poller is a background job; neither fits "EF Core queries,
   repositories, DbContext". It depends on `Infrastructure.Data` because it writes four groups of
   tables: the quota governor `api_quota_windows`, the poller `price_ticks` and `price_sources`, the
-  delta engine `price_events` (through `PriceEventSql`), and `FredImporter` `macro_series` and
+  poller `price_events` (through `PriceEventSql`), and `FredImporter` `macro_series` and
   `macro_observations`. `LatestQuoteCache` and `DeltaEngine` also read `price_ticks` to warm up.
-- **`Aurum.Api` references all four projects.** It is the composition root and must name every type
+- **`Aurum.App.Logging` is its own project, below Application and Pricing** (D-24). Application
+  references Pricing (D-20), so a log service in Application could never be used by Pricing: the
+  reference back would be a cycle. Logging depends only on Data and SharedKernel. Application
+  references it explicitly, not only through Pricing, because `LoggingBehavior` uses it.
+- **`Aurum.Api` references all five projects.** It is the composition root and must name every type
   it registers. The layer rule still holds for `Controllers/`: a controller reaching past
   `IMediator` into Infrastructure is the violation.
 - **`AutoMapper` is deliberately absent.** Every version, 15.0.1 included, carries the unpatched
@@ -72,11 +77,12 @@ No `Add<Module>Module` methods, no per-layer `ServiceCollectionExtensions`. **D-
 original module seam and its reversal** — read it before registering anything elsewhere.
 
 - MediatR handlers and FluentValidation validators are found by assembly scanning (`AddMediatR()`,
-  `AddValidatorsFromAssembly()`). Everything else, repositories included, is registered in
+  `AddValidatorsFromAssemblyContaining<T>()`). Everything else, repositories included, is registered in
   `Program.cs`.
 - `Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")` so `Program.cs` can name its
   internal types: `QueryKeyAuthHandler`, `RegisteredPriceSource`, both options validators,
-  `LatestQuoteCache`, `DeltaEngine` and `FailoverPriceFeed`. Nothing outside the module should
+  `LatestQuoteCache`, `DeltaEngine`, `FailoverPriceFeed`, `FredImporter` and `MacroPollingService`.
+  Nothing outside the module should
   resolve them, so don't make them public to satisfy wiring.
 - **`SourceCircuitStore` is public** so the `/sources` endpoint can call `SnapshotAll()` (D-20), but
   its constructor and `For()` stay internal. The container only calls public constructors, so
@@ -84,12 +90,16 @@ original module seam and its reversal** — read it before registering anything 
 - **`Program.AddPriceSource<T>` is a member of `Program`, not a local function**, so tests can call
   it. The order of two lines inside it — resilience handler above `QuotaHandler` — is what
   `ResilienceWiringTests` pins. Swapping them makes retries uncounted (see the Pricing CLAUDE.md).
-- `services.AddScoped(typeof(IAppLogService<>), typeof(AppLogService<>))`; `IAppLogQueue` is a
-  **singleton** (a scoped queue drops rows when the
-  request ends); `AppLogDrainService` batches rows into `app_logs`.
-- `IRequestContextAccessor` is implemented by `HttpRequestContextAccessor` in `Aurum.Api`. The
-  Application layer must not reference `IHttpContextAccessor`. Outside a request it yields
-  `RequestContext.None`, which lets background jobs share `IAppLogService<T>`.
+- `services.AddSingleton(typeof(IAppLogService<>), typeof(AppLogService<>))`, all from
+  `Aurum.App.Logging` (D-25). **Every log dependency is a singleton**: `IAppLogQueue` (a scoped
+  queue drops rows when the request ends), `IRequestContextAccessor` and `TimeProvider`. That is what
+  lets the poller, the cache and other singletons take `IAppLogService<T>` directly. Never give
+  `AppLogService` a scoped dependency; `AurumApiFactoryTests` boots with scope validation and fails
+  if one appears. `AppLogDrainService` batches rows into `app_logs`.
+- `IRequestContextAccessor` (in `Aurum.App.Logging`) is implemented by `HttpRequestContextAccessor`
+  in `Aurum.Api`, which reads the current request on every call, so a singleton holds no request's
+  details. Neither Logging nor Application may reference `IHttpContextAccessor`. Outside a request it
+  yields `RequestContext.None`, which lets background jobs share `IAppLogService<T>`.
 
 ### Frontend (`app/`)
 
@@ -187,9 +197,14 @@ Each folder's CLAUDE.md has the full reasoning. These are the ones a change else
 - Prose names the failure mode a decision avoids. Match that in docs and the decision log.
 - REST: `GET/POST /api/v1/{resources}`, `GET/PUT/DELETE /api/v1/{resources}/{id}`. No verbs,
   lowercase.
-- Logging: always `IAppLogService<T>`, not `ILogger<T>`. Auto-enriched (UserId, TenantId, IpAddress,
-  UserAgent, RequestPath, HttpMethod, CorrelationId), queued, non-blocking. Success:
-  `LogAsync(LogType.ActionLog, action, details, 200)`. Error: `LogErrorAsync(action, exception, 500)`.
+- Logging: always `IAppLogService<T>`, not `ILogger<T>`, background jobs included (D-25). Only
+  `AppLogQueue` and `AppLogDrainService` keep `ILogger`, because the log can't report its own failure.
+  It writes to `app_logs` only, **never the console**. Auto-enriched (UserId, TenantId, IpAddress,
+  UserAgent, RequestPath, HttpMethod, CorrelationId), queued, non-blocking. `Action` is a stable key
+  (a method or event name); the readable message goes in `details` as an interpolated string.
+  Success: `LogAsync(LogType.ActionLog, action, details, 200)`; pass `level: LogLevel.Warning` for a
+  warning. Error: `LogErrorAsync(action, exception, 500)`, always `Error`; background jobs add
+  `details:` and `logType: LogType.SystemLog`. In a synchronous method, discard the task with `_ =`.
 
 ## Testing (backend)
 

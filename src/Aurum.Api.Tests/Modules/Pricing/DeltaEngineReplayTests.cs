@@ -3,7 +3,6 @@ using Aurum.App.Infrastructure.Pricing.Deltas;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -51,7 +50,7 @@ public class DeltaEngineReplayTests
             new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>(),
             Microsoft.Extensions.Options.Options.Create(new DeltaEngineOptions()),
             clock,
-            NullLogger<DeltaEngine>.Instance);
+            new ListAppLog<DeltaEngine>());
 
         var path = Path.Combine(AppContext.BaseDirectory, "Modules", "Pricing", "DeltaEngineReplay.csv");
         return TickReplay.Run(TickReplay.Load(path, Start, Seed, Noise), engine, clock, Options());

@@ -1,10 +1,10 @@
-using Aurum.App.Application.AppLogs;
+using Aurum.App.Logging;
 using Aurum.App.Application.Common.Behaviors;
 using Aurum.App.Application.Common.CQRS;
 using Aurum.App.Infrastructure.Data.Repositories;
 using FluentValidation;
 using MediatR;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace Aurum.Api.Tests.Common;
@@ -35,7 +35,7 @@ public class PipelineBehaviorTests
     // --- LoggingBehavior ---
 
     private static LoggingBehavior<TestQuery, int> Logging(Mock<IAppLogService<TestQuery>> appLog) =>
-        new(appLog.Object, NullLogger<LoggingBehavior<TestQuery, int>>.Instance);
+        new(appLog.Object);
 
     [Fact]
     public async Task LoggingBehavior_OnSuccess_LogsActionWith200()
@@ -47,8 +47,28 @@ public class PipelineBehaviorTests
 
         Assert.Equal(7, result);
         appLog.Verify(l => l.LogAsync(
-            LogType.ActionLog, nameof(TestQuery), null, 200, It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+            LogType.ActionLog, nameof(TestQuery), null, 200, It.IsAny<long?>(), LogLevel.Information, It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    // Real time: the behavior measures with Stopwatch, which no fake clock drives. 600ms clears the
+    // 500ms threshold with room for a slow CI machine.
+    [Fact]
+    public async Task LoggingBehavior_OnSlowRequest_LogsOneRowAtWarning()
+    {
+        var appLog = new Mock<IAppLogService<TestQuery>>();
+
+        await Logging(appLog).Handle(new TestQuery("gold"), async _ =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(600));
+            return 7;
+        }, Ct);
+
+        appLog.Verify(l => l.LogAsync(
+            LogType.ActionLog, nameof(TestQuery), null, 200, It.Is<long?>(ms => ms >= 500), LogLevel.Warning,
+            It.IsAny<CancellationToken>()),
+            Times.Once);
+        appLog.VerifyNoOtherCalls();
     }
 
     [Fact]
@@ -61,7 +81,7 @@ public class PipelineBehaviorTests
             Logging(appLog).Handle(new TestQuery(""), _ => throw invalid, Ct));
 
         Assert.Same(invalid, thrown);
-        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), invalid, 400, It.IsAny<CancellationToken>()), Times.Once);
+        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), invalid, 400, null, LogType.ActionLog, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -75,7 +95,7 @@ public class PipelineBehaviorTests
 
         // Same instance: rethrown, not wrapped, so the controller's catch sees the real type.
         Assert.Same(failure, thrown);
-        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), failure, 500, It.IsAny<CancellationToken>()), Times.Once);
+        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), failure, 500, null, LogType.ActionLog, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -91,7 +111,7 @@ public class PipelineBehaviorTests
 
         Assert.Same(cancelled, thrown);
         appLog.Verify(l => l.LogErrorAsync(
-            It.IsAny<string>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            It.IsAny<string>(), It.IsAny<Exception>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<LogType>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -105,7 +125,7 @@ public class PipelineBehaviorTests
         await Assert.ThrowsAsync<OperationCanceledException>(() =>
             Logging(appLog).Handle(new TestQuery("gold"), _ => throw timedOut, Ct));
 
-        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), timedOut, 500, It.IsAny<CancellationToken>()), Times.Once);
+        appLog.Verify(l => l.LogErrorAsync(nameof(TestQuery), timedOut, 500, null, LogType.ActionLog, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // --- ValidationBehavior ---

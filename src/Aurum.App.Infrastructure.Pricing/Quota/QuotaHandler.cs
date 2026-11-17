@@ -1,4 +1,5 @@
 using System.Net;
+using Aurum.App.Logging;
 
 namespace Aurum.App.Infrastructure.Pricing.Quota;
 
@@ -14,7 +15,7 @@ namespace Aurum.App.Infrastructure.Pricing.Quota;
 public class QuotaHandler(
     IServiceScopeFactory scopeFactory,
     string sourceCode,
-    ILogger<QuotaHandler> logger) : DelegatingHandler
+    IAppLogService<QuotaHandler> logger) : DelegatingHandler
 {
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -41,17 +42,24 @@ public class QuotaHandler(
             await governor.ReportProviderRejectionAsync(sourceCode, ct);
             var status = await governor.GetStatusAsync(sourceCode, ct);
 
-            logger.LogWarning(
-                "{Source} rejected us for quota; local count was {Used}/{Limit}. Budget clamped until {ResetsAt:O}.",
-                sourceCode, status.Used, status.Limit, status.ResetsAt);
+            await logger.LogAsync(LogType.SystemLog,
+                "ProviderRejected",
+                $"{sourceCode} rejected us for quota; local count was {status.Used}/{status.Limit}. Budget clamped until {status.ResetsAt:O}.",
+                level: LogLevel.Warning,
+                ct: ct
+            );
 
             throw new Sources.QuotaExhaustedException(sourceCode, status.ResetsAt);
         }
 
         if (lease.Remaining <= 5)
         {
-            logger.LogWarning("{Source} budget nearly spent: {Remaining} requests left until {ResetsAt:O}.",
-                sourceCode, lease.Remaining, lease.ResetsAt);
+            await logger.LogAsync(LogType.SystemLog,
+                "BudgetNearlyExhausted",
+                $"{sourceCode} budget nearly spent: {lease.Remaining} requests left until {lease.ResetsAt:O}.",
+                level: LogLevel.Warning,
+                ct: ct
+            );
         }
 
         return response;

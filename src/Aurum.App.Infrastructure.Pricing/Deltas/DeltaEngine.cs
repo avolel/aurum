@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
+using Aurum.App.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -19,7 +20,7 @@ internal sealed class DeltaEngine(
     IServiceScopeFactory scopeFactory,
     IOptions<DeltaEngineOptions> options,
     TimeProvider clock,
-    ILogger<DeltaEngine> logger) : IDeltaEngine
+    IAppLogService<DeltaEngine> logger) : IDeltaEngine
 {
     private readonly DeltaEngineOptions _options = options.Value;
 
@@ -45,18 +46,12 @@ internal sealed class DeltaEngine(
 
         lock (history.Gate)
         {
-            if (history.Buffer.TryAppend(sample))
-            {
-                return;
-            }
-
             // Counted here, not in TryAppend, because warm-up overlap is not a fault.
-            history.DroppedOutOfOrder++;
+            if (!history.Buffer.TryAppend(sample))
+            {
+                history.DroppedOutOfOrder++;
+            }
         }
-
-        logger.LogDebug(
-            "Dropped {Symbol} price from {SourceCode} observed at {ObservedAt:o}: not newer than the newest held price.",
-            quote.Symbol, quote.SourceCode, quote.ObservedAt);
     }
 
     public DeltaSnapshot? GetSnapshot(string symbol)
@@ -190,8 +185,12 @@ internal sealed class DeltaEngine(
             if (rows.Count == 0)
             {
                 // No history created, so GetSnapshot stays null ("never held a price").
-                logger.LogInformation(
-                    "No stored {Symbol} ticks since {Since:o} to warm the price history from.", symbol, since);
+                await logger.LogAsync(LogType.SystemLog,
+                    "NoStoredTicks",
+                    $"No stored {symbol} ticks since {since:o} to warm the price history from.",
+                    level: LogLevel.Information,
+                    ct: ct
+                );
                 continue;
             }
 
@@ -211,9 +210,12 @@ internal sealed class DeltaEngine(
                 }
             }
 
-            logger.LogInformation(
-                "Warmed {Symbol} price history: {Loaded} of {Stored} stored ticks since {Since:o}.",
-                symbol, loaded, rows.Count, since);
+            await logger.LogAsync(LogType.SystemLog,
+                "WarmedPriceHistory",
+                $"Warmed {symbol} price history: {loaded} of {rows.Count} stored ticks since {since:o}.",
+                level: LogLevel.Information,
+                ct: ct
+            );
         }
     }
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Aurum.App.Infrastructure.Data;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
+using Aurum.App.Logging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -16,7 +17,7 @@ internal sealed class LatestQuoteCache(
     IOptions<PriceSourcesOptions> sources,
     TimeProvider clock,
     IOptions<PricePollingOptions> polling,
-    ILogger<LatestQuoteCache> logger) : ILatestQuoteCache
+    IAppLogService<LatestQuoteCache> logger) : ILatestQuoteCache
 {
     // IgnoreCase to match PriceSourcesOptions.Sources and PriceFeedResult.UsedFallback.
     private readonly ConcurrentDictionary<string, LatestQuote> _quotes =
@@ -30,24 +31,13 @@ internal sealed class LatestQuoteCache(
         // The one place Attempts (and their Exceptions) are dropped.
         var incoming = new LatestQuote(result.Quote, result.UsedFallback, result.AttemptedSources);
 
-        // Compare inside the delegate; TryGetValue then set would reopen the race. The delegate
-        // can run more than once, so it must stay side-effect free.
-        var held = _quotes.AddOrUpdate(
+        // Newer only, same rule as the delta engine (D-16). Compare inside the delegate;
+        // TryGetValue then set would reopen the race. The delegate can run more than once, so it
+        // must stay side-effect free.
+        _quotes.AddOrUpdate(
             result.Quote.Symbol,
             incoming,
             (_, current) => incoming.Quote.ObservedAt > current.Quote.ObservedAt ? incoming : current);
-
-        if (!ReferenceEquals(held, incoming))
-        {
-            // Newer only, same rule as the delta engine (D-16).
-            logger.LogDebug(
-                "Dropped {Symbol} quote from {SourceCode} observed at {ObservedAt:o}: not newer than the held quote from {HeldSourceCode} observed at {HeldObservedAt:o}.",
-                result.Quote.Symbol,
-                result.Quote.SourceCode,
-                result.Quote.ObservedAt,
-                held.Quote.SourceCode,
-                held.Quote.ObservedAt);
-        }
     }
 
     public LatestQuoteSnapshot? Get(string symbol)
@@ -86,7 +76,12 @@ internal sealed class LatestQuoteCache(
 
             if (tick is null)
             {
-                logger.LogInformation("No stored {Symbol} tick to warm the latest-quote cache from.", symbol);
+                await logger.LogAsync(LogType.SystemLog,
+                    "NoStoredTick",
+                    $"No stored {symbol} tick to warm the latest-quote cache from.",
+                    level: LogLevel.Information,
+                    ct: ct
+                );
                 continue;
             }
 
@@ -96,9 +91,12 @@ internal sealed class LatestQuoteCache(
 
             Record(new PriceFeedResult(quote, primary, Attempts: []));
 
-            logger.LogInformation(
-                "Warmed {Symbol} from stored tick: {SourceCode}, observed {ObservedAt:o}, {Age} old.",
-                symbol, tick.SourceCode, tick.ObservedAt, clock.GetUtcNow() - tick.ObservedAt);
+            await logger.LogAsync(LogType.SystemLog,
+                "WarmedFromStoredTick",
+                $"Warmed {symbol} from stored tick: {tick.SourceCode}, observed {tick.ObservedAt:o}, {clock.GetUtcNow() - tick.ObservedAt} old.",
+                level: LogLevel.Information,
+                ct: ct
+            );
         }
     }
 }

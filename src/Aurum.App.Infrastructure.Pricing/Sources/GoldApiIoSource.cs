@@ -1,5 +1,5 @@
 using System.Text.Json.Serialization;
-using Aurum.App.SharedKernel.Constants;
+using Aurum.App.Logging;
 
 namespace Aurum.App.Infrastructure.Pricing.Sources;
 
@@ -9,7 +9,7 @@ namespace Aurum.App.Infrastructure.Pricing.Sources;
 public class GoldApiIoSource(
     HttpClient http,
     TimeProvider clock,
-    ILogger<GoldApiIoSource> logger) : IPriceSource
+    IAppLogService<GoldApiIoSource> logger) : IPriceSource
 {
     /// <summary>Matched against <c>PriceSourceOptions.SourceCode</c>.</summary>
     public const string SourceCode = "goldapi.io";
@@ -53,7 +53,12 @@ public class GoldApiIoSource(
         else
         {
             observedAt = receivedAt;
-            logger.LogWarning("{Source} returned no usable timestamp; using receipt time for {Symbol}.", Code, symbol);
+            await logger.LogAsync(
+                LogType.SystemLog,
+                "MissingTimestamp",
+                $"{Code} returned no usable timestamp; using receipt time for {symbol}.",
+                level: LogLevel.Warning,
+                ct: ct);
         }
 
         return PriceQuote.Normalize(

@@ -2,7 +2,6 @@ using Aurum.Api.Tests.Infrastructure;
 using Aurum.App.Infrastructure.Pricing;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -33,7 +32,7 @@ public class FailoverPriceFeedTests
             Options.Create(circuitOptions ?? new PriceFeedCircuitOptions()));
 
         var feed = new FailoverPriceFeed(
-            sources, options, circuits, NullLogger<FailoverPriceFeed>.Instance);
+            sources, options, circuits, new ListAppLog<FailoverPriceFeed>());
 
         return (feed, circuits);
     }

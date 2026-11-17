@@ -32,6 +32,7 @@
     <ProjectReference Include="..\Aurum.App.Application\Aurum.App.Application.csproj" />
     <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
     <ProjectReference Include="..\Aurum.App.Infrastructure.Pricing\Aurum.App.Infrastructure.Pricing.csproj" />
+    <ProjectReference Include="..\Aurum.App.Logging\Aurum.App.Logging.csproj" />
     <ProjectReference Include="..\Aurum.App.SharedKernel\Aurum.App.SharedKernel.csproj" />
   </ItemGroup>
 

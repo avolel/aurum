@@ -15,7 +15,6 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 
@@ -51,9 +50,9 @@ public sealed class PriceHubTests : IAsyncLifetime
 
         _cache = new LatestQuoteCache(
             scopes, TestPriceSources.ForChain((Primary, 1, true)), _clock, polling,
-            NullLogger<LatestQuoteCache>.Instance);
+            new ListAppLog<LatestQuoteCache>());
         _deltas = new DeltaEngine(
-            scopes, Options.Create(new DeltaEngineOptions()), _clock, NullLogger<DeltaEngine>.Instance);
+            scopes, Options.Create(new DeltaEngineOptions()), _clock, new ListAppLog<DeltaEngine>());
 
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
