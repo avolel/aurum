@@ -18,6 +18,19 @@ public class FredReleaseTests
             FredRelease.Cpi.At(new DateOnly(2025, 7, 15)));
 
     [Fact]
+    public void NewYorkDay_EveningInNewYork_IsThatDayNotTheUtcDay() =>
+        // 2025-02-12 20:00 New York is already the 13th in UTC.
+        Assert.Equal(new DateOnly(2025, 2, 12),
+            FredRelease.NewYorkDay(new DateTimeOffset(2025, 2, 13, 1, 0, 0, TimeSpan.Zero)));
+
+    [Fact]
+    public void NewYorkDay_OfAt_ReturnsTheSameDay()
+    {
+        var day = new DateOnly(2025, 7, 15);
+        Assert.Equal(day, FredRelease.NewYorkDay(FredRelease.Cpi.At(day)));
+    }
+
+    [Fact]
     public void All_EveryReleaseSeries_IsInExactlyOneRelease()
     {
         // FredImporter.ReleasedAt throws for a release series no release carries.

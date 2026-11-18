@@ -3,9 +3,10 @@
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
 `ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is part done: the
 FRED client fetches figures and the BLS client fetches release-morning figures.
-`MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. Nothing
-calls the BLS client yet. Nothing else has been started.
-I last checked it against the code on 2026-11-16.
+`MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. It also
+saves BLS's figure a minute after a CPI or jobs release, and reads FRED again an hour after each
+release. Nothing else has been started.
+I last checked it against the code on 2026-11-17.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -234,8 +235,10 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
         101 can't supply them: it is updated every day, so its dates are not meeting days (checked
         2026-11-16). No series depends on a decision, so nothing breaks. Until another source is
         found, item 6 has no "the Fed decided today" signal.
-  - [ ] The release-morning fetch: wake at each calendar row, read BLS, and read FRED again an hour
-        later.
+  - [x] The release-morning fetch (2026-11-17, D-26). `MacroPollingService` wakes a minute after
+        each CPI or jobs release and saves BLS's newest month, trying each minute for up to 15
+        minutes. An hour after every release it reads that release's series from FRED again. Not
+        yet run against a real release morning.
 - Daily market figures (yields, VIX, the dollar index) are not releases.
   - [x] They leave `ReleasedAt` empty. `FredSeries.IsRelease` is false for them, so `FredClient`
         sends no release date and `FredImporter` stores null. `Market_series_has_null_ReleasedAt`

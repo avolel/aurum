@@ -33,4 +33,8 @@ public sealed record FredRelease(string Code, int FredId, TimeOnly PublishTime, 
         // GetUtcOffset picks EST or EDT for that date. UTC because Npgsql only writes offset-zero values.
         return new DateTimeOffset(local, NewYork.GetUtcOffset(local)).ToUniversalTime();
     }
+
+    /// <summary>The New York date of <paramref name="at"/>; the reverse of <see cref="At"/>'s day.</summary>
+    public static DateOnly NewYorkDay(DateTimeOffset at) =>
+        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, NewYork).DateTime);
 }

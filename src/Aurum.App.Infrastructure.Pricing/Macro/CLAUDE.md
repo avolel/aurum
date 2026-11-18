@@ -52,8 +52,8 @@ Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPoll
 
 - **Load, compare in C#, save through EF; not a raw upsert.** D-23's warning needs the old value,
   which Postgres 17 can't return from `ON CONFLICT DO UPDATE`. Safe only with one writer: one
-  process, and FRED as the only macro writer. **A BLS save step on its own timer breaks that**; two
-  writers could race on the same month's row. Reasoning in D-23.
+  process, and `MacroPollingService`'s one loop calling it for both FRED and BLS. **A BLS save on its
+  own timer breaks that**; two writers could race on the same month's row. Reasoning in D-23.
 - The `macro_series` row is created from `FredSeries` on first save. There is no migration seed, so
   `FredSeries.All` stays the only list. An existing row's title, units and frequency are never
   updated.
@@ -64,9 +64,10 @@ Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPoll
 - A null `Value` (FRED's `"."`) is stored as a row with null.
 - `ReleasedAt` is the series' release time on `ReleasedOn` (`FredRelease.Of(series).At(day)`), as
   UTC, because Npgsql writes offset zero only. Today every release is 08:30 New York.
+  `FredRelease.NewYorkDay` is the reverse, used for BLS's release date.
 - **`SaveReleaseDatesAsync(release, dates, ct)`** adds the dates not yet in `macro_releases`, at the
   release's time, and returns how many it added. It never deletes, so a date FRED later moves stays
-  behind as a row with no release. Rows are unique on `(ReleaseCode, ScheduledAt)`.
+  behind as a row with no release, and the timer still wakes for it. Rows are unique on `(ReleaseCode, ScheduledAt)`.
 - Logs through `IAppLogService<FredImporter>` to `app_logs` (D-25). A changed release value is a
   `ReleaseValueChanged` row at `Warning`. `MacroPollingService` writes a `RefreshedFredSeries` row per
   series, and a failed series is an `Error` row with `LogType.SystemLog`.
@@ -76,12 +77,12 @@ Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPoll
 # The BLS client (D-23)
 
 `BlsClient` fetches one year of several `BlsSeries` in one `POST` to `timeseries/data/` and returns
-`BlsObservation`s, newest month first within each series. Fetch only: the release calendar will call
-it right after 08:30, for the month just released. Registered in `Program.cs` as a typed client.
+`BlsObservation`s, newest month first within each series. Fetch only: `MacroPollingService` calls it
+a minute after a CPI or jobs release (below). Registered in `Program.cs` as a typed client.
 
 - **Each `BlsSeries` names the `FredSeries` its row is stored under** (`Figure`). BLS writes the
   month's row under the FRED series; FRED's first published value replaces it later, logging a
-  mismatch. `FredImporter` does FRED's half; BLS's save step isn't built yet and must follow this.
+  mismatch. `MacroPollingService` saves BLS's month through `FredImporter.SaveAsync` under `Figure`.
 - **The key is in the `POST` body**, so there is no auth handler. **BLS copies a bad key into its
   refusal message**, so the client replaces the key with `[key]` in the answer before parsing or
   throwing. Don't move that line below anything that reads the body.
@@ -97,23 +98,45 @@ it right after 08:30, for the month just released. Registered in `Program.cs` as
 - Not yet proven that BLS has the figure at 08:30 sharp; the 2026-12-04 run of
   `ops/bench/fred_delay.py` checks it.
 
-# The macro timer (`Jobs/MacroPollingService.cs`)
+# The macro timer (`Jobs/MacroPollingService.cs`, D-26)
 
-A `BackgroundService` that runs once at startup, then every `Macro:Polling:RefreshInterval`
-(6 hours). Each pass fetches every series in `FredSeries.All` and saves it through `FredImporter`.
-Then, for each `FredRelease`, it fetches the dates from today (UTC) and adds the new ones to
-`macro_releases`, with a `RefreshedFredReleaseDates` log row. Nothing reads the calendar yet; the
-release-morning fetch (step 3) will.
+A `BackgroundService` with one loop. It runs a pass at startup, then every
+`Macro:Polling:RefreshInterval` (6 hours). Each pass fetches every series in `FredSeries.All` and saves
+it through `FredImporter`. Then, for each `FredRelease`, it fetches the dates from today (UTC) and adds
+the new ones to `macro_releases`, with a `RefreshedFredReleaseDates` log row.
 
-- **It is the only macro writer** (D-23). BLS's release-morning save must be added inside it, not on
-  a timer of its own, or two writers can race on the same month's row.
-- **Where a fetch starts:** `FetchFrom` returns 60 days before the newest stored `ObservedOn`, so a
-  late month or a corrected market figure is picked up. A series with no rows starts at
+Between passes it sleeps until the next pass or the next release fetch, whichever is first. Each
+`macro_releases` row gives up to two fetches (`Fetches`):
+
+- **BLS, one minute after a CPI or jobs release.** It saves only BLS's newest month with a value, and
+  only when it is later than the newest stored `ObservedOn` (`NewMonths`). Older months are revised
+  values and would overwrite FRED's first published ones. The row's release date is the calendar
+  row's New York date, so its `ReleasedAt` equals the row's `ScheduledAt`. A series still missing is
+  asked again each minute, up to 15 attempts, then a `BlsFigureMissing` warning. Each attempt logs a
+  `FetchedBlsRelease` row. PCE has no BLS fetch: it comes from BEA.
+- **FRED, one hour after every release**, for that release's series. FRED's jobs figures can take
+  over 2 hours (D-22); those arrive at the next pass instead.
+
+- **It is the only macro writer** (D-23). The BLS save runs on the same loop, never on a timer of its
+  own, or two writers can race on the same month's row.
+- **`handledUpTo` is the cursor.** Each wake runs every fetch due after it and up to now, then moves
+  it to the time read before the fetches. A fetch that falls due during the 15-minute BLS retry runs
+  on the next loop, not never. The cursor starts at startup time, so a restart after 08:31 skips that
+  morning's BLS fetch; FRED's fetch an hour later still runs.
+- **A failed BLS fetch is not retried** beyond the client's own retries. FRED's hour-later fetch, or
+  the next pass, fills the month.
+- **A row FRED later moved still wakes the service.** BLS then finds no new month and spends its 15
+  attempts (15 of the key's 500 a day).
+- **Where a FRED fetch starts:** `FetchFrom` returns 60 days before the newest stored `ObservedOn`, so
+  a late month or a corrected market figure is picked up. A series with no rows starts at
   `Macro:Polling:HistoryStart` (2006-01-01). That is the past-figure load: FRED returns 20 years in
   one request. `HistoryStart` is read only for an empty series, so changing it reloads nothing.
-- **One scope, and one try, per series and per release.** A failed save leaves its rows tracked in
-  the `DbContext`, and a shared context would try to write them again with the next one. A failure
-  is logged and retried next pass; the others carry on.
+- **One scope per series, per release and per BLS attempt; one try (`TryAsync`) per series, per
+  release and per BLS fetch.** A failed save
+  leaves its rows tracked in the `DbContext`, and a shared context would try to write them again with
+  the next one. A failure is logged; the others carry on. If `macro_releases` can't be read, the
+  service waits for the next pass.
 - Both settings are checked at startup in `Program.cs`: a non-positive interval or a missing or
   future `HistoryStart` stops the app. They live in `appsettings.json` only, since neither is secret.
-- `AurumApiFactory` removes it, so no test calls the real FRED.
+- `AurumApiFactory` removes it, so no test calls the real FRED or BLS. `MacroPollingServiceTests`
+  covers the pure parts (`FetchFrom`, `Fetches`, `NewMonths`); nothing drives the loop itself.

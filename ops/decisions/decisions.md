@@ -2179,7 +2179,8 @@ that writes these tables. `MacroPollingService` calls it on a timer (since 2026-
 counter (D-7); here there is one writer. **If BLS's save step runs on its own timer beside FRED's,
 the two could write the same month's row at once, and this choice has to be looked at again.**
 
-**Not handled yet:** BLS's half of the save step, the release calendar that calls the client, and counting the daily limit. PCE is not covered: it comes from BEA (the Bureau of Economic
+**Not handled yet:** counting the daily limit. BLS's half of the save step and the release calendar
+that calls it were built on 2026-11-17 (D-26). PCE is not covered: it comes from BEA (the Bureau of Economic
 Analysis), not BLS.
 
 Turned down:
@@ -2299,3 +2300,58 @@ Turned down:
 - **Keeping the Debug lines.** In the database they would add a row for every out-of-order price.
   That's noise nobody reads, and nothing turns them off.
 
+## D-26 — The release calendar wakes the macro timer, and BLS is read inside it
+
+**DECIDED:**
+
+- The calendar is the `macro_releases` table. Each six-hour pass adds the coming dates from FRED's
+  `release/dates`. FRED gives dates only, so each release's New York time of day is kept in code, in
+  `FredRelease`.
+- `MacroPollingService` sleeps until the next six-hour pass or the next release fetch, whichever
+  comes first. For each calendar row it fetches twice:
+  - **BLS (the Bureau of Labor Statistics), one minute after a CPI or jobs release.** It saves only
+    the newest month, and only when that month is later than the newest month stored. If BLS doesn't
+    have it yet, it asks again each minute, up to 15 times.
+  - **FRED, one hour after every release**, CPI, jobs and PCE. This is where PCE first gets its
+    figure, because PCE comes from BEA (the Bureau of Economic Analysis), not BLS.
+- Every write happens on that one loop, so D-23's single-writer rule still holds.
+- The BLS row is dated on the calendar row's day, so its publish time is exactly the calendar time.
+
+Decided by me on 2026-11-14, built on 2026-11-17.
+
+**Why a table and not only a wake-up time.** The publish time has to outlive the process. Each
+figure's `ReleasedAt` must be its real publish time, because the 4-hour background search for an
+explanation looks on it. A table also lets the timer find the next wake-up after a restart.
+
+**Why "later than the newest stored month", not "the month before the release date".** A release
+usually carries the month before, but not always. The 2025 government shutdown delayed some months
+and cancelled October 2025's CPI. Comparing with what is stored works in both cases and needs no
+guess about which month a release covers.
+
+**Why only the newest month from BLS.** BLS returns a year of values, revised up to today. Saving the
+older months would overwrite FRED's first published values (D-22) and log false mismatches.
+
+**Why one loop, and a cursor.** BLS's 15-minute retry blocks the loop. Each wake handles every fetch
+due since the last one handled, not only the ones due right now, so a fetch that falls due during the
+retry runs late rather than never.
+
+**Costs I accept:**
+
+- A restart after 08:31 skips that morning's BLS fetch. FRED's fetch an hour later, or the next pass,
+  fills the month.
+- A failed BLS request ends that morning's BLS fetch. The client's own retries come first, and FRED
+  fills the month later.
+- FRED's jobs figures can take over two hours (D-22), so the one-hour FRED fetch often finds nothing.
+  The next six-hour pass picks them up.
+- A date FRED later moves stays in the table. The timer wakes for it, BLS finds no new month, and 15
+  of the key's 500 daily requests are spent.
+
+**Not proven yet:** that BLS has the figure at 08:30 sharp. The 2026-12-04 run of
+`ops/bench/fred_delay.py` checks it (D-23).
+
+Turned down:
+
+- **A hand-kept calendar file.** It goes stale without warning, and FRED already publishes the dates.
+- **Keeping the calendar in memory only.** A restart would lose it until the next FRED call, and
+  nothing else could read the publish times.
+- **A separate timer for BLS.** Two writers could save the same month's row at once (D-23).
