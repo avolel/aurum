@@ -2091,10 +2091,10 @@ Those two are still upper bounds, because FRED may have changed the series again
 figure. The jobs figures are posted by a different team at FRED than CPI, so the CPI match does not
 prove the jobs reading. The polled jobs run on 2026-12-04 checks it.
 
-**Not handled yet:** a timer that fetches and saves the rows. `FredImporter` saves them (D-23), but
-nothing called it at first. *Since 2026-11-15:* `MacroPollingService` fetches and saves every series
-every six hours. Paging is not handled either: if FRED reports more rows than
-it sent, the client throws instead of asking for the next page.
+**Not handled yet:** paging. If FRED reports more rows than it sent, the client throws instead of
+asking for the next page. Twenty years of a monthly series is far below FRED's 100,000-row page, so
+this can't happen with today's series. *Done since this was written:* `MacroPollingService` fetches
+and saves every series every six hours (2026-11-15), and an hour after each release (D-26).
 
 Turned down:
 
@@ -2122,7 +2122,9 @@ Turned down:
 - **One row per figure per month, and FRED overwrites it.** BLS writes the month's row under the
   existing FRED series, such as `CPIAUCSL`. When FRED posts its first published value, that value
   replaces the BLS one, and a mismatch is logged as a warning. Readers never need to know BLS exists.
-  FRED's half of the save step, `FredImporter`, follows this rule. BLS's half is not built yet.
+  Both halves of the save step follow this rule: FRED's through `FredImporter`, and BLS's through
+  `MacroPollingService`, which hands BLS's month to the same `FredImporter` (built 2026-11-17,
+  D-26).
 - `BlsClient` sends one `POST` per check, with every series in one request and the key in the
   request body.
 - `BlsClient` is not behind `QuotaHandler` or the quota governor. It uses the standard retry setup.
@@ -2160,28 +2162,30 @@ standard retry setup retries a 429 ("too many requests") up to 3 times, costing 
 day's 500. That's acceptable.
 
 **Not proven yet: that BLS has the figure at 08:30 sharp.** The jobs run of `ops/bench/fred_delay.py`
-on 2026-12-04 checks BLS beside FRED. Its result goes here. If BLS is also late, this decision gets
-rethought before anything relies on the client.
+on 2026-12-04 checks BLS beside FRED. Its result goes here. `MacroPollingService` already relies on
+the client (D-26), so if BLS is also late, this decision and D-26 get rethought together.
 
 **How FRED's save works (built 2026-11-14).** `FredImporter` loads the stored rows for the dates
 it was given, compares them in C#, and saves through EF Core. A new date is added. An unchanged row
 is skipped. A changed row is overwritten, and on a release series the change is logged as a warning
 with the old and new values. Daily market figures such as yields are overwritten without a warning,
 because FRED corrects them routinely. A release figure's `ReleasedAt` is 08:30 New York time on the
-day FRED says it was first published, converted to UTC so summer time is handled. All five release
-series publish at 08:30; the release calendar will replace this fixed time where it is wrong.
+day FRED says it was first published, converted to UTC so summer time is handled. Since 2026-11-16
+the time of day comes from the series' release in `FredRelease` instead of a fixed 08:30. All three
+releases (CPI, jobs, PCE) are still at 08:30.
 
 **Why compare in C# and not one SQL upsert.** An upsert is one `INSERT … ON CONFLICT DO UPDATE`
 statement. In Postgres 17 it can't return the value it replaced, so the warning would need a second
 query. Loading first leaves a gap between the read and the write where another writer could change
 the row. That can't happen today: the app runs as one process, and `FredImporter` is the only thing
-that writes these tables. `MacroPollingService` calls it on a timer (since 2026-11-15). The quota governor uses an upsert because many requests race for the same
-counter (D-7); here there is one writer. **If BLS's save step runs on its own timer beside FRED's,
-the two could write the same month's row at once, and this choice has to be looked at again.**
+that writes these tables. `MacroPollingService` calls it for both FRED and BLS, on one loop (D-26).
+The quota governor uses an upsert because many requests race for the same counter (D-7); here there
+is one writer. **If BLS's save step ever moves to its own timer beside FRED's, the two could write
+the same month's row at once, and this choice has to be looked at again.**
 
-**Not handled yet:** counting the daily limit. BLS's half of the save step and the release calendar
-that calls it were built on 2026-11-17 (D-26). PCE is not covered: it comes from BEA (the Bureau of Economic
-Analysis), not BLS.
+**Not handled yet:** counting BLS's daily limit of 500 requests. PCE has no release-morning figure:
+it comes from BEA (the Bureau of Economic Analysis), not BLS, so it waits for FRED. *Done since this
+was written:* BLS's half of the save step and the release calendar that calls it (2026-11-17, D-26).
 
 Turned down:
 

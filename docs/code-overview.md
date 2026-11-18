@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done, and so are item 1's FRED client, BLS client and the step that saves FRED's figures. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from the Fed's decision dates and two checks by hand on a real release morning. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -24,7 +24,8 @@ from the code since then. On 2026-11-07 the FRED client was added to sections 2,
 three jobs and core-price series. On 2026-11-12 the BLS client and the BLS check in
 `ops/bench/fred_delay.py` were added to sections 2, 3, 10, 13 and 15. On 2026-11-14 `FredImporter`
 was added to sections 2, 11 and 13. Later on 2026-11-14 an audit fixed drift in sections 2, 3, 10,
-11, 12 and 13.
+11, 12 and 13. On 2026-11-18 the release calendar, the release-morning fetch and
+`/api/v1/macro/snapshot` were added to sections 1, 2, 3, 11, 12, 13, 15 and 16.
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -59,6 +60,7 @@ If you change how a piece works, update its section here too.
 - [11. The database](#11-the-database)
 - [12. The read endpoints, the request pipeline and app logging](#12-the-read-endpoints-the-request-pipeline-and-app-logging)
   - [The four read endpoints (item 8, D-20)](#the-four-read-endpoints-item-8-d-20)
+  - [The economic-figures endpoint (Phase 2 item 1, D-27)](#the-economic-figures-endpoint-phase-2-item-1-d-27)
   - [App logging](#app-logging)
 - [13. Tests](#13-tests)
 - [14. The app (`app/`)](#14-the-app-app)
@@ -84,6 +86,10 @@ monthly allowance.
 9). Four ordinary web addresses under `/api/v1` serve the held price, saved prices, saved events and
 the state of each price service (section 12). None of them asks a price service for anything. The
 two health checks are `/health` and `/health/ready`.
+
+**It also keeps economic figures** such as consumer prices, the jobs report and Treasury yields.
+`MacroPollingService` reads them from FRED every six hours, and from BLS a minute after each CPI or
+jobs release. `/api/v1/macro/snapshot` returns the newest one of each, with its age (section 12).
 
 This is one poll. **`PricePollingService` drives every step.** Each solid arrow is one call the
 poller makes, numbered in order. The label says what goes in and what comes out. An arrow with a head
@@ -162,7 +168,7 @@ aurum/
     ├── Aurum.App.Infrastructure.Data/     ← the database: tables, migrations, saving
     ├── Aurum.App.Logging/                 ← app logging: rows queued, then saved to `app_logs` in the background
     ├── Aurum.App.Infrastructure.Pricing/  ← fetching, counting, caching and measuring prices
-    ├── Aurum.App.Application/             ← the read endpoints' logic, request plumbing
+    ├── Aurum.App.Application/             ← the endpoints' logic, request plumbing
     ├── Aurum.Api/                         ← the program that starts; wires everything together
     └── Aurum.Api.Tests/                   ← every test, run against a real Postgres
 ```
@@ -230,10 +236,10 @@ projects can't use each other, because the build refuses a loop (D-24).
 | `AurumDbContext.cs` | The Entity Framework (EF, the library that maps C# classes to tables) context. Defines every table, column size and index. Fills in `CreatedAt`/`UpdatedAt` on save, using the injected clock. |
 | `AurumDbContextFactory.cs` | Used only by the `dotnet ef` command-line tool, so migrations can run without starting the app. Never runs in production. |
 | `Entities/Pricing/*.cs` | `PriceTick`, `PriceSource`, `PriceEvent`, `ApiQuotaWindow`. |
-| `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation`. The first migration creates their tables. `FredImporter` writes them, called by `MacroPollingService`. |
+| `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation` (the first migration creates their tables) and `MacroRelease`, one calendar row (`AddMacroReleases`). `FredImporter` writes all three, called by `MacroPollingService`. |
 | `Entities/Logging/AppLog.cs` | One row of the app's own durable log. |
 | `Repositories/IUnitOfWork.cs` | `IUnitOfWork` and `UnitOfWork`: save changes, or run work inside one database transaction. |
-| `Migrations/` | Six migrations: initial schema, extra price-service rows, app logs, price events, and dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns, one migration each. |
+| `Migrations/` | Eight migrations: initial schema, extra price-service rows, app logs, price events, dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns, the log level column, and the release calendar, one migration each. |
 
 **`Aurum.App.Infrastructure.Pricing`** — almost all of the real logic lives here.
 
@@ -244,7 +250,7 @@ Aurum.App.Infrastructure.Pricing/
 ├── PriceFeedCircuitOptionsValidator.cs ← refuses bad circuit-breaker settings at startup
 ├── Jobs/
 │   ├── PricePollingService.cs          ← the 15-minute timer; the heart of the app
-│   └── MacroPollingService.cs          ← the 6-hour timer that refreshes every FRED series
+│   └── MacroPollingService.cs          ← the 6-hour FRED refresh, plus the release-morning BLS and FRED reads
 ├── Sources/
 │   ├── IPriceSource.cs                 ← "one price service"
 │   ├── GoldApiIoSource.cs              ← GoldAPI
@@ -275,10 +281,11 @@ Aurum.App.Infrastructure.Pricing/
 │   └── LatestQuote.cs                  ← what is held, and the snapshot with its age worked out on read
 ├── Realtime/
 │   └── IPriceBroadcaster.cs            ← "send this symbol to connected apps"; no SignalR here
-├── Macro/                              ← economic figures; MacroPollingService fetches and saves FRED's
+├── Macro/                              ← economic figures; MacroPollingService fetches and saves them
 │   ├── FredSeries.cs                   ← the ten FRED series, and which are releases
-│   ├── FredClient.cs                   ← asks FRED for a series and reads the answer
-│   ├── FredImporter.cs                 ← saves one series' rows: adds new ones, overwrites changed ones
+│   ├── FredRelease.cs                  ← CPI, jobs and PCE: FRED's release id, New York time, series
+│   ├── FredClient.cs                   ← asks FRED for a series, or a release's dates, and reads the answer
+│   ├── FredImporter.cs                 ← saves one series' rows (adds new, overwrites changed) and new release dates
 │   ├── FredObservation.cs              ← one period's value, and its publish date for a release
 │   ├── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
 │   ├── MacroPollingOptions.cs          ← `Macro:Polling` settings: how often, and how far back to start
@@ -315,7 +322,8 @@ through.
 
 | Folder | What it is |
 |---|---|
-| `Prices/` | The one feature so far: four queries, their handlers, input checks (validators) and the records they return (section 12). |
+| `Prices/` | Four queries, their handlers, input checks (validators) and the records they return (section 12). |
+| `Macro/` | One query, the economic-figures snapshot, with its handler, input check and record (section 12, D-27). |
 | `Validation/ValidationErrors.cs` | Turns a failed input check into the `Errors` list of an `ApiResponse`. |
 | `Common/CQRS/` | `ICommand<T>` (a request that changes data) and `IQuery<T>` (a request that only reads). CQRS stands for "command query responsibility segregation", which here just means reads and writes are separate request types. |
 | `Common/Behaviors/` | Three steps every request passes through before its handler: logging, validation, and a database transaction for commands. |
@@ -328,6 +336,7 @@ through.
 | `HttpRequestContextAccessor.cs` | Reads the user, address and request id from the current web request, for log rows. |
 | `Controllers/PricesController.cs` | `/api/v1/price/live`, `/history` and `/sources` (section 12). |
 | `Controllers/PriceEventsController.cs` | `/api/v1/events` (section 12). |
+| `Controllers/MacroController.cs` | `/api/v1/macro/snapshot` (section 12). |
 | `Hubs/PriceHub.cs` | The live connection apps subscribe to, at `/hubs/price` (section 9). |
 | `Hubs/IPriceClient.cs` | The one message the server sends: `PriceUpdated`. |
 | `Hubs/PriceUpdate.cs` | The message records (`PriceUpdate`, `QuoteMessage`, `WindowMessage`) and the one method that builds them. |
@@ -379,8 +388,10 @@ it goes in this file.
     FRED posts them 40 minutes or more later (D-23). BLS takes its key in the request body, so it
     has no `QueryKeyAuthHandler`, and no request counter either: its limit is 500 requests a day.
     Binds and checks `Macro:Polling`, registers `FredImporter` (one per scope) and adds
-    `MacroPollingService` as a background job. It refreshes every FRED series straight away, then
-    every `RefreshInterval`. Nothing calls `BlsClient` yet.
+    `MacroPollingService` as a background job. It refreshes every FRED series and the release
+    calendar straight away, then every `RefreshInterval`. Between those passes it wakes for each
+    calendar row: `BlsClient` a minute after a CPI or jobs release, FRED an hour after every release
+    (D-26).
 12. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
 13. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
@@ -1158,7 +1169,8 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 | `api_quota_windows` | One service's request count for one month. | `PostgresQuotaGovernor` | `PostgresQuotaGovernor`, which `/api/v1/price/sources` also asks |
 | `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check; `/api/v1/events` |
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
-| `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is 08:30 New York time on its publish date; a daily market figure's is empty. | `FredImporter`, called by `MacroPollingService` | `FredImporter`, to compare before it writes; `MacroPollingService`, for each series' newest date |
+| `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is its release's New York time (08:30 for all three today) on its publish date; a daily market figure's is empty. On release morning BLS writes the month's row and FRED's value replaces it later (D-23). | `FredImporter`, called by `MacroPollingService` | `FredImporter`, to compare before it writes; `MacroPollingService`, for each series' newest date; `/api/v1/macro/snapshot` |
+| `macro_releases` | One coming CPI, jobs or PCE release, at its publish time in UTC. Unique on `(ReleaseCode, ScheduledAt)`. Never deleted, so a date FRED later moves stays behind. | `FredImporter.SaveReleaseDatesAsync`, called by `MacroPollingService` | `MacroPollingService`, to decide when to wake (D-26) |
 
 Things that will catch you out:
 
@@ -1248,6 +1260,26 @@ Rules worth knowing:
 
 `CLAUDE.md` holds the full rules for controllers, handlers, validators and their tests.
 
+### The economic-figures endpoint (Phase 2 item 1, D-27)
+
+`GET /api/v1/macro/snapshot?asOf=` returns the newest saved figure of each series in
+`FredSeries.All`, as it was known at `asOf`. Left out, `asOf` means now. Like the price endpoints, it
+only reads the database and never calls FRED or BLS; `MacroPollingService` fills the tables.
+
+| Series kind | Counted as known at `asOf` when | `AgeDays` counts from |
+|---|---|---|
+| Release (CPI, jobs, PCE) | `ReleasedAt` is at or before `asOf` | `ReleasedAt` |
+| Daily market figure (yields, VIX, the dollar index) | `ObservedOn` is before `asOf`'s New York date, because a day's figure isn't final until that day ends | `ObservedOn` |
+
+- **This is what stops a figure from the future.** Item 6 will pass a move's start time, so a CPI
+  figure published after the move can't be used to explain it.
+- Rows with no value (FRED's `"."`) are skipped, so the row before them is returned.
+- A series with no qualifying row is left out, not returned as empty.
+- `AgeDays` is worked out in the handler only, so the endpoint and item 6's prompt can't disagree.
+- **400** when `asOf` is in the future, checked against the injected clock.
+
+The code is in `Aurum.App.Application/Macro/`; its `CLAUDE.md` has the details.
+
 ### App logging
 
 `IAppLogService<T>`, in `src/Aurum.App.Logging/`, writes rows to `app_logs` without making the
@@ -1302,7 +1334,7 @@ Aurum.Api.Tests/
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no timers and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
-├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; MacroPollingServiceTests
+├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; FredReleaseTests; MacroPollingServiceTests
 ├── Modules/AppLogs/           ← the log service's field cutting, and the background writer
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
@@ -1315,13 +1347,13 @@ Aurum.Api.Tests/
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
 | `PricePollingServiceTests`, `PriceEventSqlTests`, `AurumApiFactoryTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `DeltaEngineReplayTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
-| `FredImporterTests` | `FredImporterReleasedAtTests` (the 08:30 New York rule, winter and summer) |
+| `FredImporterTests` | `FredImporterReleasedAtTests` (a series takes its release's time), `FredReleaseTests` (08:30 New York in winter and summer; each release series in exactly one release) |
 | `AppLogDrainServiceTests` | `AppLogServiceTests` (each field cut to its column size) |
-| `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
+| `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests`, `GetMacroSnapshotQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `MacroControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 | | `FredClientTests` (a fake network; no request reaches FRED) |
 | | `BlsClientTests` (a fake network; no request reaches BLS) |
-| | `MacroPollingServiceTests` (where each refresh starts reading from) |
+| | `MacroPollingServiceTests` (where each refresh starts reading from, which fetches a calendar row gives, which BLS months are new; not the loop itself) |
 
 Run one class, or a set of fast tests:
 
@@ -1412,6 +1444,8 @@ batch of app work, together with the Phase 2 explanation feed. The phone version
 | Register a new class | `src/Aurum.Api/Program.cs`. Nowhere else (D-5). |
 | Add a FRED series | A new field in `Macro/FredSeries.cs`, added to `All`. Set `IsRelease` to true only for a figure with a publish date, such as CPI; those come back as first published values (D-22). |
 | Measure how late FRED and BLS post a figure | `ops/bench/fred_delay.py`, run by hand before 08:25 New York time on release morning. It logs one line per series per minute, with a `source` field, and ends with the gap between BLS and FRED. Each morning spends about 155 of BLS's 500 requests a day. |
+| Add a release to the calendar | A new field in `Macro/FredRelease.cs`, with FRED's release id, its New York time and its series, added to `All`. Check the id against FRED's `release/dates` by hand first: release 101 looked right and listed every day (D-26). |
+| See the coming releases | `SELECT * FROM macro_releases WHERE "ScheduledAt" > now() ORDER BY "ScheduledAt";` (times are UTC). |
 | Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 
 ---
@@ -1425,8 +1459,8 @@ come from another project, and their names do not exist here. The main gaps:
 
 | The docs describe | In this repository |
 |---|---|
-| Controllers | Two, serving four read endpoints (section 12). |
-| Commands, feature repositories, the generic repository | None yet. The only feature, `Prices`, only reads, so its handlers query the database directly. |
+| Controllers | Three, serving five read endpoints (section 12). |
+| Commands, feature repositories, the generic repository | None yet. Both features, `Prices` and `Macro`, only read, so their handlers query the database directly. |
 | Redux, Expo Router, `components/` | None installed. The app is an empty shell, and these are the target from the Phase 1 dashboard onward. |
 | Mapping between database rows and DTOs (the plain classes the API sends) | Done by hand in each handler. AutoMapper is not used, because every version has an unfixed security advisory. |
 

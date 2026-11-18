@@ -124,6 +124,9 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   **`FredImporterReleasedAtTests`**, in the same file, needs **no container**: it checks a series
   takes its release's time. **`FredReleaseTests`** (no container) pins 08:30 New York in winter
   (13:30Z) and summer (12:30Z), and that every release series is in exactly one release.
+- **`GetMacroSnapshotQueryHandlerTests`** uses the Postgres collection and also deletes every
+  `macro_series` row in `InitializeAsync`, so it and `FredImporterTests` rely on the collection
+  running one class at a time. Its fixed `Now` is the 2026-11-13 CPI morning before 08:30.
 - **`DeltaEngineReplayTests`** replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine`
   and `SignificanceClassifier` on a fake clock and asserts the exact event list (D-21). Rows are
   **stretches** (`fromMinute,toMinute,fromMid,toMid,source`); `TickReplay` expands them to one price

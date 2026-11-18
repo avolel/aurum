@@ -9,15 +9,21 @@ open on purpose (see the top of that file). Phase 2 has started. It adds an
 explanation for each big price move, written by an AI model running on my own machine. The plan is
 in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
 figures such as consumer prices, the jobs report and Treasury yields from FRED, the St. Louis Fed's
-free data service (item 1, first step). FRED also carries the figures the Bureau of Labor Statistics
+free data service (item 1, built apart from the Fed's decision dates). FRED also carries the figures the Bureau of Labor Statistics
 (BLS) publishes, as they were first published. It also carries the daily Treasury yields, so the app
 has no client for the Treasury (D-22).
 But FRED posts a new CPI (consumer price index) figure 40 minutes or more after BLS releases it at
 08:30 New York time. That is too late to explain the price move it causes. So on release morning
 the app reads the newest month straight from BLS, and FRED's copy replaces it later (D-23).
-`MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. Nothing
-calls the BLS client yet. `ops/bench/fred_delay.py` measures how late each
-provider posts a figure; the jobs report on 2026-12-04 is its next run.
+`MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. An empty
+series loads its past figures back to 2006 in one request. Each pass also adds the coming CPI, jobs
+and PCE (personal consumption expenditures, a second inflation measure) release dates to a calendar
+table, `macro_releases`. The service wakes a minute after each CPI or jobs release to save BLS's new
+month, and an hour after every release to read FRED again (D-26). Fed rate decisions are not on the
+calendar yet: FRED's list for them changes every day, so it doesn't give the meeting days. `GET /api/v1/macro/snapshot` returns the newest
+figure of each series, with how old it is (D-27). `ops/bench/fred_delay.py` measures how late each
+provider posts a figure; the jobs report on 2026-12-04 is its next run. Nothing has yet proved that
+BLS has the figure at 08:30 sharp.
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
@@ -225,6 +231,12 @@ can reload these pages as often as they like.
 | `GET /api/v1/events?symbol=XAUUSD&window=5m&minPercent=0.3` | Saved price events, newest first. `window` and `minPercent` are optional. `minPercent` is a size, so a 0.4% fall passes 0.3. |
 | `GET /api/v1/price/sources` | Every service in the settings, in the order tried, including switched-off ones: its last success and failure, its circuit breaker, and its requests used, limit, remaining and reset time. |
 
+Phase 2 adds one more, for economic figures. Like the four above, it never calls FRED or BLS.
+
+| Address | What it returns |
+|---|---|
+| `GET /api/v1/macro/snapshot?asOf=…` | The newest saved figure of each series, as it was known at `asOf` (leave it out for now). Each figure has its period, its publish time and its age in days. A figure published after `asOf` is left out, so a past move is never explained with news that came later (D-27). An `asOf` in the future is refused with 400. |
+
 - **Every answer has the same outer shape**: `success`, `data`, `message`, `statusCode`, and
   `errors` for bad input.
 - **A `from` older than 30 days is refused with 400 ("bad request")**, naming the limit. The database
@@ -273,12 +285,14 @@ src/Aurum.App.Infrastructure.Pricing/
   Quota/                           the request counter
   Cache/                           the latest price, kept in memory
   Deltas/                          how much the price moved, and which moves become events
-  Jobs/                            the two timers: one checks the price, one refreshes FRED's figures
+  Jobs/                            the two timers: one checks the price, one fetches economic
+                                   figures every six hours and on release mornings
   Realtime/                        the interface the timer uses to send prices to apps
   Macro/                           fetches economic figures from FRED, and from BLS on release
-                                   morning; saves FRED's (nothing calls the BLS client yet)
+                                   morning; saves both; the release dates and their times of day
 src/Aurum.App.Application/         the rules for handling requests
-  Prices/                          the four read endpoints' queries, input checks and answers
+  Prices/                          the four price endpoints' queries, input checks and answers
+  Macro/                           the economic-figures endpoint's query, input check and answer
 src/Aurum.Api/                     the web API; Program.cs sets everything up
   Controllers/                     the web addresses; each one passes the request on and wraps the answer
   Hubs/                            the live connection apps subscribe to, and its messages
