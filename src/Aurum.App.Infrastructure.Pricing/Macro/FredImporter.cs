@@ -6,8 +6,8 @@ using Microsoft.EntityFrameworkCore;
 namespace Aurum.App.Infrastructure.Pricing.Macro;
 
 /// <summary>
-/// Saves one series' FRED rows into <c>macro_series</c> and <c>macro_observations</c>. Database only;
-/// the caller fetches.
+/// Saves one series' FRED rows into <c>macro_series</c> and <c>macro_observations</c>, and a release's
+/// dates into <c>macro_releases</c>. Database only; the caller fetches.
 /// </summary>
 /// <remarks>
 /// Loads, compares in C# and saves through EF rather than one raw upsert, because a changed release
@@ -16,10 +16,6 @@ namespace Aurum.App.Infrastructure.Pricing.Macro;
 /// </remarks>
 internal sealed class FredImporter(AurumDbContext db, IAppLogService<FredImporter> logger)
 {
-    // Every release series publishes at 08:30 New York time.
-    private static readonly TimeOnly ReleaseTime = new(8, 30);
-    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-
     /// <returns>Rows inserted and updated, for the caller's log line.</returns>
     public async Task<(int Inserted, int Updated)> SaveAsync(
         FredSeries series, IReadOnlyList<FredObservation> rows, CancellationToken ct)
@@ -51,7 +47,7 @@ internal sealed class FredImporter(AurumDbContext db, IAppLogService<FredImporte
         int inserted = 0, updated = 0;
         foreach (var row in rows)
         {
-            var releasedAt = ReleasedAt(row.ReleasedOn);
+            var releasedAt = ReleasedAt(series, row.ReleasedOn);
 
             if (!existing.TryGetValue(row.ObservedOn, out var stored))
             {
@@ -91,16 +87,28 @@ internal sealed class FredImporter(AurumDbContext db, IAppLogService<FredImporte
         return (inserted, updated);
     }
 
-    /// <summary>08:30 New York time on <paramref name="releasedOn"/>, in UTC. Null for market series.</summary>
-    internal static DateTimeOffset? ReleasedAt(DateOnly? releasedOn)
+    /// <summary>
+    /// Adds the release's dates that aren't stored yet to <c>macro_releases</c>. Never deletes, so a
+    /// date FRED later moves stays behind.
+    /// </summary>
+    /// <returns>Rows inserted, for the caller's log line.</returns>
+    public async Task<int> SaveReleaseDatesAsync(
+        FredRelease release, IReadOnlyList<DateOnly> dates, CancellationToken ct)
     {
-        if (releasedOn is not { } day)
-        {
-            return null;
-        }
+        var times = dates.Select(release.At).ToList();
+        var stored = await db.MacroReleases.AsNoTracking()
+            .Where(r => r.ReleaseCode == release.Code && times.Contains(r.ScheduledAt))
+            .Select(r => r.ScheduledAt)
+            .ToListAsync(ct);
 
-        var local = day.ToDateTime(ReleaseTime);
-        // GetUtcOffset picks EST or EDT for that date. UTC because Npgsql only writes offset-zero values.
-        return new DateTimeOffset(local, NewYork.GetUtcOffset(local)).ToUniversalTime();
+        var added = times.Except(stored).ToList();
+        db.MacroReleases.AddRange(added.Select(t => new MacroRelease { ReleaseCode = release.Code, ScheduledAt = t }));
+
+        await db.SaveChangesAsync(ct);
+        return added.Count;
     }
+
+    /// <summary>The series' release time on <paramref name="releasedOn"/>, in UTC. Null for market series.</summary>
+    internal static DateTimeOffset? ReleasedAt(FredSeries series, DateOnly? releasedOn) =>
+        releasedOn is { } day ? FredRelease.Of(series).At(day) : null;
 }

@@ -148,6 +148,36 @@ namespace Aurum.App.Infrastructure.Data.Migrations
                     b.ToTable("macro_observations", (string)null);
                 });
 
+            modelBuilder.Entity("Aurum.App.Infrastructure.Data.Entities.Macro.MacroRelease", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<long>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ReleaseCode")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTimeOffset>("ScheduledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReleaseCode", "ScheduledAt")
+                        .IsUnique();
+
+                    b.ToTable("macro_releases", (string)null);
+                });
+
             modelBuilder.Entity("Aurum.App.Infrastructure.Data.Entities.Macro.MacroSeries", b =>
                 {
                     b.Property<int>("Id")

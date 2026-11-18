@@ -157,6 +157,41 @@ public class FredClientTests
     }
 
     [Fact]
+    public void ParseReleaseDates_SavedCpiDates_ReadsEveryDateOldestFirst()
+    {
+        // A real answer from 2026-11-16 for release 10 from 2026-01-01; two dates are still to come.
+        var dates = FredClient.ParseReleaseDates(Saved("fred-release-dates-cpi.json"), FredRelease.Cpi);
+
+        Assert.Equal(12, dates.Count);
+        Assert.Equal(new DateOnly(2026, 1, 13), dates[0]);
+        Assert.Equal(new DateOnly(2026, 12, 10), dates[^1]);
+    }
+
+    [Fact]
+    public void ParseReleaseDates_CountLargerThanRowsReturned_Throws()
+    {
+        var truncated = Saved("fred-release-dates-cpi.json").Replace("\"count\": 12", "\"count\": 13");
+
+        Assert.ThrowsAny<Exception>(() => FredClient.ParseReleaseDates(truncated, FredRelease.Cpi));
+    }
+
+    [Fact]
+    public async Task GetReleaseDates_AsksForFutureDates()
+    {
+        var (client, sent) = Build(HttpStatusCode.OK, Saved("fred-release-dates-cpi.json"));
+
+        await client.GetReleaseDatesAsync(FredRelease.Cpi, From, CancellationToken.None);
+
+        var query = QueryHelpers.ParseQuery(sent().Query);
+        Assert.Equal("/fred/release/dates", sent().AbsolutePath);
+        Assert.Equal("10", query["release_id"]);
+        Assert.Equal("2026-01-01", query["realtime_start"]);
+        // Without it FRED lists no future dates.
+        Assert.Equal("true", query["include_release_dates_with_no_data"]);
+        Assert.Equal(ApiKey, query["api_key"]);
+    }
+
+    [Fact]
     public async Task GetObservations_BadRequest_ThrowsWithoutTheKey()
     {
         var (client, _) = Build(HttpStatusCode.BadRequest, """{"error_code":400,"error_message":"Bad Request.  The value for variable api_key is not registered."}""");

@@ -7,7 +7,8 @@ using Aurum.App.SharedKernel.Constants;
 namespace Aurum.App.Infrastructure.Pricing.Macro;
 
 /// <summary>
-/// Reads observations from FRED's <c>series/observations</c>. Fetches only; <see cref="FredImporter"/> saves.
+/// Reads observations from FRED's <c>series/observations</c> and publish dates from
+/// <c>release/dates</c>. Fetches only; <see cref="FredImporter"/> saves.
 /// </summary>
 /// <remarks>
 /// The API key is added by <c>QueryKeyAuthHandler</c> below this client, so nothing here can log
@@ -36,19 +37,60 @@ public class FredClient(HttpClient http)
             query["realtime_end"] = "9999-12-31";
         }
 
+        return Parse(await GetAsync("series/observations", query, series.Code, ct), series);
+    }
+
+    /// <summary>The release's publish dates from <paramref name="from"/> on, oldest first.</summary>
+    public async Task<IReadOnlyList<DateOnly>> GetReleaseDatesAsync(
+        FredRelease release, DateOnly from, CancellationToken ct)
+    {
+        var query = new Dictionary<string, string?>
+        {
+            ["release_id"] = release.FredId.ToString(CultureInfo.InvariantCulture),
+            ["file_type"] = "json",
+            ["realtime_start"] = from.ToString(FredConstants.DateFormat, CultureInfo.InvariantCulture),
+            // Without it FRED lists only dates that already have figures, so no future dates.
+            ["include_release_dates_with_no_data"] = "true",
+        };
+
+        return ParseReleaseDates(await GetAsync("release/dates", query, release.Code, ct), release);
+    }
+
+    private async Task<string> GetAsync(string path, Dictionary<string, string?> query, string what, CancellationToken ct)
+    {
         // Relative, so BaseAddress must end in a slash or "/fred" is replaced.
-        using var response = await http.GetAsync(QueryHelpers.AddQueryString("series/observations", query), ct);
+        using var response = await http.GetAsync(QueryHelpers.AddQueryString(path, query), ct);
         var body = await response.Content.ReadAsStringAsync(ct);
 
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException(
-                $"FRED answered {(int)response.StatusCode} for {series.Code}: {ErrorMessage(body)}",
+                $"FRED answered {(int)response.StatusCode} for {what}: {ErrorMessage(body)}",
                 inner: null,
                 response.StatusCode);
         }
 
-        return Parse(body, series);
+        return body;
+    }
+
+    /// <summary>Pure, so parsing tests without HTTP.</summary>
+    internal static IReadOnlyList<DateOnly> ParseReleaseDates(string json, FredRelease release)
+    {
+        var page = JsonSerializer.Deserialize<ReleaseDatesPage>(json, Json)
+            ?? throw new InvalidDataException($"FRED returned an empty body for release {release.Code}.");
+
+        if (page.ReleaseDates is null)
+        {
+            throw new InvalidDataException($"FRED's response for release {release.Code} has no release_dates array.");
+        }
+
+        if (page.Count > page.ReleaseDates.Count)
+        {
+            throw new InvalidDataException(
+                $"FRED reported {page.Count} dates for release {release.Code} but returned {page.ReleaseDates.Count}.");
+        }
+
+        return page.ReleaseDates.Select(d => ParseDate(d.Date)).ToList();
     }
 
     /// <summary>Pure, so parsing and the failure rules test without HTTP.</summary>
@@ -97,6 +139,10 @@ public class FredClient(HttpClient http)
     private sealed record ObservationsPage(int Count, List<Observation>? Observations);
 
     private sealed record Observation(string RealtimeStart, string Date, string Value);
+
+    private sealed record ReleaseDatesPage(int Count, List<ReleaseDate>? ReleaseDates);
+
+    private sealed record ReleaseDate(string Date);
 
     private sealed record ErrorBody(string? ErrorMessage);
 }

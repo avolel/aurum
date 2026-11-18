@@ -15,6 +15,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
     public DbSet<ApiQuotaWindow> ApiQuotaWindows => Set<ApiQuotaWindow>();
     public DbSet<MacroSeries> MacroSeries => Set<MacroSeries>();
     public DbSet<MacroObservation> MacroObservations => Set<MacroObservation>();
+    public DbSet<MacroRelease> MacroReleases => Set<MacroRelease>();
     public DbSet<AppLog> AppLogs => Set<AppLog>();
 
     protected override void OnModelCreating(ModelBuilder b)
@@ -140,6 +141,14 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
                 .WithMany(x => x.Observations)
                 .HasForeignKey(x => x.MacroSeriesId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<MacroRelease>(e =>
+        {
+            e.ToTable("macro_releases");
+            e.Property(x => x.ReleaseCode).HasMaxLength(32).IsRequired();
+            // Each pass re-reads FRED's dates; this stops a date being stored twice.
+            e.HasIndex(x => new { x.ReleaseCode, x.ScheduledAt }).IsUnique();
         });
     }
 

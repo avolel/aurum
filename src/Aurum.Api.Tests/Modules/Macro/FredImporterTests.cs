@@ -22,6 +22,7 @@ public class FredImporterTests(PostgresFixture fixture) : IAsyncLifetime
     {
         await using var db = fixture.CreateDbContext();
         await db.MacroSeries.ExecuteDeleteAsync(Ct);
+        await db.MacroReleases.ExecuteDeleteAsync(Ct);
     }
 
     public Task DisposeAsync() => Task.CompletedTask;
@@ -133,24 +134,63 @@ public class FredImporterTests(PostgresFixture fixture) : IAsyncLifetime
 
         Assert.Null(Assert.Single(await StoredAsync(FredSeries.Treasury10Y)).ReleasedAt);
     }
+
+    private async Task<int> SaveDatesAsync(FredRelease release, params DateOnly[] dates)
+    {
+        await using var db = fixture.CreateDbContext();
+        return await new FredImporter(db, _logger).SaveReleaseDatesAsync(release, dates, Ct);
+    }
+
+    private async Task<List<MacroRelease>> StoredReleasesAsync()
+    {
+        await using var db = fixture.CreateDbContext();
+        return await db.MacroReleases.AsNoTracking().OrderBy(r => r.ScheduledAt).ToListAsync(Ct);
+    }
+
+    [Fact]
+    public async Task Release_dates_are_stored_at_the_release_time()
+    {
+        var inserted = await SaveDatesAsync(FredRelease.Cpi, new DateOnly(2026, 11, 10), new DateOnly(2026, 12, 10));
+
+        Assert.Equal(2, inserted);
+        // 08:30 EST is 13:30 UTC.
+        Assert.Equal(
+            [("cpi", new DateTimeOffset(2026, 11, 10, 13, 30, 0, TimeSpan.Zero)), ("cpi", new DateTimeOffset(2026, 12, 10, 13, 30, 0, TimeSpan.Zero))],
+            (await StoredReleasesAsync()).Select(r => (r.ReleaseCode, r.ScheduledAt)));
+    }
+
+    [Fact]
+    public async Task Release_dates_already_stored_are_skipped()
+    {
+        await SaveDatesAsync(FredRelease.Cpi, new DateOnly(2026, 11, 10));
+
+        var inserted = await SaveDatesAsync(FredRelease.Cpi, new DateOnly(2026, 11, 10), new DateOnly(2026, 12, 10));
+
+        Assert.Equal(1, inserted);
+        Assert.Equal(2, (await StoredReleasesAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Same_date_for_two_releases_is_two_rows()
+    {
+        // CPI and jobs can land on the same morning; the unique key includes the release.
+        await SaveDatesAsync(FredRelease.Cpi, new DateOnly(2026, 12, 4));
+        await SaveDatesAsync(FredRelease.Jobs, new DateOnly(2026, 12, 4));
+
+        Assert.Equal(["cpi", "jobs"], (await StoredReleasesAsync()).Select(r => r.ReleaseCode).Order());
+    }
 }
 
-/// <summary>The release time rule, with no container.</summary>
+/// <summary>The release time rule, with no container. The New York conversion is in <c>FredReleaseTests</c>.</summary>
 public class FredImporterReleasedAtTests
 {
     [Fact]
-    public void ReleasedAt_is_0830_New_York_in_winter() =>
+    public void ReleasedAt_uses_the_series_release_time() =>
         Assert.Equal(
-            new DateTimeOffset(2025, 2, 12, 13, 30, 0, TimeSpan.Zero),
-            FredImporter.ReleasedAt(new DateOnly(2025, 2, 12)));
-
-    [Fact]
-    public void ReleasedAt_is_0830_New_York_in_summer() =>
-        Assert.Equal(
-            new DateTimeOffset(2025, 7, 15, 12, 30, 0, TimeSpan.Zero),
-            FredImporter.ReleasedAt(new DateOnly(2025, 7, 15)));
+            FredRelease.Jobs.At(new DateOnly(2025, 2, 7)),
+            FredImporter.ReleasedAt(FredSeries.NonfarmPayrolls, new DateOnly(2025, 2, 7)));
 
     [Fact]
     public void ReleasedAt_is_null_without_a_release_date() =>
-        Assert.Null(FredImporter.ReleasedAt(null));
+        Assert.Null(FredImporter.ReleasedAt(FredSeries.Treasury10Y, null));
 }

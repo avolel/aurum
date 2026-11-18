@@ -8,7 +8,8 @@ namespace Aurum.App.Infrastructure.Pricing.Jobs;
 
 /// <summary>
 /// Every <c>Macro:Polling:RefreshInterval</c>, fetches each <see cref="FredSeries"/> from FRED and
-/// saves it. A series with no rows loads from <c>HistoryStart</c>.
+/// saves it. A series with no rows loads from <c>HistoryStart</c>. Then adds each
+/// <see cref="FredRelease"/>'s coming dates to <c>macro_releases</c>.
 /// </summary>
 /// <remarks>
 /// The only macro writer, so <see cref="FredImporter"/>'s load-compare-save stays safe (D-23). BLS's
@@ -51,6 +52,27 @@ internal sealed class MacroPollingService(
                     );
                 }
             }
+
+            foreach (var release in FredRelease.All)
+            {
+                try
+                {
+                    await RefreshReleaseDatesAsync(release, stoppingToken);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    await logger.LogErrorAsync("MacroPollingService",
+                        ex,
+                        details: $"Refreshing release {release.Code}'s dates from FRED failed; trying again next pass.",
+                        logType: LogType.SystemLog,
+                        ct: stoppingToken
+                    );
+                }
+            }
         }
         while (await timer.WaitForNextTickAsync(stoppingToken));
     }
@@ -84,6 +106,25 @@ internal sealed class MacroPollingService(
         await logger.LogAsync(LogType.SystemLog,
             "RefreshedFredSeries",
             $"FRED {series.Code} from {from:yyyy-MM-dd}: {rows.Count} fetched, {inserted} inserted, {updated} updated.",
+            level: LogLevel.Information,
+            ct: ct
+        );
+    }
+
+    private async Task RefreshReleaseDatesAsync(FredRelease release, CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+
+        // From today in UTC. After 19:00 New York that is tomorrow, but today's releases are past by then.
+        var today = DateOnly.FromDateTime(clock.GetUtcNow().UtcDateTime);
+        var dates = await scope.ServiceProvider.GetRequiredService<FredClient>()
+            .GetReleaseDatesAsync(release, today, ct);
+        var inserted = await scope.ServiceProvider.GetRequiredService<FredImporter>()
+            .SaveReleaseDatesAsync(release, dates, ct);
+
+        await logger.LogAsync(LogType.SystemLog,
+            "RefreshedFredReleaseDates",
+            $"FRED release {release.Code} from {today:yyyy-MM-dd}: {dates.Count} dates, {inserted} new.",
             level: LogLevel.Information,
             ct: ct
         );

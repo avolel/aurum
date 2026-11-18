@@ -26,6 +26,24 @@ end) calls both. Registered in `Program.cs` as a typed client.
   so it can't strip it; FRED is not known to echo it.
 - `FredObservation.ReleasedOn` is a `DateOnly`; `MacroObservation.ReleasedAt` is a
   `DateTimeOffset?`. `FredImporter` picks the time of day (below).
+- **`GetReleaseDatesAsync(release, from, ct)`** reads `fred/release/dates` from `realtime_start=from`.
+  It sends `include_release_dates_with_no_data=true`, because without it FRED lists only dates that
+  already have figures, so nothing in the future. FRED knows dates only to the end of the current year
+  (checked 2026-11-16: asking from 2027-01-01 returns none), so January's dates appear when FRED adds
+  them. The same `count` check applies.
+
+# The releases (`FredRelease.cs`)
+
+`FredRelease.All` lists CPI (FRED release 10), jobs (50) and PCE (54), each with its New York publish
+time (08:30) and the series it carries. Ids checked against FRED on 2026-11-16. `At(day)` turns a
+release date into the publish time in UTC; it is the only place that does that conversion.
+
+- **Every release series is in exactly one release**, and no market series is in any.
+  `FredRelease.Of(series)` throws otherwise, and `FredReleaseTests` pins it.
+- **There is no Fed decision release.** FRED's release 101, "FOMC Press Release", is updated daily:
+  it lists 318 dates in 2026, so its dates are not meeting days. Decision dates need another source.
+- The `America/New_York` zone is looked up in a static field, so a host without tzdata throws
+  `TypeInitializationException` on first use; `aspnet:10.0` has it (checked 2026-11-13).
 
 # The FRED importer (D-23)
 
@@ -44,10 +62,11 @@ Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPoll
   release-morning row gets replaced, and a first published value should otherwise never change.
   Market series are overwritten silently. A changed `ReleasedAt` alone overwrites without a warning.
 - A null `Value` (FRED's `"."`) is stored as a row with null.
-- `ReleasedAt` is **08:30 `America/New_York`** on `ReleasedOn`, as UTC (Npgsql writes offset zero
-  only). All five release series publish at 08:30. The zone is looked up in a static field, so a host
-  without tzdata throws `TypeInitializationException` on first use; `aspnet:10.0` has it (checked
-  2026-11-13).
+- `ReleasedAt` is the series' release time on `ReleasedOn` (`FredRelease.Of(series).At(day)`), as
+  UTC, because Npgsql writes offset zero only. Today every release is 08:30 New York.
+- **`SaveReleaseDatesAsync(release, dates, ct)`** adds the dates not yet in `macro_releases`, at the
+  release's time, and returns how many it added. It never deletes, so a date FRED later moves stays
+  behind as a row with no release. Rows are unique on `(ReleaseCode, ScheduledAt)`.
 - Logs through `IAppLogService<FredImporter>` to `app_logs` (D-25). A changed release value is a
   `ReleaseValueChanged` row at `Warning`. `MacroPollingService` writes a `RefreshedFredSeries` row per
   series, and a failed series is an `Error` row with `LogType.SystemLog`.
@@ -82,6 +101,9 @@ it right after 08:30, for the month just released. Registered in `Program.cs` as
 
 A `BackgroundService` that runs once at startup, then every `Macro:Polling:RefreshInterval`
 (6 hours). Each pass fetches every series in `FredSeries.All` and saves it through `FredImporter`.
+Then, for each `FredRelease`, it fetches the dates from today (UTC) and adds the new ones to
+`macro_releases`, with a `RefreshedFredReleaseDates` log row. Nothing reads the calendar yet; the
+release-morning fetch (step 3) will.
 
 - **It is the only macro writer** (D-23). BLS's release-morning save must be added inside it, not on
   a timer of its own, or two writers can race on the same month's row.
@@ -89,9 +111,9 @@ A `BackgroundService` that runs once at startup, then every `Macro:Polling:Refre
   late month or a corrected market figure is picked up. A series with no rows starts at
   `Macro:Polling:HistoryStart` (2006-01-01). That is the past-figure load: FRED returns 20 years in
   one request. `HistoryStart` is read only for an empty series, so changing it reloads nothing.
-- **One scope, and one try, per series.** A failed save leaves its rows tracked in the `DbContext`,
-  and a shared context would try to write them again with the next series. A failing series is
-  logged and retried next pass; the others carry on.
+- **One scope, and one try, per series and per release.** A failed save leaves its rows tracked in
+  the `DbContext`, and a shared context would try to write them again with the next one. A failure
+  is logged and retried next pass; the others carry on.
 - Both settings are checked at startup in `Program.cs`: a non-positive interval or a missing or
   future `HistoryStart` stops the app. They live in `appsettings.json` only, since neither is secret.
 - `AurumApiFactory` removes it, so no test calls the real FRED.

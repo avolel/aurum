@@ -111,17 +111,19 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   callback keeps the `POST` body. `Modules/Macro/bls-2026.json` is a real BLS answer for all four series from
   2026-11-11. The refusal body is BLS's real one, key included, so the scrub test is honest.
 - **`FredClientTests`** needs **no container**: the real `QueryKeyAuthHandler` over a
-  `CountingHandler` stub. `Modules/Macro/*.json` are real FRED answers from 2026-11-07, copied to the
-  test output by the csproj. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market
+  `CountingHandler` stub. `Modules/Macro/fred-*.json` are real FRED answers from 2026-11-07, except
+  `fred-release-dates-cpi.json` (release 10's 2026 dates, saved 2026-11-16). The csproj copies them
+  to the test output. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market
   holidays); the payrolls file has October 2025 published late, with November. Re-save them with a
   real call rather than editing by hand, and check a new file for the key before committing it.
 - **`FredImporterTests`** uses the Postgres collection and deletes every `macro_series` row in
-  `InitializeAsync` (observations go with them by cascade). Each save gets a fresh `DbContext`, as
+  `InitializeAsync` (observations go with them by cascade), and every `macro_releases` row. Each save gets a fresh `DbContext`, as
   each poll would. Warnings are the `ListAppLog` entries at `LogLevel.Warning`.
   `Second_run_with_same_rows_writes_nothing` also checks `UpdatedAt` didn't move, so it proves no
   `UPDATE` ran rather than trusting the count.
-  **`FredImporterReleasedAtTests`**, in the same file, needs **no container**: it pins 08:30 New York
-  in winter (13:30Z) and summer (12:30Z).
+  **`FredImporterReleasedAtTests`**, in the same file, needs **no container**: it checks a series
+  takes its release's time. **`FredReleaseTests`** (no container) pins 08:30 New York in winter
+  (13:30Z) and summer (12:30Z), and that every release series is in exactly one release.
 - **`DeltaEngineReplayTests`** replays `Modules/Pricing/DeltaEngineReplay.csv` through `DeltaEngine`
   and `SignificanceClassifier` on a fake clock and asserts the exact event list (D-21). Rows are
   **stretches** (`fromMinute,toMinute,fromMid,toMid,source`); `TickReplay` expands them to one price

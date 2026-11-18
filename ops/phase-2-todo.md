@@ -226,6 +226,16 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
       scheduled check. `MacroObservation.ReleasedAt` is what the 4-hour background window searches
       on, so it must be the real publish time. FRED gives a release date but no time of day, so the
       time comes from the calendar.
+  - [x] The calendar table (2026-11-16). `macro_releases` holds each coming CPI, jobs and PCE date
+        at its New York publish time, in UTC. Every six-hour pass adds new dates from FRED's
+        `release/dates`. `FredRelease` keeps each release's FRED id, time of day and series, and
+        `ReleasedAt` now takes its time from there.
+  - [ ] Fed rate decisions, left out of the calendar for now (my call, 2026-11-17). FRED's release
+        101 can't supply them: it is updated every day, so its dates are not meeting days (checked
+        2026-11-16). No series depends on a decision, so nothing breaks. Until another source is
+        found, item 6 has no "the Fed decided today" signal.
+  - [ ] The release-morning fetch: wake at each calendar row, read BLS, and read FRED again an hour
+        later.
 - Daily market figures (yields, VIX, the dollar index) are not releases.
   - [x] They leave `ReleasedAt` empty. `FredSeries.IsRelease` is false for them, so `FredClient`
         sends no release date and `FredImporter` stores null. `Market_series_has_null_ReleasedAt`

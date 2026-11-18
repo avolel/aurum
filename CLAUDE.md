@@ -57,8 +57,8 @@ Four things that look wrong without the reason:
   external HTTP clients and the poller is a background job; neither fits "EF Core queries,
   repositories, DbContext". It depends on `Infrastructure.Data` because it writes four groups of
   tables: the quota governor `api_quota_windows`, the poller `price_ticks` and `price_sources`, the
-  poller `price_events` (through `PriceEventSql`), and `FredImporter` `macro_series` and
-  `macro_observations`. `LatestQuoteCache` and `DeltaEngine` also read `price_ticks` to warm up.
+  poller `price_events` (through `PriceEventSql`), and `FredImporter` `macro_series`,
+  `macro_observations` and `macro_releases`. `LatestQuoteCache` and `DeltaEngine` also read `price_ticks` to warm up.
 - **`Aurum.App.Logging` is its own project, below Application and Pricing** (D-24). Application
   references Pricing (D-20), so a log service in Application could never be used by Pricing: the
   reference back would be a cycle. Logging depends only on Data and SharedKernel. Application
