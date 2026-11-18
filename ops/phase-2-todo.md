@@ -5,7 +5,8 @@ This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/pha
 FRED client fetches figures and the BLS client fetches release-morning figures.
 `MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. It also
 saves BLS's figure a minute after a CPI or jobs release, and reads FRED again an hour after each
-release. Nothing else has been started.
+release. `/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Nothing
+else has been started.
 I last checked it against the code on 2026-11-17.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
@@ -251,9 +252,11 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
       of `IQuotaGovernor` and uses the standard retry setup (D-22).
 - [x] FRED API key: `Macro__Fred__ApiKey` in `.env`, required at startup. No FiscalData key is
       needed, since it isn't called. The BLS key and its limits are under the BLS client item.
-- [ ] Each figure keeps its date, so an explanation can say how old it is (finding 5).
-- [ ] `/api/v1/macro/snapshot`, with controller, handler and validator tests.
-- [ ] Decision written up: the release calendar, and how old figures are presented.
+- [x] Each figure keeps its date, so an explanation can say how old it is (finding 5). The
+      snapshot returns `ObservedOn`, `ReleasedAt` and `AgeDays` for each figure (D-27).
+- [x] `/api/v1/macro/snapshot` (2026-11-17), with controller, handler and validator tests. It takes
+      an optional `asOf` and returns only figures that were public at that time.
+- [x] Decision written up: the release calendar (D-26), and how old figures are presented (D-27).
 
 ---
 

@@ -2355,3 +2355,51 @@ Turned down:
 - **Keeping the calendar in memory only.** A restart would lose it until the next FRED call, and
   nothing else could read the publish times.
 - **A separate timer for BLS.** Two writers could save the same month's row at once (D-23).
+
+## D-27 — A figure's age is counted from when it came out, and the snapshot shows only what was public then
+
+**DECIDED:**
+
+- `/api/v1/macro/snapshot?asOf=` returns the newest stored figure of each series that was public at
+  `asOf`. Leaving `asOf` out means now. Item 6 will pass a price move's start time, and item 5 past
+  dates.
+- What counts as public depends on the kind of series:
+  - **Release figures** (CPI, core CPI, PCE, payrolls, unemployment): published at or before `asOf`
+    (`ReleasedAt <= asOf`).
+  - **Daily market figures** (the Fed's rate, the 10-year and 2-year yields, the dollar index, VIX):
+    dated before `asOf`'s day in New York. A day's figure isn't final until that US day ends.
+- Each figure carries `ObservedOn` (the period it describes), `ReleasedAt` (empty for market
+  figures) and `AgeDays`. **`AgeDays` counts whole days from `asOf` back to `ReleasedAt`**, or back
+  to `ObservedOn` for market figures. It is worked out in one place, the handler, so the endpoint and
+  the explanation prompt can't give different ages.
+- A figure with no value (FRED's `"."`) is skipped, and the one before it is used.
+- An `asOf` in the future is refused with a 400.
+
+Decided by me on 2026-11-14, built on 2026-11-17.
+
+**Why count from the release, not the period.** October's CPI comes out in mid-November. Counted
+from the period, it is six weeks old on the morning it comes out, and an explanation would call
+the newest news stale. Counted from the release, it is zero days old that morning, which is when it
+moves the price (finding 5 in the todo).
+
+**Why leave out figures that came out after `asOf`.** An explanation of a 08:00 move must not cite
+the CPI figure published at 08:30. The stored rows already have the publish time, so filtering on it
+costs nothing.
+
+**Why New York's date for market figures, not UTC's.** These are US market days. After 19:00 New
+York time it is already the next day in UTC, so a UTC rule would accept a figure for a day that
+hasn't ended in New York.
+
+**Costs I accept:**
+
+- A market figure for a finished day may not be in FRED yet. FRED posts yields the next afternoon,
+  so for a past `asOf` the snapshot can include a figure the app could not have had at that moment.
+  It is still a figure for a day that had ended.
+- An `asOf` before 2006 (the past-figure start) returns an empty or partial list with no warning.
+
+Turned down:
+
+- **Age counted from the period (`ObservedOn`) for every figure.** It makes every monthly figure
+  look weeks old on the day it matters most.
+- **Working out the age in the prompt builder.** Two places would count it, and they could drift.
+- **Using UTC's date for market figures.** Explained above.

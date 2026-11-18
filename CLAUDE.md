@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Deeper notes live beside the code they describe and load when you work in that folder:
 `src/Aurum.App.Infrastructure.Pricing/CLAUDE.md` (quota chain, configuration) and its `Cache/`,
-`Deltas/` and `Macro/` folders, `src/Aurum.Api/Hubs/`, `src/Aurum.App.Application/Prices/`,
+`Deltas/` and `Macro/` folders, `src/Aurum.Api/Hubs/`, `src/Aurum.App.Application/Prices/` and `Macro/`,
 `src/Aurum.App.Infrastructure.Data/` and `src/Aurum.Api.Tests/`. The reasoning behind each rule is in
 `ops/decisions/decisions.md` under the D-number given.
 
@@ -120,8 +120,8 @@ Request → Controller → IMediator.Send() → Pipeline Behaviors → Handler �
 ```
 
 Pipeline: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler.
-The DbContext is `AurumDbContext`. The only feature is `Prices` (queries only — see
-`src/Aurum.App.Application/Prices/CLAUDE.md`). The scheduled work is `PricePollingService` and
+The DbContext is `AurumDbContext`. The two features are `Prices` and `Macro`, both queries only
+(see `src/Aurum.App.Application/Prices/CLAUDE.md` and `Macro/CLAUDE.md`). The scheduled work is `PricePollingService` and
 `MacroPollingService`, two `BackgroundService`s outside MediatR. A feature with commands adds `Commands/`,
 `Handlers/Commands/`, a validator per command and `Infrastructure.Data/Repositories/{Feature}/`;
 `docs/cqrs-guide.md` shows the shape. **No new service layer** — handlers replace services.
