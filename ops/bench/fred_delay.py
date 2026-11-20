@@ -23,17 +23,18 @@ from zoneinfo import ZoneInfo
 FRED = "https://api.stlouisfed.org/fred/"
 BLS = "https://api.bls.gov/publicAPI/v2/"
 NY = ZoneInfo("America/New_York")
+
 # Paired by position: BLS_SERIES[r][i] is the BLS series FRED_SERIES[r][i] copies (BlsSeries.cs).
 FRED_SERIES = {"cpi": ["CPIAUCSL", "CPILFESL"], "jobs": ["PAYEMS", "UNRATE"]}
 BLS_SERIES = {"cpi": ["CUSR0000SA0", "CUSR0000SA0L1E"], "jobs": ["CES0000000001", "LNS14000000"]}
 START, RELEASE, END = (8, 25), (8, 30), (11, 0)
+
 # Each round: 4 FRED requests (FRED allows 120 a minute) and 1 BLS request
 # (about 155 a morning against a registered key's 500 a day).
 INTERVAL = 60
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
-
 
 def api_key(name):
     for line in (REPO / ".env").read_text().splitlines():
@@ -42,13 +43,11 @@ def api_key(name):
             return value.strip().strip("\"'")
     raise SystemExit(f"{name} is not in .env")
 
-
 def fred_get(path, key, **params):
     # The key is in the query string, so the URL is never logged or printed.
     query = urllib.parse.urlencode({**params, "api_key": key, "file_type": "json"})
     with urllib.request.urlopen(f"{FRED}{path}?{query}", timeout=20) as resp:
         return json.load(resp)
-
 
 def bls_post(key, **body):
     # Same request BlsClient.cs sends: the key goes in the body, lowercase "registrationkey".
@@ -63,7 +62,6 @@ def bls_post(key, **body):
         raise RuntimeError(f"BLS {answer.get('status')}: {' '.join(answer.get('message') or [])}")
     return answer
 
-
 def describe(error):
     if isinstance(error, urllib.error.HTTPError):
         try:
@@ -72,7 +70,6 @@ def describe(error):
             message = ""
         return f"HTTP {error.code} {message}".strip()
     return f"{type(error).__name__}: {error}"  # URLError and timeouts carry no URL
-
 
 def fred_poll(series_id, month, key):
     line = {"source": "fred", "series": series_id, "present": None, "value": None,
@@ -93,7 +90,6 @@ def fred_poll(series_id, month, key):
         line["error"] = describe(error)
     return line
 
-
 def bls_poll(series_ids, month, key):
     """One request for every series, so a round spends one query of the daily limit."""
     lines = [{"source": "bls", "series": s, "present": None, "value": None, "error": None}
@@ -113,10 +109,8 @@ def bls_poll(series_ids, month, key):
             line["error"] = describe(error)
     return lines
 
-
 def at(day, hour_minute):
     return datetime(day.year, day.month, day.day, *hour_minute, tzinfo=NY)
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -180,7 +174,6 @@ def main():
         if fred_seen and bls_seen:
             print(f"  FRED trailed BLS by {minutes(fred_seen - bls_seen)}")
         print(f"  FRED last_updated then {first.get(fred_id, {}).get('last_updated_ny')}\n")
-
 
 if __name__ == "__main__":
     main()

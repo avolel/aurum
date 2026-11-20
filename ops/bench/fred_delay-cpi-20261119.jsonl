@@ -1,0 +1,16 @@
+{"polled_at_ny": "2026-11-19T23:17:42-05:00", "source": "fred", "series": "CPIAUCSL", "present": true, "value": "336.298", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:12:46-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:17:42-05:00", "source": "fred", "series": "CPILFESL", "present": true, "value": "338.896", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:13:38-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:17:42-05:00", "source": "bls", "series": "CUSR0000SA0", "present": null, "value": null, "error": "HTTP 503"}
+{"polled_at_ny": "2026-11-19T23:17:42-05:00", "source": "bls", "series": "CUSR0000SA0L1E", "present": null, "value": null, "error": "HTTP 503"}
+{"polled_at_ny": "2026-11-19T23:25:08-05:00", "source": "fred", "series": "CPIAUCSL", "present": true, "value": "336.298", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:12:46-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:25:08-05:00", "source": "fred", "series": "CPILFESL", "present": true, "value": "338.896", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:13:38-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:25:08-05:00", "source": "bls", "series": "CUSR0000SA0", "present": true, "value": "336.298", "error": null}
+{"polled_at_ny": "2026-11-19T23:25:08-05:00", "source": "bls", "series": "CUSR0000SA0L1E", "present": true, "value": "338.896", "error": null}
+{"polled_at_ny": "2026-11-19T23:26:08-05:00", "source": "fred", "series": "CPIAUCSL", "present": true, "value": "336.298", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:12:46-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:26:08-05:00", "source": "fred", "series": "CPILFESL", "present": true, "value": "338.896", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:13:38-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:26:08-05:00", "source": "bls", "series": "CUSR0000SA0", "present": true, "value": "336.298", "error": null}
+{"polled_at_ny": "2026-11-19T23:26:08-05:00", "source": "bls", "series": "CUSR0000SA0L1E", "present": true, "value": "338.896", "error": null}
+{"polled_at_ny": "2026-11-19T23:27:08-05:00", "source": "fred", "series": "CPIAUCSL", "present": true, "value": "336.298", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:12:46-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:27:08-05:00", "source": "fred", "series": "CPILFESL", "present": true, "value": "338.896", "realtime_start": "2026-10-14", "last_updated_ny": "2026-11-10T09:13:38-05:00", "error": null}
+{"polled_at_ny": "2026-11-19T23:27:08-05:00", "source": "bls", "series": "CUSR0000SA0", "present": true, "value": "336.298", "error": null}
+{"polled_at_ny": "2026-11-19T23:27:08-05:00", "source": "bls", "series": "CUSR0000SA0L1E", "present": true, "value": "338.896", "error": null}
