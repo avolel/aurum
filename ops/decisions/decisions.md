@@ -2009,8 +2009,10 @@ Turned down:
 - Daily market figures (the Fed's effective rate `DFF`, the 10-year and 2-year Treasury yields, the
   broad dollar index and the VIX volatility index) use FRED's normal answer, which is today's value.
   They have no release date, so `ReleasedOn` is empty.
-- `DFF` counts as a market figure. Gold moves on the Fed's rate decisions, and those will come from
-  the release calendar, not from this daily number.
+- `DFF` counts as a market figure. Gold moves on the Fed's rate decisions, and those were meant to
+  come from the release calendar, not from this daily number. **Not done as of 2026-11-17:** FRED's
+  release 101 is updated daily, so its dates aren't meeting days, and the calendar has no Fed entry
+  until another source is found.
 - `FredClient` uses the standard retry setup from `Microsoft.Extensions.Http.Resilience`. It does
   not go through `QuotaHandler` or the quota governor.
 - `Macro:Fred:ApiKey` is required. A blank key stops the app at startup, the same rule as D-9.

@@ -25,7 +25,8 @@ public sealed record FredSeries(string Code, string Title, string Units, string 
     public static readonly FredSeries UnemploymentRate =
         new("UNRATE", "Unemployment Rate", "Percent", "Monthly", IsRelease: true);
 
-    // Daily with no release date; rate decisions come from the release calendar instead.
+    // Daily with no release date. Rate decisions aren't in the release calendar yet: FRED has no
+    // source for meeting dates (see FredRelease).
     public static readonly FredSeries FedFundsRate =
         new("DFF", "Federal Funds Effective Rate", "Percent", "Daily", IsRelease: false);
 
