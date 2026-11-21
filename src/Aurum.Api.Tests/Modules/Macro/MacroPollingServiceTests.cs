@@ -60,6 +60,14 @@ public class MacroPollingServiceTests
         Assert.Empty(MacroPollingService.Fetches([Row("gdp", CpiAt)], CpiAt.AddDays(-1)));
 
     [Fact]
+    public void Fetches_FomcRow_ReturnsNothing()
+    {
+        // A decision is a calendar row for item 6 only; DFF doesn't move until the next day.
+        var at = FomcCalendar.At(new DateOnly(2026, 12, 9));
+        Assert.Empty(MacroPollingService.Fetches([Row(FomcCalendar.Code, at)], at.AddDays(-1)));
+    }
+
+    [Fact]
     public void Fetches_SeveralRows_ReturnsEarliestFirst()
     {
         var jobsAt = FredRelease.Jobs.At(new DateOnly(2026, 12, 4));

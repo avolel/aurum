@@ -36,14 +36,33 @@ end) calls both. Registered in `Program.cs` as a typed client.
 
 `FredRelease.All` lists CPI (FRED release 10), jobs (50) and PCE (54), each with its New York publish
 time (08:30) and the series it carries. Ids checked against FRED on 2026-11-16. `At(day)` turns a
-release date into the publish time in UTC; it is the only place that does that conversion.
+release date into the publish time in UTC through `NewYorkTime.At`. `NewYorkTime` is the only
+place that converts between New York time and UTC; `NewYorkTime.Day` is the reverse.
 
 - **Every release series is in exactly one release**, and no market series is in any.
   `FredRelease.Of(series)` throws otherwise, and `FredReleaseTests` pins it.
 - **There is no Fed decision release.** FRED's release 101, "FOMC Press Release", is updated daily:
-  it lists 318 dates in 2026, so its dates are not meeting days. Decision dates need another source.
-- The `America/New_York` zone is looked up in a static field, so a host without tzdata throws
+  it lists 318 dates in 2026, so its dates are not meeting days. The decisions are in `FomcCalendar`
+  (below).
+- The `America/New_York` zone is looked up in a static field in `NewYorkTime`, so a host without tzdata throws
   `TypeInitializationException` on first use; `aspnet:10.0` has it (checked 2026-11-13).
+
+# The Fed's decisions (`FomcCalendar.cs`, D-28)
+
+`FomcCalendar.Meetings` is a hand-kept list of decision days, the last day of each FOMC meeting,
+copied from `federalreserve.gov/monetarypolicy/fomccalendars.htm` on 2026-11-20. It runs to
+January 2028; 2027 and 2028 are tentative. `At(day)` is 14:00 New York in UTC.
+
+- **Not in `FredRelease.All`.** Every pass asks FRED for the dates of each entry there, and FRED has
+  none for this. Each pass saves the list through `FredImporter.SaveReleaseTimesAsync` under
+  `FomcCalendar.Code` (`fomc`).
+- **Nothing is fetched for a decision.** `DFF` doesn't change until the next day. `Fetches` skips
+  the code like any it doesn't know, so an `fomc` row never wakes the timer. The row is item 6's
+  "the Fed decided today" signal.
+- **When the last date has passed, every pass logs `FomcCalendarStale` at `Warning`.** That warning
+  is the only sign the list needs next year's dates. Emergency meetings are not in it.
+- A date the Fed moves stays in `macro_releases`, since nothing deletes rows; remove it by hand.
+- `FomcCalendarTests` checks every date is a Wednesday, which catches a mistyped date.
 
 # The FRED importer (D-23)
 
@@ -64,10 +83,12 @@ Database only; the caller fetches. Registered scoped in `Program.cs`; `MacroPoll
 - A null `Value` (FRED's `"."`) is stored as a row with null.
 - `ReleasedAt` is the series' release time on `ReleasedOn` (`FredRelease.Of(series).At(day)`), as
   UTC, because Npgsql writes offset zero only. Today every release is 08:30 New York.
-  `FredRelease.NewYorkDay` is the reverse, used for BLS's release date.
+  `NewYorkTime.Day` is the reverse, used for BLS's release date.
 - **`SaveReleaseDatesAsync(release, dates, ct)`** adds the dates not yet in `macro_releases`, at the
   release's time, and returns how many it added. It never deletes, so a date FRED later moves stays
   behind as a row with no release, and the timer still wakes for it. Rows are unique on `(ReleaseCode, ScheduledAt)`.
+  It converts the dates and calls **`SaveReleaseTimesAsync(code, times, ct)`**, which
+  `MacroPollingService` also calls directly for the Fed's decisions.
 - Logs through `IAppLogService<FredImporter>` to `app_logs` (D-25). A changed release value is a
   `ReleaseValueChanged` row at `Warning`. `MacroPollingService` writes a `RefreshedFredSeries` row per
   series, and a failed series is an `Error` row with `LogType.SystemLog`.
@@ -103,7 +124,9 @@ a minute after a CPI or jobs release (below). Registered in `Program.cs` as a ty
 A `BackgroundService` with one loop. It runs a pass at startup, then every
 `Macro:Polling:RefreshInterval` (6 hours). Each pass fetches every series in `FredSeries.All` and saves
 it through `FredImporter`. Then, for each `FredRelease`, it fetches the dates from today (UTC) and adds
-the new ones to `macro_releases`, with a `RefreshedFredReleaseDates` log row.
+the new ones to `macro_releases`, with a `RefreshedFredReleaseDates` log row. Last, it saves
+`FomcCalendar`'s decisions (a `SavedFomcMeetings` row when any are new), and logs `FomcCalendarStale`
+if none is left in the future.
 
 Between passes it sleeps until the next pass or the next release fetch, whichever is first. Each
 `macro_releases` row gives up to two fetches (`Fetches`):
@@ -131,8 +154,8 @@ Between passes it sleeps until the next pass or the next release fetch, whicheve
   a late month or a corrected market figure is picked up. A series with no rows starts at
   `Macro:Polling:HistoryStart` (2006-01-01). That is the past-figure load: FRED returns 20 years in
   one request. `HistoryStart` is read only for an empty series, so changing it reloads nothing.
-- **One scope per series, per release and per BLS attempt; one try (`TryAsync`) per series, per
-  release and per BLS fetch.** A failed save
+- **One scope per series, per release, per BLS attempt and for the Fed's list; one try
+  (`TryAsync`) for each of those.** A failed save
   leaves its rows tracked in the `DbContext`, and a shared context would try to write them again with
   the next one. A failure is logged; the others carry on. If `macro_releases` can't be read, the
   service waits for the next pass.

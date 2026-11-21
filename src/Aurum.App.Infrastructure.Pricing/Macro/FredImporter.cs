@@ -92,17 +92,26 @@ internal sealed class FredImporter(AurumDbContext db, IAppLogService<FredImporte
     /// date FRED later moves stays behind.
     /// </summary>
     /// <returns>Rows inserted, for the caller's log line.</returns>
-    public async Task<int> SaveReleaseDatesAsync(
-        FredRelease release, IReadOnlyList<DateOnly> dates, CancellationToken ct)
+    public Task<int> SaveReleaseDatesAsync(
+        FredRelease release, IReadOnlyList<DateOnly> dates, CancellationToken ct) =>
+        SaveReleaseTimesAsync(release.Code, dates.Select(release.At).ToList(), ct);
+
+    /// <summary>
+    /// Adds the times not stored yet under <paramref name="code"/>. Used directly for the Fed's
+    /// decisions (<see cref="FomcCalendar"/>), which have no <see cref="FredRelease"/>.
+    /// </summary>
+    /// <param name="times">UTC: Npgsql writes offset zero only.</param>
+    /// <returns>Rows inserted, for the caller's log line.</returns>
+    public async Task<int> SaveReleaseTimesAsync(
+        string code, IReadOnlyList<DateTimeOffset> times, CancellationToken ct)
     {
-        var times = dates.Select(release.At).ToList();
         var stored = await db.MacroReleases.AsNoTracking()
-            .Where(r => r.ReleaseCode == release.Code && times.Contains(r.ScheduledAt))
+            .Where(r => r.ReleaseCode == code && times.Contains(r.ScheduledAt))
             .Select(r => r.ScheduledAt)
             .ToListAsync(ct);
 
         var added = times.Except(stored).ToList();
-        db.MacroReleases.AddRange(added.Select(t => new MacroRelease { ReleaseCode = release.Code, ScheduledAt = t }));
+        db.MacroReleases.AddRange(added.Select(t => new MacroRelease { ReleaseCode = code, ScheduledAt = t }));
 
         await db.SaveChangesAsync(ct);
         return added.Count;

@@ -124,6 +124,9 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   **`FredImporterReleasedAtTests`**, in the same file, needs **no container**: it checks a series
   takes its release's time. **`FredReleaseTests`** (no container) pins 08:30 New York in winter
   (13:30Z) and summer (12:30Z), and that every release series is in exactly one release.
+  **`FomcCalendarTests`** (no container) pins 14:00 New York, that `fomc` is not a `FredRelease`
+  code, and when `HasMeetingAfter` turns false (the `FomcCalendarStale` warning). It also checks
+  every date is a Wednesday, the only check against a mistyped date.
 - **`GetMacroSnapshotQueryHandlerTests`** uses the Postgres collection and also deletes every
   `macro_series` row in `InitializeAsync`, so it and `FredImporterTests` rely on the collection
   running one class at a time. Its fixed `Now` is the 2026-11-13 CPI morning before 08:30.

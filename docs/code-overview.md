@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from the Fed's decision dates and two checks by hand on a real release morning. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -25,7 +25,8 @@ three jobs and core-price series. On 2026-11-12 the BLS client and the BLS check
 `ops/bench/fred_delay.py` were added to sections 2, 3, 10, 13 and 15. On 2026-11-14 `FredImporter`
 was added to sections 2, 11 and 13. Later on 2026-11-14 an audit fixed drift in sections 2, 3, 10,
 11, 12 and 13. On 2026-11-18 the release calendar, the release-morning fetch and
-`/api/v1/macro/snapshot` were added to sections 1, 2, 3, 11, 12, 13, 15 and 16.
+`/api/v1/macro/snapshot` were added to sections 1, 2, 3, 11, 12, 13, 15 and 16. On 2026-11-20 the
+Fed's rate decisions were added to sections 1, 2, 3, 11, 13 and 15 (D-28).
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -89,7 +90,9 @@ two health checks are `/health` and `/health/ready`.
 
 **It also keeps economic figures** such as consumer prices, the jobs report and Treasury yields.
 `MacroPollingService` reads them from FRED every six hours, and from BLS a minute after each CPI or
-jobs release. `/api/v1/macro/snapshot` returns the newest one of each, with its age (section 12).
+jobs release. The Fed's rate decision days are saved too, from a list kept by hand, so item 6 can
+tell that the Fed decided that day (D-28). `/api/v1/macro/snapshot` returns the newest figure of
+each series, with its age (section 12).
 
 This is one poll. **`PricePollingService` drives every step.** Each solid arrow is one call the
 poller makes, numbered in order. The label says what goes in and what comes out. An arrow with a head
@@ -284,8 +287,10 @@ Aurum.App.Infrastructure.Pricing/
 ├── Macro/                              ← economic figures; MacroPollingService fetches and saves them
 │   ├── FredSeries.cs                   ← the ten FRED series, and which are releases
 │   ├── FredRelease.cs                  ← CPI, jobs and PCE: FRED's release id, New York time, series
+│   ├── FomcCalendar.cs                 ← the Fed's decision days, kept by hand, at 14:00 New York (D-28)
+│   ├── NewYorkTime.cs                  ← the one place that turns New York time into UTC and back
 │   ├── FredClient.cs                   ← asks FRED for a series, or a release's dates, and reads the answer
-│   ├── FredImporter.cs                 ← saves one series' rows (adds new, overwrites changed) and new release dates
+│   ├── FredImporter.cs                 ← saves one series' rows (adds new, overwrites changed) and new calendar rows
 │   ├── FredObservation.cs              ← one period's value, and its publish date for a release
 │   ├── FredOptions.cs                  ← `Macro:Fred` settings: web address and key
 │   ├── MacroPollingOptions.cs          ← `Macro:Polling` settings: how often, and how far back to start
@@ -391,7 +396,8 @@ it goes in this file.
     `MacroPollingService` as a background job. It refreshes every FRED series and the release
     calendar straight away, then every `RefreshInterval`. Between those passes it wakes for each
     calendar row: `BlsClient` a minute after a CPI or jobs release, FRED an hour after every release
-    (D-26).
+    (D-26). Each pass also saves the Fed's decision days from `FomcCalendar`. Nothing is fetched
+    for them, and once the last day has passed each pass logs an `FomcCalendarStale` warning (D-28).
 12. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
 13. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
@@ -1170,7 +1176,7 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 | `price_events` | A price move over one window that crossed its threshold. Not split by time, so never deleted after 30 days. Unique on `(Symbol, WindowCode, WindowEndedAt)`. | `PriceEventSql`, called by `PricePollingService` | `PriceEventSql`, for the waiting-period check; `/api/v1/events` |
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
 | `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is its release's New York time (08:30 for all three today) on its publish date; a daily market figure's is empty. On release morning BLS writes the month's row and FRED's value replaces it later (D-23). | `FredImporter`, called by `MacroPollingService` | `FredImporter`, to compare before it writes; `MacroPollingService`, for each series' newest date; `/api/v1/macro/snapshot` |
-| `macro_releases` | One coming CPI, jobs or PCE release, at its publish time in UTC. Unique on `(ReleaseCode, ScheduledAt)`. Never deleted, so a date FRED later moves stays behind. | `FredImporter.SaveReleaseDatesAsync`, called by `MacroPollingService` | `MacroPollingService`, to decide when to wake (D-26) |
+| `macro_releases` | One CPI, jobs or PCE release at its publish time, or one Fed rate decision (`fomc`, 14:00 New York), in UTC. Unique on `(ReleaseCode, ScheduledAt)`. Never deleted, so a date FRED or the Fed later moves stays behind. | `FredImporter.SaveReleaseDatesAsync` and `SaveReleaseTimesAsync`, called by `MacroPollingService` | `MacroPollingService`, to decide when to wake; it skips `fomc` rows (D-26, D-28) |
 
 Things that will catch you out:
 
@@ -1334,7 +1340,7 @@ Aurum.Api.Tests/
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no timers and no real services
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
-├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; FredReleaseTests; MacroPollingServiceTests
+├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; FredReleaseTests; FomcCalendarTests; MacroPollingServiceTests
 ├── Modules/AppLogs/           ← the log service's field cutting, and the background writer
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
@@ -1347,7 +1353,7 @@ Aurum.Api.Tests/
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
 | `PricePollingServiceTests`, `PriceEventSqlTests`, `AurumApiFactoryTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `DeltaEngineReplayTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
-| `FredImporterTests` | `FredImporterReleasedAtTests` (a series takes its release's time), `FredReleaseTests` (08:30 New York in winter and summer; each release series in exactly one release) |
+| `FredImporterTests` | `FredImporterReleasedAtTests` (a series takes its release's time), `FredReleaseTests` (08:30 New York in winter and summer; each release series in exactly one release), `FomcCalendarTests` (14:00 New York; every date a Wednesday; not a FRED release; when the stale warning starts) |
 | `AppLogDrainServiceTests` | `AppLogServiceTests` (each field cut to its column size) |
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests`, `GetMacroSnapshotQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `MacroControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
@@ -1445,6 +1451,7 @@ batch of app work, together with the Phase 2 explanation feed. The phone version
 | Add a FRED series | A new field in `Macro/FredSeries.cs`, added to `All`. Set `IsRelease` to true only for a figure with a publish date, such as CPI; those come back as first published values (D-22). |
 | Measure how late FRED and BLS post a figure | `ops/bench/fred_delay.py`, run by hand before 08:25 New York time on release morning. It logs one line per series per minute, with a `source` field, and ends with the gap between BLS and FRED. Each morning spends about 155 of BLS's 500 requests a day. |
 | Add a release to the calendar | A new field in `Macro/FredRelease.cs`, with FRED's release id, its New York time and its series, added to `All`. Check the id against FRED's `release/dates` by hand first: release 101 looked right and listed every day (D-26). |
+| Add the next year's Fed decisions | `Macro/FomcCalendar.cs`, from the Fed's calendar page. Add the last day of each meeting; `FomcCalendarTests` checks each is a Wednesday. An `FomcCalendarStale` row in `app_logs` means the list has run out (D-28). |
 | See the coming releases | `SELECT * FROM macro_releases WHERE "ScheduledAt" > now() ORDER BY "ScheduledAt";` (times are UTC). |
 | Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 

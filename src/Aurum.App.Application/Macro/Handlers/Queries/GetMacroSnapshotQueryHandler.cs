@@ -34,7 +34,7 @@ public sealed class GetMacroSnapshotQueryHandler(AurumDbContext db, TimeProvider
     {
         // UTC because Npgsql refuses a non-zero offset for timestamptz.
         var asOf = request.AsOf?.ToUniversalTime() ?? clock.GetUtcNow();
-        var asOfDay = FredRelease.NewYorkDay(asOf);
+        var asOfDay = NewYorkTime.Day(asOf);
 
         var newest = await db.MacroObservations.AsNoTracking()
             .Where(o => o.Value != null && o.Series.Provider == FredSeries.Provider)

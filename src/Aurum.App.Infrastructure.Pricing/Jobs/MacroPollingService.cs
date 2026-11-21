@@ -129,6 +129,9 @@ internal sealed class MacroPollingService(
             await TryAsync(() => RefreshReleaseDatesAsync(release, ct),
                 $"Refreshing release {release.Code}'s dates from FRED failed; trying again next pass.", ct);
         }
+
+        await TryAsync(() => SaveFomcMeetingsAsync(ct),
+            "Saving the FOMC decision dates failed; trying again next pass.", ct);
     }
 
     /// <returns>Null when the calendar can't be read; the caller then waits for the next pass.</returns>
@@ -175,7 +178,7 @@ internal sealed class MacroPollingService(
     /// </summary>
     private async Task FetchFromBlsAsync(ReleaseFetch fetch, CancellationToken ct)
     {
-        var day = FredRelease.NewYorkDay(fetch.ScheduledAt);
+        var day = NewYorkTime.Day(fetch.ScheduledAt);
         // The figure is for the month before: January's release asks for last year.
         var year = day.AddMonths(-1).Year;
         var waiting = BlsSeriesOf(fetch.Release);
@@ -276,6 +279,35 @@ internal sealed class MacroPollingService(
             level: LogLevel.Information,
             ct: ct
         );
+    }
+
+    /// <summary>
+    /// Adds <see cref="FomcCalendar"/>'s decisions to <c>macro_releases</c>. Nothing is fetched for
+    /// them: <see cref="Fetches"/> skips the code. Warns every pass once the list has no future date.
+    /// </summary>
+    private async Task SaveFomcMeetingsAsync(CancellationToken ct)
+    {
+        using var scope = scopeFactory.CreateScope();
+        var inserted = await scope.ServiceProvider.GetRequiredService<FredImporter>()
+            .SaveReleaseTimesAsync(FomcCalendar.Code, FomcCalendar.Meetings.Select(FomcCalendar.At).ToList(), ct);
+
+        if (inserted > 0)
+        {
+            await logger.LogAsync(LogType.SystemLog,
+                "SavedFomcMeetings",
+                $"FOMC: {inserted} new decision dates.",
+                level: LogLevel.Information,
+                ct: ct);
+        }
+
+        if (!FomcCalendar.HasMeetingAfter(clock.GetUtcNow()))
+        {
+            await logger.LogAsync(LogType.SystemLog,
+                "FomcCalendarStale",
+                $"FomcCalendar's last decision, {FomcCalendar.Meetings.Max():yyyy-MM-dd}, has passed; add the next dates from the Fed's calendar.",
+                level: LogLevel.Warning,
+                ct: ct);
+        }
     }
 
     /// <summary>Runs one unit of work; a failure is logged so the others carry on.</summary>

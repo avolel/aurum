@@ -2010,9 +2010,9 @@ Turned down:
   broad dollar index and the VIX volatility index) use FRED's normal answer, which is today's value.
   They have no release date, so `ReleasedOn` is empty.
 - `DFF` counts as a market figure. Gold moves on the Fed's rate decisions, and those were meant to
-  come from the release calendar, not from this daily number. **Not done as of 2026-11-17:** FRED's
-  release 101 is updated daily, so its dates aren't meeting days, and the calendar has no Fed entry
-  until another source is found.
+  come from the release calendar, not from this daily number. FRED's release 101 is updated daily,
+  so its dates aren't meeting days. *Added 2026-11-20:* the decisions are now a hand-kept list in the
+  calendar (D-28).
 - `FredClient` uses the standard retry setup from `Microsoft.Extensions.Http.Resilience`. It does
   not go through `QuotaHandler` or the quota governor.
 - `Macro:Fred:ApiKey` is required. A blank key stops the app at startup, the same rule as D-9.
@@ -2409,3 +2409,52 @@ Turned down:
   look weeks old on the day it matters most.
 - **Working out the age in the prompt builder.** Two places would count it, and they could drift.
 - **Using UTC's date for market figures.** Explained above.
+
+## D-28 — The Fed's rate decisions are a hand-kept list in the release calendar
+
+**DECIDED:**
+
+- Each Fed rate decision is a row in `macro_releases` with the code `fomc` (the Federal Open Market
+  Committee, the Fed group that sets the rate). Its time is 14:00 New York, saved in UTC. The table
+  and its unique key already fit, so there is no migration.
+- The dates are typed into the code, in `FomcCalendar.Meetings`. Each date is the last day of a
+  meeting, the day the decision comes out. The list runs from 2025 to January 2028. It was copied
+  from the Fed's calendar page (`federalreserve.gov/monetarypolicy/fomccalendars.htm`) on
+  2026-11-20. The 2027 and 2028 dates are marked tentative there.
+- Every six-hour pass saves the list. When the last date has passed, each pass also writes an
+  `FomcCalendarStale` warning to `app_logs`.
+- The app fetches nothing for a decision. The Fed's effective rate (`DFF`) doesn't change until the
+  next day, and no stored figure depends on the decision. The row is there so item 6, the step that
+  explains price moves, can tell that the Fed decided that day.
+- `FomcCalendar` is not in `FredRelease.All`. Every pass asks FRED for the dates of each release in
+  that list, and FRED has no release for the decisions. `MacroPollingService.Fetches` skips a code
+  it doesn't know, so an `fomc` row never wakes the timer.
+- Converting a New York time to UTC moved into one helper, `NewYorkTime`, used by both
+  `FredRelease` and `FomcCalendar`.
+
+Decided by me on 2026-11-20, built the same day.
+
+**Why a hand-kept list, when D-26 turned one down.** D-26 turned it down because FRED already
+publishes release dates. For Fed decisions, nothing does. FRED's release 101 lists every day, not
+meeting days (D-26). The warning row deals with the other objection, that a hand-kept list goes
+stale without anyone noticing. The Fed publishes its dates more than a year ahead, so one edit a
+year keeps it current.
+
+**Costs I accept:**
+
+- Emergency meetings, like the two in March 2020, are not in the list. They are rare, and this app
+  has one user.
+- A tentative date the Fed later moves stays in the table, because rows are never deleted. Item 6
+  would then believe the Fed decided on a day it didn't. The fix is to edit the list and delete the
+  row by hand.
+- The warning only starts once the last date has passed, so there is no notice in advance. With
+  dates out to January 2028, there is time to add the next year.
+
+Turned down:
+
+- **Reading the Fed's calendar page on each pass.** It is a web page, not an API. If the Fed
+  redesigns it, the reader finds no dates and raises no error, which is the same silent failure as a
+  stale list, but harder to notice.
+- **Watching FRED's target-rate series (`DFEDTARU`) for changes.** It only shows decisions that
+  change the rate, not ones that hold it. The change also appears the next day, which is too late
+  for "the Fed decided today".

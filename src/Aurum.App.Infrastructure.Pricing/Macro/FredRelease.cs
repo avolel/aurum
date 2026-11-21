@@ -4,12 +4,11 @@ namespace Aurum.App.Infrastructure.Pricing.Macro;
 /// <remarks>
 /// FRED gives a release's dates but no time of day, so the time is kept here. No Fed decision: FRED's
 /// release 101 (FOMC Press Release) is updated daily, so its dates are not meeting days (checked
-/// 2026-11-16).
+/// 2026-11-16). Decisions are in <see cref="FomcCalendar"/>, which must stay out of <see cref="All"/>:
+/// every pass asks FRED for the dates of each entry.
 /// </remarks>
 public sealed record FredRelease(string Code, int FredId, TimeOnly PublishTime, IReadOnlyList<FredSeries> Series)
 {
-    private static readonly TimeZoneInfo NewYork = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
-
     public static readonly FredRelease Cpi =
         new("cpi", 10, new TimeOnly(8, 30), [FredSeries.Cpi, FredSeries.CoreCpi]);
 
@@ -27,14 +26,5 @@ public sealed record FredRelease(string Code, int FredId, TimeOnly PublishTime, 
     public static FredRelease Of(FredSeries series) => All.Single(r => r.Series.Contains(series));
 
     /// <summary><see cref="PublishTime"/> on <paramref name="day"/>, in UTC.</summary>
-    public DateTimeOffset At(DateOnly day)
-    {
-        var local = day.ToDateTime(PublishTime);
-        // GetUtcOffset picks EST or EDT for that date. UTC because Npgsql only writes offset-zero values.
-        return new DateTimeOffset(local, NewYork.GetUtcOffset(local)).ToUniversalTime();
-    }
-
-    /// <summary>The New York date of <paramref name="at"/>; the reverse of <see cref="At"/>'s day.</summary>
-    public static DateOnly NewYorkDay(DateTimeOffset at) =>
-        DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(at, NewYork).DateTime);
+    public DateTimeOffset At(DateOnly day) => NewYorkTime.At(day, PublishTime);
 }

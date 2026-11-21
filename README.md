@@ -9,7 +9,7 @@ open on purpose (see the top of that file). Phase 2 has started. It adds an
 explanation for each big price move, written by an AI model running on my own machine. The plan is
 in `ops/phase-2-todo.md`. So far the model is chosen (item 0), and the app can fetch economic
 figures such as consumer prices, the jobs report and Treasury yields from FRED, the St. Louis Fed's
-free data service (item 1, built apart from the Fed's decision dates). FRED also carries the figures the Bureau of Labor Statistics
+free data service (item 1). FRED also carries the figures the Bureau of Labor Statistics
 (BLS) publishes, as they were first published. It also carries the daily Treasury yields, so the app
 has no client for the Treasury (D-22).
 But FRED posts a new CPI (consumer price index) figure 40 minutes or more after BLS releases it at
@@ -19,8 +19,10 @@ the app reads the newest month straight from BLS, and FRED's copy replaces it la
 series loads its past figures back to 2006 in one request. Each pass also adds the coming CPI, jobs
 and PCE (personal consumption expenditures, a second inflation measure) release dates to a calendar
 table, `macro_releases`. The service wakes a minute after each CPI or jobs release to save BLS's new
-month, and an hour after every release to read FRED again (D-26). Fed rate decisions are not on the
-calendar yet: FRED's list for them changes every day, so it doesn't give the meeting days. `GET /api/v1/macro/snapshot` returns the newest
+month, and an hour after every release to read FRED again (D-26). The Fed's rate decisions are
+on the calendar too, at 14:00 New York time, from a list of meeting dates I keep by hand. FRED has
+no list of meeting days. When the last date passes, the app writes a warning to its log on every
+pass until I add more (D-28). `GET /api/v1/macro/snapshot` returns the newest
 figure of each series, with how old it is (D-27). `ops/bench/fred_delay.py` measures how late each
 provider posts a figure; the jobs report on 2026-12-04 is its next run. Nothing has yet proved that
 BLS has the figure at 08:30 sharp.

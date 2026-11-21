@@ -19,7 +19,7 @@ controller up, and assembly scanning finds the handler and validator.
 - **"Known at `asOf`" has two rules** (D-27):
   - Release series (`FredSeries.IsRelease`): `ReleasedAt <= asOf`. Item 6 passes a move's start
     time, so a figure published after the move can't be used to explain it.
-  - Market series: `ObservedOn` before `asOf`'s **New York** date (`FredRelease.NewYorkDay`). A
+  - Market series: `ObservedOn` before `asOf`'s **New York** date (`NewYorkTime.Day`). A
     daily yield isn't final until that US day ends. Using the UTC date would let yesterday's
     unfinished New York day in after 19:00 New York time.
 - **Rows with a null `Value` are skipped**, so FRED's `"."` (a missing month or a market holiday)

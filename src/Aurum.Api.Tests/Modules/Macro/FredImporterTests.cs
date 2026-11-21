@@ -171,6 +171,20 @@ public class FredImporterTests(PostgresFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task FomcCalendar_meeting_is_stored_at_1400_New_York()
+    {
+        await using (var db = fixture.CreateDbContext())
+        {
+            await new FredImporter(db, _logger).SaveReleaseTimesAsync(
+                FomcCalendar.Code, [FomcCalendar.At(new DateOnly(2026, 12, 9))], Ct);
+        }
+
+        // 14:00 EST is 19:00 UTC.
+        var stored = Assert.Single(await StoredReleasesAsync());
+        Assert.Equal(("fomc", new DateTimeOffset(2026, 12, 9, 19, 0, 0, TimeSpan.Zero)), (stored.ReleaseCode, stored.ScheduledAt));
+    }
+
+    [Fact]
     public async Task Same_date_for_two_releases_is_two_rows()
     {
         // CPI and jobs can land on the same morning; the unique key includes the release.

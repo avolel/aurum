@@ -44,8 +44,9 @@ src/
 ├── Aurum.App.SharedKernel/            ApiResponse<T>, CursorPage<T>, AuditableEntity, SupportedSymbol
 ├── Aurum.App.Infrastructure.Data/     AurumDbContext, Entities/, Migrations/, IUnitOfWork
 ├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed;
-│                                      Macro/ — the FRED and BLS clients, FredImporter, and FredRelease,
-│                                      the release calendar's times (D-22, D-23, D-26)
+│                                      Macro/ — the FRED and BLS clients, FredImporter, FredRelease (the
+│                                      release calendar's times) and FomcCalendar, the Fed's decision
+│                                      days kept by hand (D-22, D-23, D-26, D-28)
 ├── Aurum.App.Logging/                 IAppLogService<T>, its queue and drain, IRequestContextAccessor (D-24)
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, Prices/
 ├── Aurum.Api/                         Program.cs (every registration), Controllers/, Hubs/ (SignalR)

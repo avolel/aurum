@@ -1,14 +1,14 @@
 # Phase 2 — AI explanations, the server side
 
 This is my list of the Phase 2 work. Phase 1's server side is finished (`ops/phase-1-todo.md`). See
-`ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is built, with three
-things left open: the Fed's decision dates (no source yet), and two checks by hand on a real release
-morning (the BLS dry run, and the 2026-12-04 jobs run).
+`ops/decisions/decisions.md` for what's already decided. Item 0 is done. Item 1 is built, with two
+checks left to do by hand on a real release morning (the BLS dry run, and the 2026-12-04 jobs run).
 `MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. It also
 saves BLS's figure a minute after a CPI or jobs release, and reads FRED again an hour after each
-release. `/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Nothing
+release. The Fed's rate decisions are in the same calendar, from a list kept by hand.
+`/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Nothing
 else has been started.
-I last checked it against the code on 2026-11-18.
+I last checked it against the code on 2026-11-20.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -30,8 +30,8 @@ later batch of app work, together with the Phase 1 dashboard.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
 Item 0 closed D-6. The FRED client added D-22 and the BLS client added D-23. D-24 and D-25 cover
-app logging. Item 1's release calendar added D-26 and its snapshot D-27, so new numbers start at
-D-28.
+app logging. Item 1's release calendar added D-26, its snapshot D-27 and the Fed's decision dates D-28, so
+new numbers start at D-29.
 
 A few terms used below:
 
@@ -225,7 +225,7 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
         `Program.cs`; `AurumApiFactory` removes it, so tests never call the real FRED.
 - [x] Load past figures too, not only the latest (2026-11-14). An empty series loads from
       `Macro:Polling:HistoryStart`, 2006-01-01, in one request.
-- [ ] A release calendar, so a new figure is fetched right after its known publish time (8:30 New
+- [x] A release calendar, so a new figure is fetched right after its known publish time (8:30 New
       York time for most; the Fed's rate decisions come out at 14:00) instead of at the next
       scheduled check. `MacroObservation.ReleasedAt` is what the 4-hour background window searches
       on, so it must be the real publish time. FRED gives a release date but no time of day, so the
@@ -234,10 +234,13 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
         at its New York publish time, in UTC. Every six-hour pass adds new dates from FRED's
         `release/dates`. `FredRelease` keeps each release's FRED id, time of day and series, and
         `ReleasedAt` now takes its time from there.
-  - [ ] Fed rate decisions, left out of the calendar for now (my call, 2026-11-17). FRED's release
-        101 can't supply them: it is updated every day, so its dates are not meeting days (checked
-        2026-11-16). No series depends on a decision, so nothing breaks. Until another source is
-        found, item 6 has no "the Fed decided today" signal.
+  - [x] Fed rate decisions (2026-11-20, D-28). FRED's release 101 can't supply them: it is updated
+        every day, so its dates are not meeting days (checked 2026-11-16). They are a list kept by
+        hand in `FomcCalendar`, copied from the Fed's calendar page, 2025 to January 2028. Each pass
+        saves them to `macro_releases` as `fomc` rows at 14:00 New York. Nothing is fetched for a
+        decision, since no series depends on one; the row is item 6's "the Fed decided today"
+        signal. When the last date passes, each pass logs an `FomcCalendarStale` warning, and the
+        list needs the next year's dates.
   - [x] The release-morning fetch (2026-11-17, D-26). `MacroPollingService` wakes a minute after
         each CPI or jobs release and saves BLS's newest month, trying each minute for up to 15
         minutes. An hour after every release it reads that release's series from FRED again. Not
@@ -258,7 +261,8 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
       snapshot returns `ObservedOn`, `ReleasedAt` and `AgeDays` for each figure (D-27).
 - [x] `/api/v1/macro/snapshot` (2026-11-17), with controller, handler and validator tests. It takes
       an optional `asOf` and returns only figures that were public at that time.
-- [x] Decision written up: the release calendar (D-26), and how old figures are presented (D-27).
+- [x] Decision written up: the release calendar (D-26), how old figures are presented (D-27), and
+      the Fed's decision dates (D-28).
 
 ---
 
