@@ -48,6 +48,7 @@
     </Content>
     <None Update="Modules\Pricing\DeltaEngineReplay.csv" CopyToOutputDirectory="PreserveNewest" />
     <None Update="Modules\Macro\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="Modules\News\*.xml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
