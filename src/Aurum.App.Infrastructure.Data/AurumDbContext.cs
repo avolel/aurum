@@ -1,5 +1,6 @@
 using Aurum.App.Infrastructure.Data.Entities.Logging;
 using Aurum.App.Infrastructure.Data.Entities.Macro;
+using Aurum.App.Infrastructure.Data.Entities.News;
 using Aurum.App.Infrastructure.Data.Entities.Pricing;
 using Aurum.App.SharedKernel.Constants;
 using Aurum.App.SharedKernel.Entities;
@@ -17,6 +18,7 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
     public DbSet<MacroObservation> MacroObservations => Set<MacroObservation>();
     public DbSet<MacroRelease> MacroReleases => Set<MacroRelease>();
     public DbSet<AppLog> AppLogs => Set<AppLog>();
+    public DbSet<NewsArticle> NewsArticles => Set<NewsArticle>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -149,6 +151,19 @@ public class AurumDbContext(DbContextOptions<AurumDbContext> options, TimeProvid
             e.Property(x => x.ReleaseCode).HasMaxLength(32).IsRequired();
             // Each pass re-reads FRED's dates; this stops a date being stored twice.
             e.HasIndex(x => new { x.ReleaseCode, x.ScheduledAt }).IsUnique();
+        });
+
+        b.Entity<NewsArticle>(e =>
+        {
+            e.ToTable("news_articles");
+            e.Property(x => x.Source).HasMaxLength(NewsArticleConstants.MaxSourceLength).IsRequired();
+            e.Property(x => x.Title).HasMaxLength(NewsArticleConstants.MaxTitleLength).IsRequired();
+            e.Property(x => x.Url).HasMaxLength(NewsArticleConstants.MaxUrlLength).IsRequired();
+            e.Property(x => x.Extract).HasMaxLength(NewsArticleConstants.MaxExtractLength);
+            // The only duplicate check. Unique across feeds, so a story two feeds share is kept once.
+            e.HasIndex(x => x.Url).IsUnique();
+            // Item 6 searches a time range before a move.
+            e.HasIndex(x => x.PublishedAt);
         });
     }
 
