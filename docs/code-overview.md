@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. Item 2, the news feed, is built apart from one real run checked by hand. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. Item 2, the news feed, is built and checked with a real run; its feeds' terms are still to be read before any launch. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 

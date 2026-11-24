@@ -285,9 +285,10 @@ articles, so the app has to save the news as it appears. It can't fetch it later
   then nothing more until it recovers. The most likely cause is a site changing how it writes dates.
   Investing.com already writes them in its own format.
 - **There's no web address for news yet.** The news screen and `/news` come in Phase 3.
+- **Checked with a real run on 2026-11-24.** The first pass saved 31 articles from the three feeds.
+  The second, 15 minutes later, saved none, because every link was already stored.
 - **Not checked yet:** the three sites' terms of use. That's fine for a personal build, but they
-  need reading before any launch. I also haven't watched the app save real articles yet; that's the
-  last open box in item 2.
+  need reading before any launch.
 
 ## Decisions that were made without testing
 

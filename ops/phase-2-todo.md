@@ -7,10 +7,10 @@ checks left to do by hand on a real release morning (the BLS dry run, and the 20
 saves BLS's figure a minute after a CPI or jobs release, and reads FRED again an hour after each
 release. The Fed's rate decisions are in the same calendar, from a list kept by hand.
 `/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Item 2 is built:
-`NewsPollingService` reads three news feeds every 15 minutes and saves the gold-related articles,
-with one check left to do by hand (a real run with `docker compose up`). Nothing else has been
-started.
-I last checked it against the code on 2026-11-23.
+`NewsPollingService` reads three news feeds every 15 minutes and saves the gold-related articles.
+A real run on 2026-11-24 saved articles from all three. The feeds' terms are still to be read before
+any launch. Nothing else has been started.
+I last checked it against the code on 2026-11-24.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -298,10 +298,13 @@ The code is in `src/Aurum.App.Infrastructure.Pricing/News/`, and its `CLAUDE.md`
 - [x] A warning when a feed has articles but none can be read, most likely a changed date format.
       It's written once (`NewsFeedUnreadable`), then nothing until the feed recovers
       (`NewsFeedRecovered`).
-- [ ] By hand: `docker compose up --build`. After the first pass, `app_logs` has three
+- [x] By hand: `docker compose up --build`. After the first pass, `app_logs` has three
       `RefreshedNewsFeed` rows and `news_articles` has rows from all three feeds. After a second
       pass, no link appears twice. **This also starts the price timer, which spends GoldAPI
       requests.**
+      Done 2026-11-24. The first pass (05:01 UTC) saved 3 Investing.com, 21 FXStreet and 7 CNBC
+      articles, every item in each feed usable. The second, 15 minutes after the first ended,
+      inserted 0. No link twice, every time in UTC, no error or warning rows.
 
 ---
 
