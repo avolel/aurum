@@ -6,9 +6,11 @@ checks left to do by hand on a real release morning (the BLS dry run, and the 20
 `MacroPollingService` fetches FRED's figures every six hours and `FredImporter` saves them. It also
 saves BLS's figure a minute after a CPI or jobs release, and reads FRED again an hour after each
 release. The Fed's rate decisions are in the same calendar, from a list kept by hand.
-`/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Nothing
-else has been started.
-I last checked it against the code on 2026-11-20.
+`/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Item 2 is built:
+`NewsPollingService` reads three news feeds every 15 minutes and saves the gold-related articles,
+with one check left to do by hand (a real run with `docker compose up`). Nothing else has been
+started.
+I last checked it against the code on 2026-11-23.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -30,8 +32,8 @@ later batch of app work, together with the Phase 1 dashboard.
 
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
 Item 0 closed D-6. The FRED client added D-22 and the BLS client added D-23. D-24 and D-25 cover
-app logging. Item 1's release calendar added D-26, its snapshot D-27 and the Fed's decision dates D-28, so
-new numbers start at D-29.
+app logging. Item 1's release calendar added D-26, its snapshot D-27 and the Fed's decision dates
+D-28. Item 2, the news feed, added D-29, so new numbers start at D-30.
 
 A few terms used below:
 
@@ -266,21 +268,40 @@ the queue needs (the move, a status, when it was queued). Item 6 adds the rest.
 
 ---
 
-## 2. A minimal news feed
+## 2. A minimal news feed · built
 
 Only enough news for explanations to cite. Scoring, tagging and the other sources are Phase 3.
+The code is in `src/Aurum.App.Infrastructure.Pricing/News/`, and its `CLAUDE.md` has the details.
 
-- [ ] RSS readers for 3 feeds: Kitco, MarketWatch, CNBC. Check each feed's address still works and
-      its terms allow saving headlines and links (§12).
-- [ ] A `news_articles` table storing only the headline, link, a short extract, publish time and
-      source (FR-3.7).
-- [ ] Duplicates removed by link only. Text fingerprints (SimHash) are Phase 3.
-- [ ] Each feed is read in its own try, so one broken feed can't stop the others.
-- [ ] Decide how often the feeds are read. Eight hours of news is searched back from a move's start,
-      so a feed read too rarely can miss articles that fell off it.
-- [ ] Decide what counts as gold-related news (FR-2.1). MarketWatch and CNBC cover everything, and
-      tagging is Phase 3. The simplest rule is a short keyword list. Without one, most of the eight
-      hours is unrelated news that fills the context window (finding 11).
+- [x] RSS readers for 3 feeds (2026-11-21, D-29): **Investing.com commodities, FXStreet and CNBC
+      Finance**, in `NewsFeed.All`. The plan's Kitco and MarketWatch were dropped. Kitco has no feed,
+      and its terms ban automated retrieval. MarketWatch's market feeds stopped updating in mid-2025.
+  - [ ] Read the terms of the three feeds before any launch (§12). CNBC's point to Versant's terms.
+        Not needed for this personal build.
+  - Investing.com's dates aren't in the standard RSS format (`Nov 20, 2026 19:26 GMT`), so
+    `RssClient` reads three exact date formats. A date it can't read skips that article.
+  - One real answer from each feed is saved in `src/Aurum.Api.Tests/Modules/News/` for the tests.
+- [x] A `news_articles` table storing only the headline, link, a short extract (at most 300
+      characters, HTML removed), publish time in UTC and source (FR-3.7). Migration
+      `AddNewsArticles`; `PublishedAt` is indexed for item 6's time-range search.
+- [x] Duplicates removed by link only, across all three feeds, and within one read of a feed.
+      Text fingerprints (SimHash) are Phase 3.
+- [x] Each feed is read in its own try, with its own database scope, so one broken feed or failed
+      save can't stop the others. A failure is an `Error` row in `app_logs`.
+- [x] Decided how often (D-29): every 15 minutes, `News:Polling:Interval`. Investing.com keeps only
+      10 articles, so this leaves a 4× margin before one falls off the feed unread. A zero or
+      negative interval stops the app at startup.
+- [x] Decided what counts as gold-related (FR-2.1, D-29): a whole-word keyword list in
+      `GoldNews.IsRelated`, checked before saving. On the saved files it keeps 5 of 10 Investing.com
+      articles, 19 of 30 FXStreet and 7 of 30 CNBC. "dollar" and "inflation" let in some currency
+      news; a narrower list was tried and dropped real news, so the plan's list stays.
+- [x] A warning when a feed has articles but none can be read, most likely a changed date format.
+      It's written once (`NewsFeedUnreadable`), then nothing until the feed recovers
+      (`NewsFeedRecovered`).
+- [ ] By hand: `docker compose up --build`. After the first pass, `app_logs` has three
+      `RefreshedNewsFeed` rows and `news_articles` has rows from all three feeds. After a second
+      pass, no link appears twice. **This also starts the price timer, which spends GoldAPI
+      requests.**
 
 ---
 
@@ -425,7 +446,8 @@ the scored test set was dropped (item 0).
 - [ ] New settings and API keys in `appsettings.json`, `.env.example` and `docker-compose.yml`.
       Compose passes on only the variables it lists, so a new key in `.env` needs its line there too.
       The FRED key and the `Macro:Fred` section are in all three (2026-11-07). So are the BLS key
-      and the `Macro:Bls` section (2026-11-11). Still to add: the job-to-model map.
+      and the `Macro:Bls` section (2026-11-11). The news feeds need no key, and `News:Polling` is
+      only in `appsettings.json` (2026-11-23). Still to add: the job-to-model map.
 - [ ] The README's setup steps say to create the models' volume once, and to download the models.
       A fresh clone can't start without the volume (item 0).
 - [ ] `CLAUDE.md`, README and `docs/` brought up to date.

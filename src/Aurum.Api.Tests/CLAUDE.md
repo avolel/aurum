@@ -100,13 +100,17 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   received as `JsonElement` so assertions check the wire (camelCase, nulls inside the dictionary). It
   does not use `Program.cs`.
 - **`AurumApiFactory`** (`WebApplicationFactory<Program>`) boots the real `Program.cs` against the
-  collection's Postgres. It **removes `PricePollingService` and `MacroPollingService`, and replaces
-  every `IPriceSource` with a faulting `ScriptedPriceSource`**: a poller in a test fires on its own
-  timer and spends real requests (or calls the real FRED). So nothing fills the cache; a test that needs a held price calls
+  collection's Postgres. It **removes `PricePollingService`, `MacroPollingService` and
+  `NewsPollingService`, and replaces every `IPriceSource` with a faulting `ScriptedPriceSource`**: a
+  timer in a test fires on its own and spends real requests (or calls the real FRED, BLS or news
+  feeds). So nothing fills the cache; a test that needs a held price calls
   `ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not
   `ConfigureAppConfiguration` — `Program.cs` reads the connection string before `Build()`, and only
   host settings are visible that early. API keys are set per config key (`GoldApiIo`, …) and
   `Macro:Fred:ApiKey` and `Macro:Bls:ApiKey` are set, because blank keys refuse to boot (D-9).
+  `AurumApiFactoryTests.A_non_positive_news_interval_stops_the_app` builds on it with
+  `WithWebHostBuilder` and a bad `News:Polling:Interval`, and expects `OptionsValidationException`
+  from `factory.Services`.
 - **`BlsClientTests`** needs **no container**: `BlsClient` over a `CountingHandler` stub; the test's
   callback keeps the `POST` body. `Modules/Macro/bls-2026.json` is a real BLS answer for all four series from
   2026-11-11. The refusal body is BLS's real one, key included, so the scrub test is honest.
@@ -121,7 +125,16 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   2026-11-21; the csproj copies them to the test output. Investing.com's file has no extracts and its
   own date format; FXStreet's has extracts over 300 characters, so the cut runs on real data. No file
   has HTML in an extract or a `+0000` date, so those cases are inline XML. Re-save with a real call
-  rather than editing by hand.
+  rather than editing by hand. Most tests read only the usable items through the `Items(xml)`
+  helper; the `ItemsInFeed` and `NoneUsable` tests call `Parse` directly.
+- **`GoldNewsTests`** and **`NewsPollingServiceTests`** need **no container**. The second covers
+  `NewsPollingService.Track` only (warn once, recover once, an empty read changes nothing, feeds
+  tracked separately); nothing drives the loop itself, as with `MacroPollingServiceTests`.
+- **`NewsImporterTests`** uses the Postgres collection and deletes every `news_articles` row in
+  `InitializeAsync`. Each save gets a fresh `DbContext`, as each pass would.
+  `Second_save_of_same_items_inserts_nothing` checks `UpdatedAt` didn't move, like
+  `FredImporterTests`. Its first test reads `PublishedAt` back from Postgres to prove it's stored
+  as UTC.
 - **`FredImporterTests`** uses the Postgres collection and deletes every `macro_series` row in
   `InitializeAsync` (observations go with them by cascade), and every `macro_releases` row. Each save gets a fresh `DbContext`, as
   each poll would. Warnings are the `ListAppLog` entries at `LogLevel.Warning`.
