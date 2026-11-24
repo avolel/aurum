@@ -116,6 +116,12 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   to the test output. CPI and 10-year contain real `"."` rows (October 2025 CPI, two market
   holidays); the payrolls file has October 2025 published late, with November. Re-save them with a
   real call rather than editing by hand, and check a new file for the key before committing it.
+- **`RssClientTests`** needs **no container**: `RssClient.Parse` directly, and `GetAsync` over a
+  `CountingHandler` stub. `Modules/News/*.xml` are real answers from all three feeds, saved
+  2026-11-21; the csproj copies them to the test output. Investing.com's file has no extracts and its
+  own date format; FXStreet's has extracts over 300 characters, so the cut runs on real data. No file
+  has HTML in an extract or a `+0000` date, so those cases are inline XML. Re-save with a real call
+  rather than editing by hand.
 - **`FredImporterTests`** uses the Postgres collection and deletes every `macro_series` row in
   `InitializeAsync` (observations go with them by cascade), and every `macro_releases` row. Each save gets a fresh `DbContext`, as
   each poll would. Warnings are the `ListAppLog` entries at `LogLevel.Warning`.
