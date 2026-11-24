@@ -7,8 +7,8 @@ using Aurum.App.SharedKernel.Constants;
 namespace Aurum.App.Infrastructure.Pricing.News;
 
 /// <summary>
-/// Reads one RSS 2.0 feed and returns its usable items, in feed order. Fetch only; the caller filters
-/// and saves. An item with no title, no link, a link too long to store, or no readable date is skipped.
+/// Reads one RSS 2.0 feed and returns its usable items, in feed order, with how many items it held.
+/// Fetch only; the caller filters and saves. An item with no title, no link, a link too long to store, or no readable date is skipped.
 /// </summary>
 /// <remarks>
 /// <c>System.Xml.Linq</c>, not <c>System.ServiceModel.Syndication</c>: four fields from RSS 2.0 don't
@@ -29,7 +29,7 @@ public partial class RssClient(HttpClient http)
         "MMM d, yyyy HH:mm 'GMT'",        // Investing.com: not RFC 822 at all
     ];
 
-    public async Task<IReadOnlyList<RssItem>> GetAsync(NewsFeed feed, CancellationToken ct)
+    public async Task<RssRead> GetAsync(NewsFeed feed, CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, feed.Url);
         request.Headers.UserAgent.ParseAdd(BrowserUserAgent);
@@ -45,10 +45,11 @@ public partial class RssClient(HttpClient http)
     }
 
     /// <summary>Pure, so parsing and the skip rules test without HTTP.</summary>
-    internal static IReadOnlyList<RssItem> Parse(string xml)
+    internal static RssRead Parse(string xml)
     {
+        var all = XDocument.Parse(xml).Descendants("item").ToList();
         var items = new List<RssItem>();
-        foreach (var item in XDocument.Parse(xml).Descendants("item"))
+        foreach (var item in all)
         {
             var title = Clean((string?)item.Element("title"));
             var link = ((string?)item.Element("link"))?.Trim();
@@ -69,7 +70,7 @@ public partial class RssClient(HttpClient http)
                 publishedAt));
         }
 
-        return items;
+        return new RssRead(all.Count, items);
     }
 
     private static bool TryParseDate(string? text, out DateTimeOffset utc) =>

@@ -45,7 +45,7 @@ public sealed class AurumApiFactory(PostgresFixture postgres) : WebApplicationFa
                 services.AddSingleton<IPriceSource>(ScriptedPriceSource.Faulting(code, "no network in tests"));
             }
 
-            foreach (var job in new[] { typeof(PricePollingService), typeof(MacroPollingService) })
+            foreach (var job in new[] { typeof(PricePollingService), typeof(MacroPollingService), typeof(NewsPollingService) })
             {
                 services.Remove(services.Single(d =>
                     d.ServiceType == typeof(IHostedService) && d.ImplementationType == job));

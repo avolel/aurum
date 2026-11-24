@@ -20,10 +20,39 @@ public class RssClientTests
 
     private const string GoodDate = "<pubDate>Fri, 20 Nov 2026 21:58:41 GMT</pubDate>";
 
+    /// <summary>The usable items only; the tests of <see cref="RssRead.ItemsInFeed"/> call Parse directly.</summary>
+    private static IReadOnlyList<RssItem> Items(string xml) => RssClient.Parse(xml).Items;
+
+    [Fact]
+    public void Parse_CountsSkippedItemsInTheFeed()
+    {
+        var read = RssClient.Parse(Feed("<title>Gold</title>" + GoodDate, "<title>Kept</title><link>https://x.test/kept</link>" + GoodDate));
+
+        Assert.Equal(2, read.ItemsInFeed);
+        Assert.Single(read.Items);
+        Assert.False(read.NoneUsable);
+    }
+
+    [Fact]
+    public void Parse_EveryItemUnreadable_IsNoneUsable()
+    {
+        // The case the timer warns about: a publisher changed its date format.
+        var read = RssClient.Parse(Feed(
+            "<title>Gold</title><link>https://x.test/a</link><pubDate>2026-11-20T19:26:00</pubDate>",
+            "<title>Fed</title><link>https://x.test/b</link><pubDate>2026-11-20T19:27:00</pubDate>"));
+
+        Assert.True(read.NoneUsable);
+    }
+
+    [Fact]
+    public void Parse_EmptyFeed_IsNotNoneUsable() =>
+        // A quiet feed is normal, not a warning.
+        Assert.False(RssClient.Parse(Feed()).NoneUsable);
+
     [Fact]
     public void Parse_SavedInvestingCommodities_ReadsItsOwnDateFormat()
     {
-        var items = RssClient.Parse(Saved("investing-commodities.xml"));
+        var items = Items(Saved("investing-commodities.xml"));
 
         Assert.Equal(10, items.Count);
         var first = items[0];
@@ -37,7 +66,7 @@ public class RssClientTests
     [Fact]
     public void Parse_SavedFxStreet_ReadsCdataAndCutsLongExtracts()
     {
-        var items = RssClient.Parse(Saved("fxstreet-news.xml"));
+        var items = Items(Saved("fxstreet-news.xml"));
 
         Assert.Equal(30, items.Count);
         Assert.Equal("The Euro takes a priced-in hike into a week that belongs to American inflation", items[0].Title);
@@ -50,7 +79,7 @@ public class RssClientTests
     [Fact]
     public void Parse_SavedCnbcFinance_ReadsItems()
     {
-        var items = RssClient.Parse(Saved("cnbc-finance.xml"));
+        var items = Items(Saved("cnbc-finance.xml"));
 
         Assert.Equal(30, items.Count);
         Assert.Equal("How China is using summits to expand its global influence", items[0].Title);
@@ -65,7 +94,7 @@ public class RssClientTests
     public void Parse_SavedFeed_EveryDateIsUtc(string file)
     {
         // Npgsql writes offset zero only; anything else throws on save.
-        Assert.All(RssClient.Parse(Saved(file)), i => Assert.Equal(TimeSpan.Zero, i.PublishedAt.Offset));
+        Assert.All(Items(Saved(file)), i => Assert.Equal(TimeSpan.Zero, i.PublishedAt.Offset));
     }
 
     [Theory]
@@ -74,7 +103,7 @@ public class RssClientTests
     [InlineData("Fri, 20 Nov 2026 21:58:41 GMT")]
     public void Parse_OffsetDate_ComesBackAsUtc(string date)
     {
-        var item = Assert.Single(RssClient.Parse(Feed($"<title>Gold</title><link>https://x.test/a</link><pubDate>{date}</pubDate>")));
+        var item = Assert.Single(Items(Feed($"<title>Gold</title><link>https://x.test/a</link><pubDate>{date}</pubDate>")));
 
         Assert.Equal(new DateTimeOffset(2026, 11, 20, 21, 58, 41, TimeSpan.Zero), item.PublishedAt);
         Assert.Equal(TimeSpan.Zero, item.PublishedAt.Offset);
@@ -90,7 +119,7 @@ public class RssClientTests
     public void Parse_UnusableItem_IsSkipped(string item)
     {
         // A good item beside it proves the skip is per item, not the whole feed.
-        var items = RssClient.Parse(Feed(item, "<title>Kept</title><link>https://x.test/kept</link>" + GoodDate));
+        var items = Items(Feed(item, "<title>Kept</title><link>https://x.test/kept</link>" + GoodDate));
 
         Assert.Equal("Kept", Assert.Single(items).Title);
     }
@@ -100,7 +129,7 @@ public class RssClientTests
     {
         var link = "https://x.test/" + new string('a', NewsArticleConstants.MaxUrlLength);
 
-        Assert.Empty(RssClient.Parse(Feed($"<title>Gold</title><link>{link}</link>{GoodDate}")));
+        Assert.Empty(Items(Feed($"<title>Gold</title><link>{link}</link>{GoodDate}")));
     }
 
     [Fact]
@@ -109,7 +138,7 @@ public class RssClientTests
         var words = string.Concat(Enumerable.Repeat("gold rallies ", 40));
         var description = $"<![CDATA[<p>Gold &amp; <b>silver</b></p>\n\n<a href=\"https://x.test\">{words}</a>]]>";
 
-        var extract = Assert.Single(RssClient.Parse(Feed(
+        var extract = Assert.Single(Items(Feed(
             $"<title>Gold</title><link>https://x.test/a</link>{GoodDate}<description>{description}</description>"))).Extract!;
 
         Assert.StartsWith("Gold & silver gold rallies", extract);
@@ -120,7 +149,7 @@ public class RssClientTests
     [Fact]
     public void Parse_EmptyExtract_IsNull()
     {
-        var item = Assert.Single(RssClient.Parse(Feed(
+        var item = Assert.Single(Items(Feed(
             $"<title>Gold</title><link>https://x.test/a</link>{GoodDate}<description><![CDATA[<p> </p>]]></description>")));
 
         Assert.Null(item.Extract);
@@ -131,7 +160,7 @@ public class RssClientTests
     {
         var title = new string('g', NewsArticleConstants.MaxTitleLength + 50);
 
-        var item = Assert.Single(RssClient.Parse(Feed($"<title>{title}</title><link>https://x.test/a</link>{GoodDate}")));
+        var item = Assert.Single(Items(Feed($"<title>{title}</title><link>https://x.test/a</link>{GoodDate}")));
 
         Assert.Equal(NewsArticleConstants.MaxTitleLength, item.Title.Length);
     }
@@ -146,9 +175,9 @@ public class RssClientTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Saved("fxstreet-news.xml")) };
         });
 
-        var items = await new RssClient(new HttpClient(stub)).GetAsync(NewsFeed.FxStreet, CancellationToken.None);
+        var read = await new RssClient(new HttpClient(stub)).GetAsync(NewsFeed.FxStreet, CancellationToken.None);
 
-        Assert.Equal(30, items.Count);
+        Assert.Equal((30, 30), (read.ItemsInFeed, read.Items.Count));
         Assert.Equal(NewsFeed.FxStreet.Url, sent!.RequestUri);
         Assert.Contains("Mozilla/5.0", sent.Headers.UserAgent.ToString());
     }
