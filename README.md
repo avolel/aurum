@@ -287,8 +287,11 @@ articles, so the app has to save the news as it appears. It can't fetch it later
 - **There's no web address for news yet.** The news screen and `/news` come in Phase 3.
 - **Checked with a real run on 2026-11-24.** The first pass saved 31 articles from the three feeds.
   The second, 15 minutes later, saved none, because every link was already stored.
-- **Not checked yet:** the three sites' terms of use. That's fine for a personal build, but they
-  need reading before any launch.
+- **The sites' terms don't all allow this.** I read them on 2026-11-24. FXStreet allows personal
+  use. Investing.com's and CNBC's terms, taken word for word, forbid reading their sites with
+  automated tools at all. I keep all three because I'm the only person who uses Aurum, and it won't
+  be launched for public use. Showing this news to anyone else would need each site's written
+  permission. D-29 quotes the clauses.
 
 ## Decisions that were made without testing
 

@@ -8,8 +8,9 @@ saves BLS's figure a minute after a CPI or jobs release, and reads FRED again an
 release. The Fed's rate decisions are in the same calendar, from a list kept by hand.
 `/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Item 2 is built:
 `NewsPollingService` reads three news feeds every 15 minutes and saves the gold-related articles.
-A real run on 2026-11-24 saved articles from all three. The feeds' terms are still to be read before
-any launch. Nothing else has been started.
+A real run on 2026-11-24 saved articles from all three. The feeds' terms were read the same day:
+two forbid automated reading on their wording, accepted because only I use the app (D-29). Nothing
+else has been started.
 I last checked it against the code on 2026-11-24.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
@@ -276,8 +277,11 @@ The code is in `src/Aurum.App.Infrastructure.Pricing/News/`, and its `CLAUDE.md`
 - [x] RSS readers for 3 feeds (2026-11-21, D-29): **Investing.com commodities, FXStreet and CNBC
       Finance**, in `NewsFeed.All`. The plan's Kitco and MarketWatch were dropped. Kitco has no feed,
       and its terms ban automated retrieval. MarketWatch's market feeds stopped updating in mid-2025.
-  - [ ] Read the terms of the three feeds before any launch (§12). CNBC's point to Versant's terms.
-        Not needed for this personal build.
+  - [x] Read the terms of the three feeds (§12), 2026-11-24. CNBC's point to Versant's terms.
+        Investing.com and Versant forbid automated retrieval and copying, even for personal use,
+        on their wording. FXStreet allows personal and private use. I keep all three for my own
+        use only. Aurum won't be launched for public use; anyone else seeing the news would
+        need each publisher's written permission first (D-29).
   - Investing.com's dates aren't in the standard RSS format (`Nov 20, 2026 19:26 GMT`), so
     `RssClient` reads three exact date formats. A date it can't read skips that article.
   - One real answer from each feed is saved in `src/Aurum.Api.Tests/Modules/News/` for the tests.

@@ -2500,9 +2500,29 @@ Decided by me on 2026-11-21, built 2026-11-21 to 2026-11-23.
 - **FXStreet's news feed** holds 30 articles, covering about 10 hours, with extracts.
 - **CNBC's Finance feed** holds 30 articles over about 10 days. It's mostly Fed and market news.
 
-I haven't read the terms of the three feeds I kept. CNBC's point to Versant's terms. The BRD's
-assumption that free RSS feeds may be collected (§12) covers a personal build. They need reading
-before any launch.
+**What the three feeds' terms say (read 2026-11-24).** None of them mentions RSS feeds by name. Two of
+them, taken word for word, forbid what the app does, even for one person's own use:
+
+| Feed | Personal use, as the app does it | Any public or paid use | The clause |
+|---|---|---|---|
+| Investing.com (terms last changed August 2026) | Forbidden by the wording | Forbidden | §10(c): "expressly forbidden from employing any automated system or software to extract data or content from this website", for any purpose. §14 limits copying or storing its market information, which includes news, to internal, non-commercial use. |
+| FXStreet (no date shown) | Allowed | Needs FXStreet's permission | §4 bans copying and reproduction "except for personal and private use". Nothing about automated reading. §5 says linking to its pages needs consent. |
+| CNBC, which uses Versant's terms (effective 2025-09-30; CNBC's own page updated 2026-04-28) | Forbidden by the wording | Forbidden | Versant's Prohibited Actions, item 12: no "crawlers, or other data gathering or extraction tools" to "access, acquire, copy, monitor, scrape or aggregate Content". Item 6: no copying or archiving without written permission. |
+
+So the BRD's assumption that these feeds allow headlines and links to be collected (§12) holds for
+FXStreet's personal-use clause only.
+
+**I keep all three anyway, for my own use only** (decided 2026-11-24). The feeds are published for
+feed readers to fetch on a schedule. The app reads each one 4 times an hour and keeps the headline,
+link and a short extract, which is what any feed reader does. Aurum has one user, me, and won't be
+launched for public use. The risk is that Investing.com or Versant treats this as the automated
+retrieval their terms ban. The worst case is a blocked feed or a request to stop. Either one stops
+that feed's articles, and the other two carry on. If Aurum were ever offered to anyone else, all
+three would need written permission or replacing first. That would also need these pages read again,
+since each site can change its terms at any time.
+
+I didn't read three related pages: FXStreet's own RSS and API pages, FXStreet's terms for its paid
+service, and CNBC's licensing page. This is a plain reading of the text, not legal advice.
 
 **Why filter before saving.** The table then holds only articles item 6 can use, so item 6's search
 is a time range and nothing else. Most of CNBC's articles have nothing to do with gold, and nothing
@@ -2547,6 +2567,9 @@ one problem, so the warning is written once and the feed stays quiet until it re
 - The "can't read this feed" state is kept in memory, so a restart writes the warning once more for a
   feed that is still broken.
 - Old articles aren't deleted yet. §11 keeps news for 60 days, and that is work for before launch.
+- Investing.com's and Versant's terms, word for word, forbid the app reading their feeds
+  automatically. I accept that for a build only I use. Shown to anyone else, it would need their
+  written permission.
 
 Turned down:
 

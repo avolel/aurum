@@ -17,8 +17,12 @@ NewsPollingService ─┬─ RssClient.GetAsync(feed)      → RssRead (ItemsInF
 
 - **Kitco and MarketWatch are out** (D-29). Kitco has no feed, and its terms ban automated retrieval.
   MarketWatch's market feeds stopped updating in mid-2025.
-- **The three feeds' terms haven't been read.** BRD §12's RSS assumption covers a personal build.
-  Read them before any launch.
+- **The feeds' terms were read 2026-11-24 (D-29 quotes them).** Investing.com (§10(c)) and CNBC
+  (Versant's Prohibited Actions, item 12) ban automated retrieval and copying even for personal use;
+  FXStreet allows "personal and private use". All three are kept because the app has one user and
+  won't be launched publicly. **Never expose `news_articles` to anyone else** (an endpoint other
+  people can reach, a shared screen, a copy of the table) without written permission from each
+  publisher, or replacement feeds.
 
 ## The reader (`RssClient.cs`)
 
