@@ -12,6 +12,7 @@ using FluentValidation;
 using MediatR;
 using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Macro;
+using Aurum.App.Infrastructure.Pricing.News;
 using Aurum.App.Infrastructure.Pricing.Quota;
 using Aurum.App.Infrastructure.Pricing.Realtime;
 using Aurum.App.Infrastructure.Pricing.Sources;
@@ -200,6 +201,25 @@ builder.Services.AddScoped<FredImporter>();
 
 // The only macro writer (D-23).
 builder.Services.AddHostedService<MacroPollingService>();
+
+// ── News ──────────────────────────────────────────────────────────────────────────────────────
+
+builder.Services.AddOptions<NewsPollingOptions>()
+    .BindConfiguration(NewsPollingOptions.SectionName)
+    .Validate(
+        o => o.Interval > TimeSpan.Zero,
+        $"{NewsPollingOptions.SectionName}:Interval must be set to a positive interval.")
+    .ValidateOnStart();
+
+// Standard retries only, no QuotaHandler: the feeds have no allowance. The feed's absolute URL is
+// the request, so no BaseAddress.
+builder.Services.AddHttpClient<RssClient>().AddStandardResilienceHandler();
+
+// Scoped: it holds the request's AurumDbContext.
+builder.Services.AddScoped<NewsImporter>();
+
+// The only news writer, so NewsImporter's load-then-insert is safe.
+builder.Services.AddHostedService<NewsPollingService>();
 
 // ── Health ────────────────────────────────────────────────────────────────────────────────────
 

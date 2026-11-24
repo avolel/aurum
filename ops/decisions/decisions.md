@@ -55,6 +55,10 @@ When you add a decision, add a line for it here too.
 - [D-23 — BLS supplies the release-morning figure, and FRED's first published value replaces it](#d-23--bls-supplies-the-release-morning-figure-and-freds-first-published-value-replaces-it)
 - [D-24 — App logging is its own project](#d-24--app-logging-is-its-own-project)
 - [D-25 — The app's own log lines go to the database only](#d-25--the-apps-own-log-lines-go-to-the-database-only)
+- [D-26 — The release calendar wakes the macro timer, and BLS is read inside it](#d-26--the-release-calendar-wakes-the-macro-timer-and-bls-is-read-inside-it)
+- [D-27 — A figure's age is counted from when it came out, and the snapshot shows only what was public then](#d-27--a-figures-age-is-counted-from-when-it-came-out-and-the-snapshot-shows-only-what-was-public-then)
+- [D-28 — The Fed's rate decisions are a hand-kept list in the release calendar](#d-28--the-feds-rate-decisions-are-a-hand-kept-list-in-the-release-calendar)
+- [D-29 — News comes from three RSS feeds, is filtered before it's saved, and is read every 15 minutes](#d-29--news-comes-from-three-rss-feeds-is-filtered-before-its-saved-and-is-read-every-15-minutes)
 
 ## The machine these decisions were made on
 
@@ -240,9 +244,10 @@ controller going around MediatR to reach database or pricing code directly.
   far more to the rest of the code than this one exception does.
 
   *Since D-20:* `SourceCircuitStore` is public, so the sources endpoint can read every circuit. Its
-  constructor and `For()` stay internal. Nine internal types are named in `Program.cs`:
+  constructor and `For()` stay internal. Eleven internal types are named in `Program.cs`:
   `QueryKeyAuthHandler`, `RegisteredPriceSource`, the two settings checkers, `LatestQuoteCache`,
-  `DeltaEngine`, `FailoverPriceFeed`, `FredImporter` and `MacroPollingService`.
+  `DeltaEngine`, `FailoverPriceFeed`, `FredImporter`, `MacroPollingService`, and since D-29
+  `NewsImporter` and `NewsPollingService`.
 - `Program.AddPriceSource<T>` had to become a method on the `Program` class, not a function written
   inside `Program.cs`'s top-level code. Functions written that way can't be reached from the test
   project. `ResilienceWiringTests` pins down the order of two lines in that method: the retry setup
@@ -2458,3 +2463,126 @@ Turned down:
 - **Watching FRED's target-rate series (`DFEDTARU`) for changes.** It only shows decisions that
   change the rate, not ones that hold it. The change also appears the next day, which is too late
   for "the Fed decided today".
+
+## D-29 — News comes from three RSS feeds, is filtered before it's saved, and is read every 15 minutes
+
+**DECIDED:**
+
+- The news for item 6, the step that explains price moves, comes from three RSS feeds. RSS is the
+  standard format news sites publish their headlines in. The feeds are Investing.com's commodities
+  feed, FXStreet's news feed and CNBC's Finance feed. They are listed in `NewsFeed.All`.
+- Only gold-related articles are saved. An article counts when its headline or extract contains one
+  of these words: gold, bullion, precious metal(s), XAU, Fed, Federal Reserve, FOMC, interest
+  rate(s), inflation, CPI, PCE, Treasury yield(s), dollar or safe haven. Only whole words count, and
+  case doesn't matter. The check is `GoldNews.IsRelated`, and it runs before saving.
+- Each article keeps only its headline, link, a short extract of at most 300 characters, its publish
+  time in UTC and which feed it came from (FR-3.7). They go in the `news_articles` table.
+- The link is the only duplicate check, across all three feeds. If two feeds carry the same link,
+  the feed that saved it first keeps the credit.
+- `NewsPollingService` reads every feed when the app starts, then again 15 minutes after each pass
+  finishes (`News:Polling:Interval`). Each feed is read on its own, so a broken one can't stop the
+  others.
+- A date is read only in one of three exact formats, each with a time zone. A date the app can't
+  read skips that article.
+- If a feed has articles but none of them can be read, a warning is written to `app_logs` once.
+  Nothing more is written until the feed works again, which writes one "recovered" row.
+
+Decided by me on 2026-11-21, built 2026-11-21 to 2026-11-23.
+
+**Why these feeds.** The phase plan named Kitco, MarketWatch and CNBC. I checked each on 2026-11-21:
+
+- **Kitco has no feed.** Every address I tried gave a 404 or an HTML page. Its terms also ban
+  automated retrieval and storing its content.
+- **MarketWatch's feeds aren't usable.** Its Top Stories feed is personal finance. Its two market
+  feeds stopped updating in mid-2025.
+- **Investing.com's commodities feed** holds 10 articles, covering about 7.5 hours, and about half
+  are about gold. It has no extracts.
+- **FXStreet's news feed** holds 30 articles, covering about 10 hours, with extracts.
+- **CNBC's Finance feed** holds 30 articles over about 10 days. It's mostly Fed and market news.
+
+**What the three feeds' terms say (read 2026-11-24).** None of them mentions RSS feeds by name. Two of
+them, taken word for word, forbid what the app does, even for one person's own use:
+
+| Feed | Personal use, as the app does it | Any public or paid use | The clause |
+|---|---|---|---|
+| Investing.com (terms last changed August 2026) | Forbidden by the wording | Forbidden | §10(c): "expressly forbidden from employing any automated system or software to extract data or content from this website", for any purpose. §14 limits copying or storing its market information, which includes news, to internal, non-commercial use. |
+| FXStreet (no date shown) | Allowed | Needs FXStreet's permission | §4 bans copying and reproduction "except for personal and private use". Nothing about automated reading. §5 says linking to its pages needs consent. |
+| CNBC, which uses Versant's terms (effective 2025-09-30; CNBC's own page updated 2026-04-28) | Forbidden by the wording | Forbidden | Versant's Prohibited Actions, item 12: no "crawlers, or other data gathering or extraction tools" to "access, acquire, copy, monitor, scrape or aggregate Content". Item 6: no copying or archiving without written permission. |
+
+So the BRD's assumption that these feeds allow headlines and links to be collected (§12) holds for
+FXStreet's personal-use clause only.
+
+**I keep all three anyway, for my own use only** (decided 2026-11-24). The feeds are published for
+feed readers to fetch on a schedule. The app reads each one 4 times an hour and keeps the headline,
+link and a short extract, which is what any feed reader does. Aurum has one user, me, and won't be
+launched for public use. The risk is that Investing.com or Versant treats this as the automated
+retrieval their terms ban. The worst case is a blocked feed or a request to stop. Either one stops
+that feed's articles, and the other two carry on. If Aurum were ever offered to anyone else, all
+three would need written permission or replacing first. That would also need these pages read again,
+since each site can change its terms at any time.
+
+I didn't read three related pages: FXStreet's own RSS and API pages, FXStreet's terms for its paid
+service, and CNBC's licensing page. This is a plain reading of the text, not legal advice.
+
+**Why filter before saving.** The table then holds only articles item 6 can use, so item 6's search
+is a time range and nothing else. Most of CNBC's articles have nothing to do with gold, and nothing
+deletes old articles yet (§11), so saving everything would fill the table with news nobody reads.
+The cost is that adding a word to the list doesn't reach articles already skipped. Item 6 only reads
+the 8 hours before a move, so a change to the list is fully in effect within a day.
+
+**Why keep "dollar" and "inflation", though they let in currency news.** On the saved test files,
+the list keeps 5 of 10 Investing.com articles, 7 of 30 CNBC ones (all Fed news) and 19 of 30 from
+FXStreet. Most of FXStreet's are about other currencies, such as "Chinese Yuan: Brief dip against US
+Dollar". I tried a narrower list, with "US dollar" or "dollar index" in place of "dollar", and no
+"inflation". FXStreet only dropped to 12, because its currency notes say "US Dollar" anyway. It also
+dropped "…a week that belongs to American inflation", which matters for gold. The filter runs before
+saving, so an article it wrongly skips is gone for good. An article it wrongly keeps costs one row,
+and item 6 can ignore it, for example by ranking articles that name gold itself first.
+
+**Why every 15 minutes.** Investing.com keeps only 10 articles, and on a busy day that can be less
+than an hour of news. Reading every 15 minutes gives a 4× margin before an article falls off the
+feed unread. It's 12 requests an hour across the three feeds, too few for any publisher to notice.
+An article is saved at most 15 minutes after it's published. The main price service is already 15
+minutes behind (finding 4 in `ops/phase-2-todo.md`), so the articles from before a move has started
+have usually been saved by the time the move is noticed.
+
+**Why exact date formats.** A general date reader accepts a date with no time zone and treats it as
+the server's local time. The article would be stored hours off, with no error, and item 6's 8-hour
+search would miss it or include it wrongly. With exact formats, such a date skips the article.
+Investing.com's dates aren't in the standard RSS format (`Nov 20, 2026 19:26 GMT`), so they have a
+format of their own.
+
+**Why warn when nothing can be read, and only once.** That one Investing.com format is all that
+keeps the feed working. If the site changes it, every article is skipped. Without a warning the feed
+would look quiet, 0 articles saved, with no error. A warning on every pass would be 96 rows a day for
+one problem, so the warning is written once and the feed stays quiet until it recovers.
+
+**Costs I accept:**
+
+- The same story under two links, or a link that differs only by letter case or a tracking code
+  after `?`, is saved twice. Comparing the text itself is Phase 3 work.
+- Investing.com has no extracts, so the model sees only its headlines.
+- A link longer than 2,048 characters skips its article. Real links are about 130 characters.
+- An article is never updated. If a publisher changes a headline, the first one stays.
+- The "can't read this feed" state is kept in memory, so a restart writes the warning once more for a
+  feed that is still broken.
+- Old articles aren't deleted yet. §11 keeps news for 60 days, and that is work for before launch.
+- Investing.com's and Versant's terms, word for word, forbid the app reading their feeds
+  automatically. I accept that for a build only I use. Shown to anyone else, it would need their
+  written permission.
+
+Turned down:
+
+- **Kitco and MarketWatch.** Explained above.
+- **Save every article and filter when item 6 reads.** A change to the word list would then reach
+  stored articles too. But most of CNBC's unrelated news would pile up with nothing deleting it, and
+  item 6 would have to repeat the rule.
+- **A narrower word list.** Explained above.
+- **A general date reader.** Explained above.
+- **The `System.ServiceModel.Syndication` package.** It reads every kind of feed, but the app needs
+  four fields from RSS 2.0, which .NET's built-in XML reader handles.
+- **Cutting links that are too long, or sending them through a short-link table of my own.** A cut
+  link is a broken link that the duplicate check would treat as a real one. A short-link table would
+  need a web address to send readers on from, which this phase doesn't have. The citation would also
+  point at my own site instead of showing the publisher.
+- **A warning on every pass while a feed can't be read.** Explained above.

@@ -27,6 +27,14 @@ figure of each series, with how old it is (D-27). `ops/bench/fred_delay.py` meas
 provider posts a figure; the jobs report on 2026-12-04 is its next run. Nothing has yet proved that
 BLS has the figure at 08:30 sharp.
 
+The app also collects gold news now (item 2). Every 15 minutes `NewsPollingService` reads three
+RSS feeds (RSS is the standard format news sites publish headlines in): Investing.com's commodities
+feed, FXStreet and CNBC Finance. It keeps only gold-related articles and saves their headline, link,
+a short extract and publish time in `news_articles`. The explanations will cite these. The original
+plan named Kitco and MarketWatch: Kitco has no feed and its terms ban collecting it, and
+MarketWatch's market feeds stopped updating in mid-2025 (D-29). See "Gold news for the explanations"
+below.
+
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
 
@@ -57,6 +65,7 @@ The numbers in brackets, like (D-7), point to entries in the decision log,
 - [How much the price moved, and which moves are saved (items 5 and 6, done)](#how-much-the-price-moved-and-which-moves-are-saved-items-5-and-6-done)
 - [Live prices sent to connected apps (item 7, done)](#live-prices-sent-to-connected-apps-item-7-done)
 - [Reading prices over the web (item 8, done)](#reading-prices-over-the-web-item-8-done)
+- [Gold news for the explanations (Phase 2 item 2, built)](#gold-news-for-the-explanations-phase-2-item-2-built)
 - [Decisions that were made without testing](#decisions-that-were-made-without-testing)
 - [Where things are](#where-things-are)
 - [Running it](#running-it)
@@ -253,6 +262,37 @@ Phase 2 adds one more, for economic figures. Like the four above, it never calls
 - **Dates must be full timestamps**, such as `2026-10-15T00:00:00Z`. A value like `from=yesterday`
   is refused with the web framework's own error format, not the shape above.
 
+## Gold news for the explanations (Phase 2 item 2, built)
+
+The explanations in Phase 2 must cite 3 to 5 news links (BR-04). RSS feeds only show recent
+articles, so the app has to save the news as it appears. It can't fetch it later (D-29).
+
+| Feed | What it holds |
+|---|---|
+| Investing.com commodities | 10 articles, about 7.5 hours; about half are about gold; no extracts |
+| FXStreet | 30 articles, about 10 hours; mostly currencies; has extracts |
+| CNBC Finance | 30 articles, about 10 days; Fed and market news |
+
+- **The app reads all three when it starts, then every 15 minutes.** Investing.com keeps only 10
+  articles, so a slower schedule could miss some. Each feed is read on its own, so one broken feed
+  doesn't stop the others.
+- **Only gold-related articles are saved.** An article counts when its headline or extract has a
+  word such as gold, bullion, Fed, inflation, CPI, Treasury yields or dollar. Whole words only, so
+  "Goldman" doesn't count. "Dollar" and "inflation" also let in news about other currencies. I kept
+  them anyway, because a narrower list also dropped news that matters for gold.
+- **Each link is saved once**, even when two feeds carry the same story.
+- **A feed that stops making sense writes one warning** to `app_logs` (`NewsFeedUnreadable`), and
+  then nothing more until it recovers. The most likely cause is a site changing how it writes dates.
+  Investing.com already writes them in its own format.
+- **There's no web address for news yet.** The news screen and `/news` come in Phase 3.
+- **Checked with a real run on 2026-11-24.** The first pass saved 31 articles from the three feeds.
+  The second, 15 minutes later, saved none, because every link was already stored.
+- **The sites' terms don't all allow this.** I read them on 2026-11-24. FXStreet allows personal
+  use. Investing.com's and CNBC's terms, taken word for word, forbid reading their sites with
+  automated tools at all. I keep all three because I'm the only person who uses Aurum, and it won't
+  be launched for public use. Showing this news to anyone else would need each site's written
+  permission. D-29 quotes the clauses.
+
 ## Decisions that were made without testing
 
 Three early experiments were closed without being run. D-1 and D-2 are decisions I stated rather
@@ -262,10 +302,10 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-25** so far. `ops/phase-2-todo.md` lists the next work in an order
-where each item can be checked when it is finished. Its first item closed D-6, the FRED client
-added D-22, and the BLS client added D-23. A decision number is only given out when the decision is
-actually made, so the next one will be D-26.
+The decision log has **D-1 to D-29** so far. `ops/phase-2-todo.md` lists the next work in an order
+where each item can be checked when it is finished. Its first item closed D-6. Item 1, the economic
+figures, added D-22, D-23 and D-26 to D-28, and item 2, the news feed, added D-29. A decision number
+is only given out when the decision is actually made, so the next one will be D-30.
 
 ## Where things are
 
@@ -287,11 +327,14 @@ src/Aurum.App.Infrastructure.Pricing/
   Quota/                           the request counter
   Cache/                           the latest price, kept in memory
   Deltas/                          how much the price moved, and which moves become events
-  Jobs/                            the two timers: one checks the price, one fetches economic
-                                   figures every six hours and on release mornings
+  Jobs/                            the three timers: one checks the price, one fetches economic
+                                   figures every six hours and on release mornings, and one reads
+                                   the news feeds every 15 minutes
   Realtime/                        the interface the timer uses to send prices to apps
   Macro/                           fetches economic figures from FRED, and from BLS on release
                                    morning; saves both; the release dates and their times of day
+  News/                            reads the three news feeds, keeps the gold-related articles,
+                                   and saves them
 src/Aurum.App.Application/         the rules for handling requests
   Prices/                          the four price endpoints' queries, input checks and answers
   Macro/                           the economic-figures endpoint's query, input check and answer
@@ -305,8 +348,8 @@ app/                               the start of the mobile app; nothing much in 
 The code is split into six projects, based on the layout in `docs/best-practices-api.md`, with two
 differences recorded in D-5:
 
-- The code that talks to outside price services and runs the timer has its own project,
-  `Infrastructure.Pricing`, because it doesn't fit the database project.
+- The code that talks to outside services (prices, economic figures and news) and runs the timers
+  has its own project, `Infrastructure.Pricing`, because it doesn't fit the database project.
 - `Aurum.Api` can see every other project, because it is the one place where everything gets
   connected together.
 
@@ -340,7 +383,8 @@ on every request for a month, and every turned-away request still counts against
 fake key in the settings file would bring that problem back. The FRED key follows the same rule.
 FRED has no monthly allowance, but without a key every request would fail. FRED's only limit is 120
 requests a minute per key (D-22). The BLS key follows the same rule. BLS allows 500 requests a day
-and 50 every 10 seconds (D-23). A free key comes from data.bls.gov/registrationEngine.
+and 50 every 10 seconds (D-23). A free key comes from data.bls.gov/registrationEngine. The news feeds
+need no key, so there's nothing to add to `.env` for them.
 
 **A setting in `.env` only reaches the API if `docker-compose.yml` lists it.** Compose passes on
 the variables named under the `api` service and nothing else, and it gives no warning about the
@@ -382,8 +426,9 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 293 test methods (counted on 2026-11-16 by searching for `[Fact]` and `[Theory]`). The 27
-`[Theory]` methods run once per `[InlineData]` line, so more test cases run than that. Most of them start a
+There are 374 test methods (counted on 2026-11-23 by searching for `[Fact]` and `[Theory]`). The 33
+`[Theory]` methods run once per `[InlineData]` line, so more test cases run than that: 457 on
+2026-11-23. Most of them start a
 real copy of the database in Docker rather than a fake one, because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
@@ -417,8 +462,8 @@ Tests worth knowing about:
   a switch between services that must not look like a move. A small amount of noise is added from a
   fixed seed, so the prices are the same every run. It needs no Docker (D-21).
 - **`AurumApiFactory`** starts the whole API from `Program.cs` inside a test, against the test
-  database. It removes both timers (prices and FRED) and swaps the three price services for stand-ins that never
-  make a web request. A test that used it could otherwise spend real requests from a 100-request
+  database. It removes all three timers (prices, economic figures and news) and swaps the three price
+  services for stand-ins that never make a web request. A test that used it could otherwise spend real requests from a 100-request
   month (D-21).
 
 **Some tests guard a decision, not a bug.** For example, the app never gives back a request that failed,

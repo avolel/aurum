@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. Item 2, the news feed, is built and checked with a real run. Two of its three feeds' terms forbid automated reading on their wording, which D-29 accepts for a build only the owner uses. |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -26,7 +26,8 @@ three jobs and core-price series. On 2026-11-12 the BLS client and the BLS check
 was added to sections 2, 11 and 13. Later on 2026-11-14 an audit fixed drift in sections 2, 3, 10,
 11, 12 and 13. On 2026-11-18 the release calendar, the release-morning fetch and
 `/api/v1/macro/snapshot` were added to sections 1, 2, 3, 11, 12, 13, 15 and 16. On 2026-11-20 the
-Fed's rate decisions were added to sections 1, 2, 3, 11, 13 and 15 (D-28).
+Fed's rate decisions were added to sections 1, 2, 3, 11, 13 and 15 (D-28). On 2026-11-23 the news
+feed was added to sections 1, 2, 3, 10, 11, 13 and 15 (D-29).
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -93,6 +94,12 @@ two health checks are `/health` and `/health/ready`.
 jobs release. The Fed's rate decision days are saved too, from a list kept by hand, so item 6 can
 tell that the Fed decided that day (D-28). `/api/v1/macro/snapshot` returns the newest figure of
 each series, with its age (section 12).
+
+**And it collects gold news.** `NewsPollingService` reads three RSS feeds (Investing.com
+commodities, FXStreet and CNBC Finance) at startup and every 15 minutes. It keeps only articles
+whose headline or extract mentions gold or something that moves it, and saves each link once in
+`news_articles` (D-29). The explanations planned for Phase 2 will cite them. There's no web address
+for news yet.
 
 This is one poll. **`PricePollingService` drives every step.** Each solid arrow is one call the
 poller makes, numbered in order. The label says what goes in and what comes out. An arrow with a head
@@ -229,6 +236,7 @@ projects can't use each other, because the build refuses a loop (D-24).
 | `Constants/PriceEventDirection.cs` | `"Up"` and `"Down"`, for the `price_events` table. |
 | `Constants/FredConstants.cs` | FRED's date format (`yyyy-MM-dd`) and the `"."` it sends for a period with no figure. |
 | `Constants/BlsConstants.cs` | BLS's success status (`REQUEST_SUCCEEDED`), the `"-"` it sends for a period with no figure, and `M13`, its annual average, which the client skips. |
+| `Constants/NewsArticleConstants.cs` | The size of each `news_articles` text column: source 64, title 512, link 2,048, extract 300. The table setup and `RssClient` both read it. `RssClient` cuts titles and extracts to fit and skips an article whose link is too long, because one value that is too long fails the whole feed's save. |
 | `Constants/AppLogColumnLengths.cs` | The size of each `app_logs` text column. The table setup and `AppLogService` both read it, and the service cuts every field to fit, because one value that is too long fails the whole batch. |
 | `Entities/AuditableEntity.cs` | Base class that gives every table `CreatedAt` and `UpdatedAt`. |
 
@@ -240,9 +248,10 @@ projects can't use each other, because the build refuses a loop (D-24).
 | `AurumDbContextFactory.cs` | Used only by the `dotnet ef` command-line tool, so migrations can run without starting the app. Never runs in production. |
 | `Entities/Pricing/*.cs` | `PriceTick`, `PriceSource`, `PriceEvent`, `ApiQuotaWindow`. |
 | `Entities/Macro/*.cs` | `MacroSeries`, `MacroObservation` (the first migration creates their tables) and `MacroRelease`, one calendar row (`AddMacroReleases`). `FredImporter` writes all three, called by `MacroPollingService`. |
+| `Entities/News/NewsArticle.cs` | One saved news article: feed, headline, link, extract, publish time (`AddNewsArticles`). `NewsImporter` writes it, called by `NewsPollingService`. |
 | `Entities/Logging/AppLog.cs` | One row of the app's own durable log. |
 | `Repositories/IUnitOfWork.cs` | `IUnitOfWork` and `UnitOfWork`: save changes, or run work inside one database transaction. |
-| `Migrations/` | Eight migrations: initial schema, extra price-service rows, app logs, price events, dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns, the log level column, and the release calendar, one migration each. |
+| `Migrations/` | Nine migrations: initial schema, extra price-service rows, app logs, price events, dropping the unused `price_sources.IsEnabled` and `price_sources.Priority` columns (one each), the log level column, the release calendar, and news articles. |
 
 **`Aurum.App.Infrastructure.Pricing`** — almost all of the real logic lives here.
 
@@ -253,7 +262,8 @@ Aurum.App.Infrastructure.Pricing/
 ├── PriceFeedCircuitOptionsValidator.cs ← refuses bad circuit-breaker settings at startup
 ├── Jobs/
 │   ├── PricePollingService.cs          ← the 15-minute timer; the heart of the app
-│   └── MacroPollingService.cs          ← the 6-hour FRED refresh, plus the release-morning BLS and FRED reads
+│   ├── MacroPollingService.cs          ← the 6-hour FRED refresh, plus the release-morning BLS and FRED reads
+│   └── NewsPollingService.cs           ← reads the three news feeds at startup and every 15 minutes (D-29)
 ├── Sources/
 │   ├── IPriceSource.cs                 ← "one price service"
 │   ├── GoldApiIoSource.cs              ← GoldAPI
@@ -298,6 +308,14 @@ Aurum.App.Infrastructure.Pricing/
 │   ├── BlsClient.cs                    ← one request for a year of all four; checks BLS's status
 │   ├── BlsObservation.cs               ← one month's value, or none when BLS sends "-"
 │   └── BlsOptions.cs                   ← `Macro:Bls` settings: web address and key
+├── News/                               ← gold news; NewsPollingService reads and saves it (D-29)
+│   ├── NewsFeed.cs                     ← the three feeds and their codes, stored as each article's source
+│   ├── RssClient.cs                    ← reads one feed: three exact date formats, HTML removed, cut to fit
+│   ├── RssRead.cs                      ← one read: the usable articles, how many the feed had, and "none usable"
+│   ├── RssItem.cs                      ← one usable article: headline, link, extract, publish time in UTC
+│   ├── GoldNews.cs                     ← the whole-word keyword check for "gold-related"
+│   ├── NewsImporter.cs                 ← saves the related articles whose link isn't stored yet
+│   └── NewsPollingOptions.cs           ← `News:Polling` settings: how often
 └── Deltas/
     ├── IDeltaEngine.cs                 ← "how far did the price move"; the hub and handlers read it
     ├── DeltaEngine.cs                  ← works out price moves over six windows
@@ -398,12 +416,18 @@ it goes in this file.
     calendar row: `BlsClient` a minute after a CPI or jobs release, FRED an hour after every release
     (D-26). Each pass also saves the Fed's decision days from `FomcCalendar`. Nothing is fetched
     for them, and once the last day has passed each pass logs an `FomcCalendarStale` warning (D-28).
-12. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
+12. **News.** Binds `News:Polling` and checks it at startup, so a zero or negative interval stops the
+    app. Registers `RssClient`'s web client with the standard retry setup. It has no request counter,
+    because the feeds have no allowance, and no base address, because each feed's full address is
+    the request. Registers `NewsImporter` (one per scope) and adds `NewsPollingService` as a
+    background job. It reads every feed straight away, then again `Interval` after each pass ends
+    (D-29).
+13. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
-13. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
+14. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
     There is no do-nothing stand-in to replace (D-19). After the app is built, `MapHub<PriceHub>`
     puts the hub at `/hubs/price`.
-14. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
+15. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
     starts. This is only safe with one copy of the app running; two copies migrating at once would
     clash.
 
@@ -417,8 +441,8 @@ This matters, because getting it wrong causes bugs that only show up under load.
 | `IAppLogService<T>`, `IRequestContextAccessor` | Singleton | They hold no state, and the request details are read fresh on every call. One copy for the whole app lets the poller, the cache and other singletons log (D-25). |
 | `SignalRPriceBroadcaster` | Singleton | The poller is a singleton and holds it. It keeps no state; SignalR's hub context, which it uses, is a singleton too. |
 | `PriceHub` | New for every call from an app | SignalR creates a hub for each call and throws it away. Anything that must last goes in the cache, the engine or SignalR's groups. |
-| `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IUnitOfWork` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, or one poll. |
-| Each price service class, `FredClient` and `BlsClient` | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
+| `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IUnitOfWork`, `FredImporter`, `NewsImporter` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, one poll, or one series or feed in the macro and news timers. |
+| Each price service class, `FredClient`, `BlsClient` and `RssClient` | New every time ("transient") | It holds a web client, and .NET recycles the network connections behind those every few minutes. |
 
 **The singletons never hold a `DbContext`.** When they need the database (for warm-up at startup),
 they create a short scope, use it, and throw it away. If you add a singleton that reads the
@@ -1107,6 +1131,7 @@ is: `ASPNETCORE_ENVIRONMENT` (Production unless `.env` sets it, so Swagger stays
 | `Macro:Fred` | `BaseUrl`, `ApiKey` | `https://api.stlouisfed.org/fred/`, blank — **must be set** | FRED, for economic figures. `BaseUrl` must end in a slash, or the request path replaces `/fred`. Compose fills the key from `.env`'s `Macro__Fred__ApiKey`. |
 | `Macro:Bls` | `BaseUrl`, `ApiKey` | `https://api.bls.gov/publicAPI/v2/`, blank — **must be set** | BLS, for the newest month of CPI and jobs figures on release morning (D-23). `BaseUrl` must end in a slash, or the request path replaces `/v2`. Compose fills the key from `.env`'s `Macro__Bls__ApiKey`. |
 | `Macro:Polling` | `RefreshInterval`, `HistoryStart` | 6 hours, `2006-01-01` | How often `MacroPollingService` refreshes FRED. `HistoryStart` is where a series with no saved rows starts; a series that has rows re-reads from 60 days before its newest one. |
+| `News:Polling` | `Interval` | 15 minutes | How often `NewsPollingService` reads the three feeds, counted from the end of the last pass. Only in `appsettings.json`: the feeds need no key, so there's no `.env` or compose line (D-29). |
 | `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2, `gemma4:12b-it-qat` (D-6). **Nothing reads it yet.** Local models are for this personal build; production would use a paid cloud AI service instead. |
 
 The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
@@ -1150,6 +1175,7 @@ fix.
 | `Macro:Fred:ApiKey` is blank, or `Macro:Fred:BaseUrl` is missing. | `[Required]` on `FredOptions` |
 | `Macro:Bls:ApiKey` is blank, or `Macro:Bls:BaseUrl` is missing. | `[Required]` on `BlsOptions` |
 | `Macro:Polling:RefreshInterval` is not positive, or `HistoryStart` is not a past date. | `Program.cs` |
+| `News:Polling:Interval` is not positive. A zero wait would read every feed again and again with no pause. | `Program.cs` |
 
 The month check, worked through with the shipped values: 31 days ÷ 15 minutes = 2,976 polls. Each
 poll can take up to 3 tries, so up to 8,928 requests. API Ninjas allows 10,000, so it passes. GoldAPI's
@@ -1177,6 +1203,7 @@ Postgres 17 with two add-ons, in the `timescale/timescaledb-ha:pg17` image (D-3)
 | `app_logs` | One durable log entry. | `AppLogDrainService` | Nothing in code — for people |
 | `macro_series`, `macro_observations` | Economic data series and their values. A release figure's `ReleasedAt` is its release's New York time (08:30 for all three today) on its publish date; a daily market figure's is empty. On release morning BLS writes the month's row and FRED's value replaces it later (D-23). | `FredImporter`, called by `MacroPollingService` | `FredImporter`, to compare before it writes; `MacroPollingService`, for each series' newest date; `/api/v1/macro/snapshot` |
 | `macro_releases` | One CPI, jobs or PCE release at its publish time, or one Fed rate decision (`fomc`, 14:00 New York), in UTC. Unique on `(ReleaseCode, ScheduledAt)`. Never deleted, so a date FRED or the Fed later moves stays behind. | `FredImporter.SaveReleaseDatesAsync` and `SaveReleaseTimesAsync`, called by `MacroPollingService` | `MacroPollingService`, to decide when to wake; it skips `fomc` rows (D-26, D-28) |
+| `news_articles` | One gold-related article: `Source` (the feed's code), headline, link, extract (at most 300 characters; null when the feed has none), `PublishedAt` in UTC. **Unique on `Url`, the only duplicate check**, across all feeds. `PublishedAt` is indexed for item 6's time-range search. Rows are never updated or deleted yet. | `NewsImporter`, called by `NewsPollingService` | `NewsImporter`, to find links already saved. Item 6 will read it (D-29) |
 
 Things that will catch you out:
 
@@ -1341,6 +1368,7 @@ Aurum.Api.Tests/
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
 ├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; FredReleaseTests; FomcCalendarTests; MacroPollingServiceTests
+├── Modules/News/              ← RssClientTests, with one real answer from each feed saved as a file; GoldNewsTests; NewsImporterTests; NewsPollingServiceTests
 ├── Modules/AppLogs/           ← the log service's field cutting, and the background writer
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
@@ -1353,13 +1381,16 @@ Aurum.Api.Tests/
 | `QuotaGovernorTests`, `QuotaHandlerTests`, `SchemaTests`, `ResilienceWiringTests` | `SourceCircuitTests`, `FailoverPriceFeedTests` |
 | `PricePollingServiceTests`, `PriceEventSqlTests`, `AurumApiFactoryTests` | `LatestQuoteCacheTests`, `DeltaEngineTests`, `DeltaEngineReplayTests`, `TickRingBufferTests` |
 | `LatestQuoteCacheWarmupTests`, `DeltaEngineWarmupTests` | `PriceQuoteTests`, `SignificanceClassifierTests`, the `*OptionsTests` classes |
-| `FredImporterTests` | `FredImporterReleasedAtTests` (a series takes its release's time), `FredReleaseTests` (08:30 New York in winter and summer; each release series in exactly one release), `FomcCalendarTests` (14:00 New York; every date a Wednesday; not a FRED release; when the stale warning starts) |
+| `FredImporterTests`, `NewsImporterTests` | `FredImporterReleasedAtTests` (a series takes its release's time), `FredReleaseTests` (08:30 New York in winter and summer; each release series in exactly one release), `FomcCalendarTests` (14:00 New York; every date a Wednesday; not a FRED release; when the stale warning starts) |
 | `AppLogDrainServiceTests` | `AppLogServiceTests` (each field cut to its column size) |
 | `GetPriceHistory…`, `GetPriceEvents…`, `GetPriceSourcesQueryHandlerTests`, `GetMacroSnapshotQueryHandlerTests` | `PricesControllerTests`, `PriceEventsControllerTests`, `MacroControllerTests`, `GetLivePriceQueryHandlerTests`, the `Validators/` and `Common/` classes |
 | | `PriceHubTests` (a real SignalR client against an in-memory server; under a second) |
 | | `FredClientTests` (a fake network; no request reaches FRED) |
 | | `BlsClientTests` (a fake network; no request reaches BLS) |
 | | `MacroPollingServiceTests` (where each refresh starts reading from, which fetches a calendar row gives, which BLS months are new; not the loop itself) |
+| | `RssClientTests` (the three saved feeds, the date formats, skipped articles, HTML removal and cutting; a fake network for the request) |
+| | `GoldNewsTests` (which headlines count as gold-related, and that "Goldman" doesn't) |
+| | `NewsPollingServiceTests` (the "feed can't be read" warning is written once and cleared on recovery; not the loop itself) |
 
 Run one class, or a set of fast tests:
 
@@ -1376,12 +1407,19 @@ and the engine directly and kept out of the server's container, so SignalR's own
 time.
 
 `AurumApiFactory` is the test version of the whole API. It starts the app from the real `Program.cs`,
-pointed at the test database, but removes both timers and swaps the three price services for
+pointed at the test database, but removes all three timers and swaps the three price services for
 stand-ins that fail without making a web request. A timer inside a test fires when it likes, so
-results would change from run to run, and it would spend real requests from a 100-request month.
-Because nothing polls, the saved price starts empty. A test that needs one records it into
-`ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also sets stand-in FRED and
-BLS keys, because a blank one stops the app at startup.
+results would change from run to run. It would also spend real requests from a 100-request month,
+or read the real news feeds. Because nothing polls, the saved price starts empty. A test that needs
+one records it into `ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also
+sets stand-in FRED and BLS keys, because a blank one stops the app at startup. One of its tests
+starts the app with a zero or negative `News:Polling:Interval` and checks that it refuses.
+
+`RssClientTests` reads one real answer from each news feed, saved on 2026-11-21 in
+`Modules/News/`. Investing.com's file has no extracts and writes dates in its own format.
+FXStreet's has extracts longer than 300 characters, so the cutting runs on real text. No saved file
+has HTML in an extract or a `+0000` time zone, so those cases are small pieces of XML written in the
+test.
 
 `FredClientTests` reads three real FRED answers saved on 2026-11-07: `fred-cpiaucsl-initial-release.json`,
 `fred-payems-initial-release.json` and `fred-dgs10.json`. They are kept because FRED's answer for
@@ -1453,6 +1491,10 @@ batch of app work, together with the Phase 2 explanation feed. The phone version
 | Add a release to the calendar | A new field in `Macro/FredRelease.cs`, with FRED's release id, its New York time and its series, added to `All`. Check the id against FRED's `release/dates` by hand first: release 101 looked right and listed every day (D-26). |
 | Add the next year's Fed decisions | `Macro/FomcCalendar.cs`, from the Fed's calendar page. Add the last day of each meeting; `FomcCalendarTests` checks each is a Wednesday. An `FomcCalendarStale` row in `app_logs` means the list has run out (D-28). |
 | See the coming releases | `SELECT * FROM macro_releases WHERE "ScheduledAt" > now() ORDER BY "ScheduledAt";` (times are UTC). |
+| Add or swap a news feed | A new field in `News/NewsFeed.cs`, added to `All`. Save one real answer in `Modules/News/` and add it to `RssClientTests`. Check its dates match one of `RssClient`'s three formats, or every article is skipped. Never rename an existing `Code`: it is stored as each article's source (D-29). |
+| Change what counts as gold news | The word list in `News/GoldNews.cs`, and `GoldNewsTests`. Articles already skipped aren't checked again (D-29). |
+| See the latest news | `SELECT "Source", "Title", "PublishedAt" FROM news_articles ORDER BY "PublishedAt" DESC;` (times are UTC). |
+| See whether the feeds are working | `SELECT "Action", "Details", "CreatedAt" FROM app_logs WHERE "Action" IN ('RefreshedNewsFeed', 'NewsFeedUnreadable', 'NewsFeedRecovered', 'NewsPollingService') ORDER BY "CreatedAt" DESC;` |
 | Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 
 ---

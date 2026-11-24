@@ -6,7 +6,9 @@ using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Aurum.App.SharedKernel.Constants;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Aurum.Api.Tests.Infrastructure;
 
@@ -29,8 +31,21 @@ public sealed class AurumApiFactoryTests(PostgresFixture postgres) : IAsyncLifet
 
         Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is PricePollingService);
         Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is MacroPollingService);
+        Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is NewsPollingService);
         Assert.All(services.GetServices<IPriceSource>(), s => Assert.IsType<ScriptedPriceSource>(s));
         Assert.Equal(AurumApiFactory.SourceCodes.Order(), services.GetServices<IPriceSource>().Select(s => s.Code).Order());
+    }
+
+    [Theory]
+    [InlineData("00:00:00")]
+    [InlineData("-00:15:00")]
+    public void A_non_positive_news_interval_stops_the_app(string interval)
+    {
+        // Task.Delay with a zero interval would re-read every feed in a tight loop.
+        using var factory = _factory.WithWebHostBuilder(b => b.UseSetting("News:Polling:Interval", interval));
+
+        var ex = Assert.Throws<OptionsValidationException>(() => factory.Services);
+        Assert.Contains("News:Polling:Interval", ex.Message);
     }
 
     [Fact]

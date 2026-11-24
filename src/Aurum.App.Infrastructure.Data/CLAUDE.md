@@ -11,7 +11,11 @@ Postgres with TimescaleDB and pgvector (`timescale/timescaledb-ha:pg17`, D-3).
   volume) and `AurumDbContext.OnModelCreating`. Harmless only because the compose app role is the
   bootstrap superuser; a least-privilege role means the init script must become the sole owner.
 - `Program.cs` migrates at startup. Correct for one instance, wrong the moment the API scales out.
-  `PricePollingService` carries the same single-instance assumption.
+  `PricePollingService` carries the same single-instance assumption, and so do `FredImporter` and
+  `NewsImporter`: each loads what exists, then inserts, which is only safe with one writer.
+- `news_articles.Url` has a unique index and is the only duplicate check (D-29). Its column lengths
+  come from `SharedKernel/Constants/NewsArticleConstants.cs`. `RssClient` reads the same constants
+  and cuts or skips values to fit, because one value that is too long fails the whole feed's save.
 - `AurumDbContext` takes `TimeProvider` as a **required** constructor parameter; see the Pricing
   CLAUDE.md for why. Raw SQL bypasses `ApplyAuditFields`, so pass `CreatedAt`/`UpdatedAt` there.
 

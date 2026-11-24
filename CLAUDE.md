@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Deeper notes live beside the code they describe and load when you work in that folder:
 `src/Aurum.App.Infrastructure.Pricing/CLAUDE.md` (quota chain, configuration) and its `Cache/`,
-`Deltas/` and `Macro/` folders, `src/Aurum.Api/Hubs/`, `src/Aurum.App.Application/Prices/` and `Macro/`,
+`Deltas/`, `Macro/` and `News/` folders, `src/Aurum.Api/Hubs/`, `src/Aurum.App.Application/Prices/` and `Macro/`,
 `src/Aurum.App.Infrastructure.Data/` and `src/Aurum.Api.Tests/`. The reasoning behind each rule is in
 `ops/decisions/decisions.md` under the D-number given.
 
@@ -46,7 +46,8 @@ src/
 ├── Aurum.App.Infrastructure.Pricing/  Sources/, Quota/, Jobs/, Cache/, Deltas/, Realtime/ — the price feed;
 │                                      Macro/ — the FRED and BLS clients, FredImporter, FredRelease (the
 │                                      release calendar's times) and FomcCalendar, the Fed's decision
-│                                      days kept by hand (D-22, D-23, D-26, D-28)
+│                                      days kept by hand (D-22, D-23, D-26, D-28);
+│                                      News/ — the RSS reader, the gold filter and NewsImporter (D-29)
 ├── Aurum.App.Logging/                 IAppLogService<T>, its queue and drain, IRequestContextAccessor (D-24)
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, Prices/
 ├── Aurum.Api/                         Program.cs (every registration), Controllers/, Hubs/ (SignalR)
@@ -57,10 +58,11 @@ Four things that look wrong without the reason:
 
 - **`Infrastructure.Pricing` is a project the layer table does not list.** Price sources are
   external HTTP clients and the poller is a background job; neither fits "EF Core queries,
-  repositories, DbContext". It depends on `Infrastructure.Data` because it writes four groups of
+  repositories, DbContext". It depends on `Infrastructure.Data` because it writes five groups of
   tables: the quota governor `api_quota_windows`, the poller `price_ticks` and `price_sources`, the
-  poller `price_events` (through `PriceEventSql`), and `FredImporter` `macro_series`,
-  `macro_observations` and `macro_releases`. `LatestQuoteCache` and `DeltaEngine` also read `price_ticks` to warm up.
+  poller `price_events` (through `PriceEventSql`), `FredImporter` `macro_series`,
+  `macro_observations` and `macro_releases`, and `NewsImporter` `news_articles`. `LatestQuoteCache`
+  and `DeltaEngine` also read `price_ticks` to warm up.
 - **`Aurum.App.Logging` is its own project, below Application and Pricing** (D-24). Application
   references Pricing (D-20), so a log service in Application could never be used by Pricing: the
   reference back would be a cycle. Logging depends only on Data and SharedKernel. Application
@@ -83,8 +85,8 @@ original module seam and its reversal** — read it before registering anything 
   `Program.cs`.
 - `Infrastructure.Pricing` grants `InternalsVisibleTo("Aurum.Api")` so `Program.cs` can name its
   internal types: `QueryKeyAuthHandler`, `RegisteredPriceSource`, both options validators,
-  `LatestQuoteCache`, `DeltaEngine`, `FailoverPriceFeed`, `FredImporter` and `MacroPollingService`.
-  Nothing outside the module should
+  `LatestQuoteCache`, `DeltaEngine`, `FailoverPriceFeed`, `FredImporter`, `MacroPollingService`,
+  `NewsImporter` and `NewsPollingService`. Nothing outside the module should
   resolve them, so don't make them public to satisfy wiring.
 - **`SourceCircuitStore` is public** so the `/sources` endpoint can call `SnapshotAll()` (D-20), but
   its constructor and `For()` stay internal. The container only calls public constructors, so
@@ -123,8 +125,9 @@ Request → Controller → IMediator.Send() → Pipeline Behaviors → Handler �
 
 Pipeline: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler.
 The DbContext is `AurumDbContext`. The two features are `Prices` and `Macro`, both queries only
-(see `src/Aurum.App.Application/Prices/CLAUDE.md` and `Macro/CLAUDE.md`). The scheduled work is `PricePollingService` and
-`MacroPollingService`, two `BackgroundService`s outside MediatR. A feature with commands adds `Commands/`,
+(see `src/Aurum.App.Application/Prices/CLAUDE.md` and `Macro/CLAUDE.md`). The scheduled work is `PricePollingService`,
+`MacroPollingService` and `NewsPollingService`, three `BackgroundService`s outside MediatR. News has
+no endpoint yet (Phase 3). A feature with commands adds `Commands/`,
 `Handlers/Commands/`, a validator per command and `Infrastructure.Data/Repositories/{Feature}/`;
 `docs/cqrs-guide.md` shows the shape. **No new service layer** — handlers replace services.
 
@@ -185,8 +188,8 @@ Each folder's CLAUDE.md has the full reasoning. These are the ones a change else
   `CreatedAt`/`UpdatedAt` itself.
 - **Poll order is memory → tick save → publish → events** (D-16, D-18, D-19).
 - **`PriceTick.Retention` equals the migration's `INTERVAL '30 days'`.**
-- **Single instance only.** Startup migration, the poller, the event waiting period and SignalR
-  groups all assume one process.
+- **Single instance only.** Startup migration, the poller, the event waiting period, SignalR
+  groups, and `FredImporter` and `NewsImporter` (each its timer's only writer) all assume one process.
 - Compose forwards only the variables listed under `api.environment`; a new `.env` setting without a
   line there never reaches the container.
 

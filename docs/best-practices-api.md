@@ -38,8 +38,8 @@ breaking a rule below usually won't compile.
 
 Two differences in this repository, explained in D-5 of `ops/decisions/decisions.md`:
 
-- There's one more project, `Aurum.App.Infrastructure.Pricing`, for the outside price services and
-  the price timer. It doesn't fit any row above. The Application layer uses it so the price handlers
+- There's one more project, `Aurum.App.Infrastructure.Pricing`, for the outside services (prices,
+  economic figures and news) and the three timers that call them. It doesn't fit any row above. The Application layer uses it so the price handlers
   can read the latest price, the circuit breakers and the request counter (D-20). It can also use
   Logging.
 - `Aurum.Api` actually uses all five other projects, because `Program.cs` is where everything is set
