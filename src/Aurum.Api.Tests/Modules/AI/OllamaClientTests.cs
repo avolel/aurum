@@ -294,6 +294,115 @@ public class OllamaClientTests
         Assert.Equal(["chat", "embed"], transport.Users);
     }
 
+    private static HttpResponseMessage Tags(params (string Name, string Digest)[] models) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new
+            {
+                models = models.Select(m => new { name = m.Name, model = m.Name, digest = m.Digest, size = 1 }),
+            }),
+        };
+
+    private static HttpResponseMessage Version() =>
+        new(HttpStatusCode.OK) { Content = JsonContent.Create(new { version = "0.40.9" }) };
+
+    /// <summary>Answers /api/tags with <paramref name="tags"/> and /api/version with 0.40.9.</summary>
+    private static OllamaStub InfoStub(Func<HttpResponseMessage> tags) =>
+        new((request, _) => Task.FromResult(
+            request.RequestUri?.AbsolutePath == "/api/tags" ? tags() : Version()));
+
+    [Fact]
+    public async Task GetModelInfoAsync_ReturnsTheDigestFromTags()
+    {
+        var transport = InfoStub(() => Tags(("nomic-embed-text:latest", "sha-embed"), ("gemma4:12b-it-qat", "sha-gemma")));
+        await using var provider = BuildProvider(transport);
+
+        var info = await provider.GetRequiredService<IOllamaClient>().GetModelInfoAsync(OllamaJob.Write, Ct);
+
+        Assert.Equal(new OllamaModelInfo("gemma4:12b-it-qat", "sha-gemma", "0.40.9"), info);
+        Assert.Equal(["/api/tags", "/api/version"], transport.Paths);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_NameWithoutATag_MatchesLatest()
+    {
+        // The shipped Embed model is "nomic-embed-text"; Ollama lists it with ":latest".
+        var transport = InfoStub(() => Tags(("nomic-embed-text:latest", "sha-embed")));
+        await using var provider = BuildProvider(transport);
+
+        var info = await provider.GetRequiredService<IOllamaClient>().GetModelInfoAsync(OllamaJob.Embed, Ct);
+
+        Assert.Equal("nomic-embed-text", info.Model);
+        Assert.Equal("sha-embed", info.Digest);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_ModelNotPulled_Throws()
+    {
+        var transport = InfoStub(() => Tags(("nomic-embed-text:latest", "sha-embed")));
+        await using var provider = BuildProvider(transport);
+
+        var ex = await Assert.ThrowsAsync<OllamaModelMissingException>(() =>
+            provider.GetRequiredService<IOllamaClient>().GetModelInfoAsync(OllamaJob.Write, Ct));
+
+        Assert.Equal("gemma4:12b-it-qat", ex.Model);
+        Assert.Contains("ollama pull gemma4:12b-it-qat", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_ReadsTagsOnEveryCall()
+    {
+        // A re-pull under the same name between two calls: the second must see the new digest.
+        var digest = "sha-old";
+        var transport = InfoStub(() => Tags(("gemma4:12b-it-qat", digest)));
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var before = await client.GetModelInfoAsync(OllamaJob.Write, Ct);
+        digest = "sha-new";
+        var after = await client.GetModelInfoAsync(OllamaJob.Write, Ct);
+
+        Assert.Equal("sha-old", before.Digest);
+        Assert.Equal("sha-new", after.Digest);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_WhileAChatIsInFlight_DoesNotWait()
+    {
+        var release = new TaskCompletionSource();
+        var transport = new OllamaStub(async (request, user) =>
+        {
+            switch (request.RequestUri?.AbsolutePath)
+            {
+                case "/api/chat":
+                    await release.Task;
+                    return Reply(GoodAnswer);
+                case "/api/tags":
+                    return Tags(("gemma4:12b-it-qat", "sha-gemma"));
+                default:
+                    return Version();
+            }
+        });
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var chat = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "chat", Ct);
+        try
+        {
+            await transport.WaitForRequestsAsync(1);
+
+            // Times out, rather than hanging, if the GETs ever go behind the lock.
+            var info = await client.GetModelInfoAsync(OllamaJob.Write, Ct).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("sha-gemma", info.Digest);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await chat;
+    }
+
     /// <summary>
     /// Answers asynchronously, so a test can hold a request open, and records what was in flight.
     /// </summary>
@@ -335,7 +444,10 @@ public class OllamaClientTests
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))!;
+            // A GET has no body; an empty object keeps Bodies and Paths in step.
+            var body = request.Content is null
+                ? new JsonObject()
+                : JsonNode.Parse(await request.Content.ReadAsStringAsync(cancellationToken))!;
             lock (_gate)
             {
                 _bodies.Add(body);

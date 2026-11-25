@@ -68,6 +68,41 @@ internal sealed class OllamaClient(IHttpClientFactory httpFactory, IOptions<Olla
     }
 
     /// <summary>
+    /// The job's model as Ollama has it now. Read on every call, not kept: an <c>ollama pull</c>
+    /// while the app runs changes the digest. No lock: both GETs answer at once even mid-answer.
+    /// </summary>
+    public async Task<OllamaModelInfo> GetModelInfoAsync(OllamaJob job, CancellationToken ct)
+    {
+        var model = options.Value.Jobs[job].Model;
+        var http = httpFactory.CreateClient(OllamaOptions.HttpClientName);
+
+        TagsResponse tags;
+        using (var response = await http.GetAsync("api/tags", ct))
+        {
+            tags = await ReadAsync<TagsResponse>(response, "api/tags", ct);
+        }
+
+        var wanted = WithTag(model);
+        var found = tags.Models?.FirstOrDefault(m => m.Name == wanted)
+            ?? throw new OllamaModelMissingException(model);
+
+        VersionResponse version;
+        using (var response = await http.GetAsync("api/version", ct))
+        {
+            version = await ReadAsync<VersionResponse>(response, "api/version", ct);
+        }
+
+        return new(model, found.Digest, version.Version);
+    }
+
+    /// <summary>
+    /// Ollama lists an untagged pull as "name:latest". The tag is the part after the last '/',
+    /// so a registry port ("host:5000/name") isn't mistaken for one.
+    /// </summary>
+    private static string WithTag(string model) =>
+        model[(model.LastIndexOf('/') + 1)..].Contains(':') ? model : $"{model}:latest";
+
+    /// <summary>
     /// Every POST goes through here, so chat and embed share the one lock. Waiting for it is bounded
     /// only by ct. The handler's time limits start once it is held, and its retries run inside it, so
     /// a retry can't let a waiter in first.
@@ -79,22 +114,26 @@ internal sealed class OllamaClient(IHttpClientFactory httpFactory, IOptions<Olla
         {
             var http = httpFactory.CreateClient(OllamaOptions.HttpClientName);
             using var response = await http.PostAsJsonAsync(path, body, Wire, ct);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                // Ollama explains itself in the body ("model not found"), which the status alone doesn't.
-                var error = await response.Content.ReadAsStringAsync(ct);
-                throw new HttpRequestException(
-                    $"Ollama {path} returned {(int)response.StatusCode}: {error}", null, response.StatusCode);
-            }
-
-            return await response.Content.ReadFromJsonAsync<TResponse>(Wire, ct)
-                ?? throw new OllamaAnswerException($"Ollama {path} returned an empty body.", rawJson: null);
+            return await ReadAsync<TResponse>(response, path, ct);
         }
         finally
         {
             _lock.Release();
         }
+    }
+
+    private static async Task<TResponse> ReadAsync<TResponse>(HttpResponseMessage response, string path, CancellationToken ct)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            // Ollama explains itself in the body ("model not found"), which the status alone doesn't.
+            var error = await response.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(
+                $"Ollama {path} returned {(int)response.StatusCode}: {error}", null, response.StatusCode);
+        }
+
+        return await response.Content.ReadFromJsonAsync<TResponse>(Wire, ct)
+            ?? throw new OllamaAnswerException($"Ollama {path} returned an empty body.", rawJson: null);
     }
 
     private static OllamaAnswer<T> Check<T>(ChatResponse reply, OllamaJobOptions job, OllamaOptions settings)

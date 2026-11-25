@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace Aurum.App.Infrastructure.AI.Ollama;
 
-// Ollama's request and reply bodies for /api/chat and /api/embed, sent and read as snake_case.
+// Ollama's request and reply bodies, sent and read as snake_case.
 
 /// <param name="KeepAlive">A number of seconds or a duration string; see OllamaClient.KeepAliveValue.</param>
 internal sealed record ChatRequest(
@@ -30,3 +30,11 @@ internal sealed record EmbedRequest(
     ModelSettings Options);
 
 internal sealed record EmbedResponse(float[][]? Embeddings);
+
+/// <summary>GET /api/tags: every pulled model. Only the name and digest are read.</summary>
+internal sealed record TagsResponse(IReadOnlyList<TagModel>? Models);
+
+internal sealed record TagModel(string Name, string Digest);
+
+/// <summary>GET /api/version.</summary>
+internal sealed record VersionResponse(string Version);
