@@ -59,6 +59,9 @@ services:
       ASPNETCORE_HTTP_PORTS: "8080"
       ConnectionStrings__DefaultConnection: ${ConnectionStrings__Aurum:?set in .env}
       Ollama__BaseUrl: ${Ollama__BaseUrl:-http://ollama:11434}
+      Ollama__Jobs__Write__Model: ${Ollama__Jobs__Write__Model:-gemma4:12b-it-qat}
+      Ollama__Jobs__Check__Model: ${Ollama__Jobs__Check__Model:-gemma4:12b-it-qat}
+      Ollama__Jobs__Embed__Model: ${Ollama__Jobs__Embed__Model:-nomic-embed-text}
       PriceSources__GoldApiIo__ApiKey: ${PriceSources__GoldApiIo__ApiKey:-}
       PriceSources__ApiNinjas__ApiKey: ${PriceSources__ApiNinjas__ApiKey:-}
       PriceSources__MetalpriceApi__ApiKey: ${PriceSources__MetalpriceApi__ApiKey:-}
