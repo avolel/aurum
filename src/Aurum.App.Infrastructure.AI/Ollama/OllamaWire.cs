@@ -2,7 +2,7 @@ using System.Text.Json.Nodes;
 
 namespace Aurum.App.Infrastructure.AI.Ollama;
 
-// Ollama's request and reply bodies for /api/chat, sent and read as snake_case.
+// Ollama's request and reply bodies for /api/chat and /api/embed, sent and read as snake_case.
 
 /// <param name="KeepAlive">A number of seconds or a duration string; see OllamaClient.KeepAliveValue.</param>
 internal sealed record ChatRequest(
@@ -20,3 +20,13 @@ internal sealed record ModelSettings(int NumCtx, double Temperature, int Seed);
 
 /// <summary>Only the fields the client checks. Ollama sends more, and they're ignored.</summary>
 internal sealed record ChatResponse(ChatMessage? Message, string? DoneReason, int PromptEvalCount);
+
+/// <param name="Truncate">Always false: a cut text would embed as if it were the whole one.</param>
+internal sealed record EmbedRequest(
+    string Model,
+    string Input,
+    bool Truncate,
+    object KeepAlive,
+    ModelSettings Options);
+
+internal sealed record EmbedResponse(float[][]? Embeddings);

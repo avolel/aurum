@@ -35,37 +35,66 @@ internal sealed class OllamaClient(IHttpClientFactory httpFactory, IOptions<Olla
             KeepAlive: KeepAliveValue(settings.KeepAlive),
             Options: new(jobSettings.ContextWindow, settings.Temperature, settings.Seed));
 
-        // Waiting here is bounded only by ct. The handler's time limits start inside PostAsync, once
-        // the lock is held, and its retries run inside it too, so a retry can't let a waiter in first.
-        ChatResponse reply;
+        var reply = await PostAsync<ChatResponse>("api/chat", request, ct);
+        return Check<T>(reply, jobSettings, settings);
+    }
+
+    /// <summary>
+    /// One vector for <paramref name="text"/>, from the Embed job's model. Text longer than the
+    /// window fails with Ollama's 400 instead of being cut quietly.
+    /// </summary>
+    public async Task<float[]> EmbedAsync(string text, CancellationToken ct)
+    {
+        var settings = options.Value;
+        var jobSettings = settings.Jobs[OllamaJob.Embed];
+
+        var request = new EmbedRequest(
+            jobSettings.Model,
+            text,
+            Truncate: false,
+            KeepAlive: KeepAliveValue(settings.KeepAlive),
+            Options: new(jobSettings.ContextWindow, settings.Temperature, settings.Seed));
+
+        var reply = await PostAsync<EmbedResponse>("api/embed", request, ct);
+
+        // One input, so exactly one vector. Anything else would be stored against the wrong text.
+        if (reply.Embeddings is not [{ Length: > 0 } vector])
+        {
+            throw new OllamaAnswerException(
+                $"Expected one vector, got {reply.Embeddings?.Length ?? 0}.", rawJson: null);
+        }
+
+        return vector;
+    }
+
+    /// <summary>
+    /// Every POST goes through here, so chat and embed share the one lock. Waiting for it is bounded
+    /// only by ct. The handler's time limits start once it is held, and its retries run inside it, so
+    /// a retry can't let a waiter in first.
+    /// </summary>
+    private async Task<TResponse> PostAsync<TResponse>(string path, object body, CancellationToken ct)
+    {
         await _lock.WaitAsync(ct);
         try
         {
-            reply = await PostAsync<ChatResponse>("api/chat", request, ct);
+            var http = httpFactory.CreateClient(OllamaOptions.HttpClientName);
+            using var response = await http.PostAsJsonAsync(path, body, Wire, ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // Ollama explains itself in the body ("model not found"), which the status alone doesn't.
+                var error = await response.Content.ReadAsStringAsync(ct);
+                throw new HttpRequestException(
+                    $"Ollama {path} returned {(int)response.StatusCode}: {error}", null, response.StatusCode);
+            }
+
+            return await response.Content.ReadFromJsonAsync<TResponse>(Wire, ct)
+                ?? throw new OllamaAnswerException($"Ollama {path} returned an empty body.", rawJson: null);
         }
         finally
         {
             _lock.Release();
         }
-
-        return Check<T>(reply, jobSettings, settings);
-    }
-
-    private async Task<TResponse> PostAsync<TResponse>(string path, object body, CancellationToken ct)
-    {
-        var http = httpFactory.CreateClient(OllamaOptions.HttpClientName);
-        using var response = await http.PostAsJsonAsync(path, body, Wire, ct);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            // Ollama explains itself in the body ("model not found"), which the status alone doesn't.
-            var error = await response.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException(
-                $"Ollama {path} returned {(int)response.StatusCode}: {error}", null, response.StatusCode);
-        }
-
-        return await response.Content.ReadFromJsonAsync<TResponse>(Wire, ct)
-            ?? throw new OllamaAnswerException($"Ollama {path} returned an empty body.", rawJson: null);
     }
 
     private static OllamaAnswer<T> Check<T>(ChatResponse reply, OllamaJobOptions job, OllamaOptions settings)

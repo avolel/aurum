@@ -211,6 +211,89 @@ public class OllamaClientTests
         Assert.Equal(["first", "first", "second"], transport.Users);
     }
 
+    private static HttpResponseMessage EmbedReply(params float[][] vectors) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { model = "nomic-embed-text", embeddings = vectors, prompt_eval_count = 5 }),
+        };
+
+    [Fact]
+    public async Task EmbedAsync_SendsTruncateFalse()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(EmbedReply([0.1f, 0.2f, 0.3f])));
+        await using var provider = BuildProvider(transport);
+
+        var vector = await provider.GetRequiredService<IOllamaClient>().EmbedAsync("gold rose", Ct);
+
+        Assert.Equal([0.1f, 0.2f, 0.3f], vector);
+        var body = Assert.Single(transport.Bodies);
+        Assert.Equal("/api/embed", Assert.Single(transport.Paths));
+        Assert.False((bool?)body["truncate"]);
+        Assert.Equal("nomic-embed-text", (string?)body["model"]);
+        Assert.Equal("gold rose", (string?)body["input"]);
+        Assert.Equal(2048, (int?)body["options"]?["num_ctx"]);
+        Assert.Equal(-1d, (double?)body["keep_alive"]);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_NotExactlyOneVector_Throws()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(EmbedReply([0.1f], [0.2f])));
+        await using var provider = BuildProvider(transport);
+
+        await Assert.ThrowsAsync<OllamaAnswerException>(() =>
+            provider.GetRequiredService<IOllamaClient>().EmbedAsync("gold rose", Ct));
+    }
+
+    [Fact]
+    public async Task EmbedAsync_TextTooLong_ThrowsWithoutRetry()
+    {
+        // What truncate:false gets back for an over-long input. A 400 is not retried.
+        var transport = new OllamaStub((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = JsonContent.Create(new { error = "the input length exceeds the context length" }),
+        }));
+        await using var provider = BuildProvider(transport);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            provider.GetRequiredService<IOllamaClient>().EmbedAsync("very long text", Ct));
+
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+        Assert.Contains("exceeds the context length", ex.Message, StringComparison.Ordinal);
+        Assert.Single(transport.Bodies);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_WhileAChatIsInFlight_WaitsForTheLock()
+    {
+        var release = new TaskCompletionSource();
+        var transport = new OllamaStub(async (request, user) =>
+        {
+            if (user == "chat")
+            {
+                await release.Task;
+                return Reply(GoodAnswer);
+            }
+
+            return EmbedReply([0.5f]);
+        });
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var chat = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "chat", Ct);
+        await transport.WaitForRequestsAsync(1);
+        var embed = client.EmbedAsync("embed", Ct);
+
+        // Long enough for the embed to reach the stub if it skipped the lock.
+        await Task.Delay(250);
+        Assert.Single(transport.Bodies);
+
+        release.SetResult();
+        await Task.WhenAll(chat, embed);
+
+        Assert.Equal(["chat", "embed"], transport.Users);
+    }
+
     /// <summary>
     /// Answers asynchronously, so a test can hold a request open, and records what was in flight.
     /// </summary>
@@ -219,13 +302,19 @@ public class OllamaClientTests
     {
         private readonly Lock _gate = new();
         private readonly List<JsonNode> _bodies = [];
+        private readonly List<string?> _paths = [];
         private int _inFlight;
         private int _maxInFlight;
 
         public IReadOnlyList<JsonNode> Bodies { get { lock (_gate) { return [.. _bodies]; } } }
 
-        /// <summary>Each request's user message, in the order they arrived.</summary>
-        public IReadOnlyList<string?> Users => [.. Bodies.Select(b => (string?)b["messages"]?[1]?["content"])];
+        public IReadOnlyList<string?> Paths { get { lock (_gate) { return [.. _paths]; } } }
+
+        /// <summary>Each request's user message (chat) or input (embed), in the order they arrived.</summary>
+        public IReadOnlyList<string?> Users => [.. Bodies.Select(Label)];
+
+        private static string? Label(JsonNode body) =>
+            (string?)body["messages"]?[1]?["content"] ?? (string?)body["input"];
 
         public int MaxInFlight => Volatile.Read(ref _maxInFlight);
 
@@ -250,12 +339,13 @@ public class OllamaClientTests
             lock (_gate)
             {
                 _bodies.Add(body);
+                _paths.Add(request.RequestUri?.AbsolutePath);
                 _maxInFlight = Math.Max(_maxInFlight, ++_inFlight);
             }
 
             try
             {
-                return await respond(request, (string?)body["messages"]?[1]?["content"]);
+                return await respond(request, Label(body));
             }
             finally
             {

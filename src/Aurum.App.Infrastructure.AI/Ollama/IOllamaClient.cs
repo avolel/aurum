@@ -9,6 +9,12 @@ public interface IOllamaClient
     /// that is not retried here.
     /// </summary>
     Task<OllamaAnswer<T>> ChatAsync<T>(OllamaJob job, string system, string user, CancellationToken ct);
+
+    /// <summary>
+    /// One vector from the Embed job's model. Text too long for its window throws
+    /// <see cref="HttpRequestException"/> (Ollama's 400) rather than being cut.
+    /// </summary>
+    Task<float[]> EmbedAsync(string text, CancellationToken ct);
 }
 
 /// <summary>The checked answer, plus the settings that produced it, so a run can be repeated.</summary>
