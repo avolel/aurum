@@ -224,39 +224,7 @@ builder.Services.AddHostedService<NewsPollingService>();
 
 // ── AI (Ollama) ───────────────────────────────────────────────────────────────────────────────
 
-builder.Services.AddOptions<OllamaOptions>()
-    .BindConfiguration(OllamaOptions.SectionName)
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-// ValidateDataAnnotations() does not descend into the job map; this validator does.
-builder.Services.AddSingleton<IValidateOptions<OllamaOptions>, OllamaOptionsValidator>();
-
-// Named, not typed: the container makes a new typed client each time, and each would get its own lock.
-builder.Services.AddHttpClient(OllamaOptions.HttpClientName, (sp, http) =>
-    {
-        http.BaseAddress = sp.GetRequiredService<IOptions<OllamaOptions>>().Value.BaseUrl;
-        // Off, so the 100 s default can't cut in before the pipeline's own limits.
-        http.Timeout = Timeout.InfiniteTimeSpan;
-    })
-    .AddStandardResilienceHandler()
-    .Configure((resilience, sp) =>
-    {
-        var ollama = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
-
-        resilience.AttemptTimeout.Timeout = ollama.RequestTimeout;
-        resilience.TotalRequestTimeout.Timeout = ollama.TotalTimeout;
-
-        // Polly counts retries, the setting counts attempts.
-        resilience.Retry.MaxRetryAttempts = ollama.MaxAttempts - 1;
-        // Fixed and without jitter, so TotalTimeout's sum matches the real schedule.
-        resilience.Retry.BackoffType = DelayBackoffType.Constant;
-        resilience.Retry.Delay = OllamaOptions.RetryDelay;
-        resilience.Retry.UseJitter = false;
-
-        // The handler refuses to start if this is under twice the attempt timeout.
-        resilience.CircuitBreaker.SamplingDuration = ollama.RequestTimeout * 2;
-    });
+Program.AddOllama(builder.Services);
 
 // ── Health ────────────────────────────────────────────────────────────────────────────────────
 
@@ -294,11 +262,56 @@ static async Task MigrateAsync(WebApplication app)
     var db = scope.ServiceProvider.GetRequiredService<AurumDbContext>();
     await db.Database.MigrateAsync();
 }
+
 /// <summary>
 /// Declared so <see cref="AddPriceSource{T}"/> is reachable from tests; a local function would not be.
 /// </summary>
 public partial class Program
 {
+    /// <summary>
+    /// The Ollama settings, the named client and its resilience handler, and the singleton client.
+    /// A method so the lock and retry tests drive this pipeline, not a copy of it.
+    /// </summary>
+    internal static void AddOllama(IServiceCollection services)
+    {
+        services.AddOptions<OllamaOptions>()
+            .BindConfiguration(OllamaOptions.SectionName)
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+
+        // ValidateDataAnnotations() does not descend into the job map; this validator does.
+        services.AddSingleton<IValidateOptions<OllamaOptions>, OllamaOptionsValidator>();
+
+        // Named, not typed: the container makes a new typed client each time, and each would get its own lock.
+        services.AddHttpClient(OllamaOptions.HttpClientName, (sp, http) =>
+            {
+                http.BaseAddress = sp.GetRequiredService<IOptions<OllamaOptions>>().Value.BaseUrl;
+                // Off, so the 100 s default can't cut in before the pipeline's own limits.
+                http.Timeout = Timeout.InfiniteTimeSpan;
+            })
+            .AddStandardResilienceHandler()
+            .Configure((resilience, sp) =>
+            {
+                var ollama = sp.GetRequiredService<IOptions<OllamaOptions>>().Value;
+
+                resilience.AttemptTimeout.Timeout = ollama.RequestTimeout;
+                resilience.TotalRequestTimeout.Timeout = ollama.TotalTimeout;
+
+                // Polly counts retries, the setting counts attempts.
+                resilience.Retry.MaxRetryAttempts = ollama.MaxAttempts - 1;
+                // Fixed and without jitter, so TotalTimeout's sum matches the real schedule.
+                resilience.Retry.BackoffType = DelayBackoffType.Constant;
+                resilience.Retry.Delay = OllamaOptions.RetryDelay;
+                resilience.Retry.UseJitter = false;
+
+                // The handler refuses to start if this is under twice the attempt timeout.
+                resilience.CircuitBreaker.SamplingDuration = ollama.RequestTimeout * 2;
+            });
+
+        // Singleton: the lock inside it must be the only one in the process.
+        services.AddSingleton<IOllamaClient, OllamaClient>();
+    }
+
     /// <summary>
     /// Registers a source's typed client with its resilience pipeline and QuotaHandler, then exposes
     /// it as <see cref="IPriceSource"/>. Auth is the only per-provider part (D-12).
