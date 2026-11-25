@@ -30,6 +30,7 @@
          past IMediator into Infrastructure is the violation that rule is about. The extra two
          references exist only so Program.cs can name the concrete types it registers, and D-5
          records that trade. -->
+    <ProjectReference Include="../Aurum.App.Infrastructure.AI/Aurum.App.Infrastructure.AI.csproj" />
     <ProjectReference Include="..\Aurum.App.Application\Aurum.App.Application.csproj" />
     <ProjectReference Include="..\Aurum.App.Infrastructure.Data\Aurum.App.Infrastructure.Data.csproj" />
     <ProjectReference Include="..\Aurum.App.Infrastructure.Pricing\Aurum.App.Infrastructure.Pricing.csproj" />
