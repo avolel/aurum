@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- All five, because Program.cs is the composition root and every registration lives there.
+    <!-- All six, because Program.cs is the composition root and every registration lives there.
          Controllers also use Logging directly, through IAppLogService.
          The layer table in docs/best-practices-api.md gives this project "Depends On: Application,
          SharedKernel", which is the rule for *code* in Controllers/ — a controller that reaches

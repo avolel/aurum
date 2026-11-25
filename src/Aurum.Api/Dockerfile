@@ -10,6 +10,7 @@ WORKDIR /src
 # Testcontainers and the xunit runner into the restore for a production image.
 COPY src/Aurum.Api/Aurum.Api.csproj src/Aurum.Api/
 COPY src/Aurum.App.Application/Aurum.App.Application.csproj src/Aurum.App.Application/
+COPY src/Aurum.App.Infrastructure.AI/Aurum.App.Infrastructure.AI.csproj src/Aurum.App.Infrastructure.AI/
 COPY src/Aurum.App.Infrastructure.Data/Aurum.App.Infrastructure.Data.csproj src/Aurum.App.Infrastructure.Data/
 COPY src/Aurum.App.Infrastructure.Pricing/Aurum.App.Infrastructure.Pricing.csproj src/Aurum.App.Infrastructure.Pricing/
 COPY src/Aurum.App.Logging/Aurum.App.Logging.csproj src/Aurum.App.Logging/
@@ -18,6 +19,7 @@ RUN dotnet restore src/Aurum.Api/Aurum.Api.csproj
 
 COPY src/Aurum.Api/ src/Aurum.Api/
 COPY src/Aurum.App.Application/ src/Aurum.App.Application/
+COPY src/Aurum.App.Infrastructure.AI/ src/Aurum.App.Infrastructure.AI/
 COPY src/Aurum.App.Infrastructure.Data/ src/Aurum.App.Infrastructure.Data/
 COPY src/Aurum.App.Infrastructure.Pricing/ src/Aurum.App.Infrastructure.Pricing/
 COPY src/Aurum.App.Logging/ src/Aurum.App.Logging/

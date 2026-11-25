@@ -7,8 +7,33 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- OllamaStartupCheck is an IHostedService. Same reason as Pricing: the shared framework
+         already carries the hosting types, so a standalone package would add a second copy. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Same version as Pricing, so both modules resolve one copy of the resilience pipeline. -->
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- No Infrastructure.Data reference: item 3 writes nothing to the database. -->
     <ProjectReference Include="../Aurum.App.Logging/Aurum.App.Logging.csproj" />
     <ProjectReference Include="../Aurum.App.SharedKernel/Aurum.App.SharedKernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The options validator and the startup check carry rules only a test can hold. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Aurum.Api.Tests</_Parameter1>
+    </AssemblyAttribute>
+
+    <!-- Program.cs is the composition root and has to name the internal types it registers.
+         Making them public instead would widen the module's surface to satisfy wiring (D-5). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Aurum.Api</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
 </Project>
