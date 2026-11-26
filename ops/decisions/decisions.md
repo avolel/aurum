@@ -424,6 +424,9 @@ otherwise OpenAI. This reverses the requirements' "no outside paid AI services f
 - `nomic-embed-text` loaded at the same time as Gemma. By the numbers above they should fit: Gemma
   takes about 8.5 GB of the 12 GB card, and the embedding model's file is 274 MB.
 
+  *Since checked (D-30, 2026-11-25):* they fit. `ollama ps` showed Gemma at 8.0 GB with a 16,384
+  window and `nomic-embed-text` at 335 MB, both entirely on the graphics card.
+
 ---
 
 ## Findings that changed the plan
@@ -2669,8 +2672,8 @@ Turned down:
 - **Tests never reach a real Ollama.** `AurumApiFactory` swaps in `FakeOllamaClient`, which answers
   whatever a test sets up, and removes the startup check.
 
-Decided by me on 2026-11-24, built 2026-11-24 to 2026-11-25. **None of it has been run against a
-real Ollama yet** (see "Not checked").
+Decided by me on 2026-11-24, built 2026-11-24 to 2026-11-25. Checked by hand against the real
+Ollama on 2026-11-25 (see "Checked against the real Ollama").
 
 **Why a project of its own.** The other choice was a folder inside `Infrastructure.Pricing`. That
 needs no new project, but it mixes the AI client into the price code. If Aurum goes live, a cloud AI
@@ -2730,6 +2733,12 @@ of that again should give the same answer. But a graphics card doesn't promise t
 in exactly the same order every time, so a word can still come out differently. "Recreated" means the
 same inputs and settings were sent, not that the same text comes back.
 
+This happened in the real check. The same chat request, sent twice with temperature 0 and seed 42,
+came back with one word different: "cooler than anticipated" the first time, "lower than
+anticipated" the second. The second request reused 107 of its 112 prompt word-pieces from Ollama's
+cache of the previous prompt, so Ollama took a different path to the same answer. That is the likely
+cause, but I haven't proved it.
+
 **Costs I accept:**
 
 - Moves wait in line, behind each other and behind any embedding. At about 30 seconds an answer,
@@ -2748,23 +2757,57 @@ same inputs and settings were sent, not that the same text comes back.
 - Editing a prompt file in place keeps its version number. The saved full prompt still shows what
   was sent.
 
-**Not checked.** No real Ollama has received any of this yet. Each of these is my reading of
-Ollama's documentation or source, not a test:
+**Checked against the real Ollama** (Ollama 0.40.9, on 2026-11-25). Three checks, all passed:
 
-- that Ollama accepts `keep_alive` as the number -1, and Gemma accepts thinking mode switched off
-- that a request with no messages, or no text to embed, loads the model before it returns. If it
-  doesn't, the startup check writes `OllamaModelsLoaded` when nothing is loaded. `ollama ps` shows
-  which.
-- whether Ollama counts reused prompt text in `prompt_eval_count`. If it doesn't, the "whole window"
-  check could miss a cut prompt.
-- Ollama's real error text for an embedding text that is too long, and whether embedding uses the
-  temperature and seed
-- whether Ollama lists downloaded models with a `library/` prefix. If it does, a name written without
-  one doesn't match.
+1. **`docker compose up --build`.** The API started only once Ollama's health check passed. The
+   startup check wrote one `OllamaModelsLoaded` row, with Ollama's version and the three digests,
+   about 100 seconds after the stack started; most of that was Gemma loading. `ollama ps` then showed
+   both models on the card, each `UNTIL Forever`, at windows of 16,384 and 2,048.
+2. **A model name that doesn't exist.** I restarted only the API with
+   `Ollama__Jobs__Embed__Model=nomic-embed-missing` set for that one command. The app wrote one
+   `OllamaModelMissing` error row naming `ollama pull nomic-embed-missing`, and no
+   `OllamaModelsLoaded`. The price check, the three news feeds and FRED all ran in the same seconds.
+3. **One real chat and one real embedding**, sent with `curl` in exactly the shape the client sends.
+   The plan's `RealOllamaTests`, a C# test run only by hand, were never written, so the C# client
+   itself has still not sent a chat or an embedding to a real Ollama. The startup check did use it,
+   for reading the models and loading them.
+
+What those checks settled. Each of these had been my reading of Ollama's documentation or source:
+
+- **`keep_alive` as the number -1 works.** The models show `UNTIL Forever`.
+- **Gemma accepts thinking mode switched off** (`think: false`). The answer came back as asked.
+- **An empty request loads the model.** After the startup check alone, both models were on the card.
+- **`prompt_eval_count` counts reused prompt text.** The second of two identical chats reported 112,
+  the same as the first. A separate field, `prompt_eval_cached_count`, said 107 of them came from
+  the cache. So the "whole window" check counts correctly.
+- **Text too long to embed** gets a 400 with `{"error":"the input length exceeds the context
+  length"}`. The client turns that into an error and doesn't retry it.
+- **Ollama lists models without a `library/` prefix**, for example `nomic-embed-text:latest`, which
+  is the form the client matches.
+- **Gemma and `nomic-embed-text` fit on the card together** (D-6): 8.0 GB and 335 MB, both entirely
+  on the graphics card.
+- **An answer fits the schema.** The chat's answer had exactly the four fields, and each cause was
+  one of the ten names.
+
+What the checks showed that I hadn't expected:
+
+- **The first real answer took 46 seconds**, with the model already loaded. It spent 32 seconds
+  reading a 112-piece prompt and wrote at about 13 word-pieces a second. The same request again took
+  3.3 seconds, writing at about 54. I don't know why the first was slow: it may be warm-up on the
+  first real request, or the card running at lower power, as D-6 saw. It still fits the 3-minute
+  limit per attempt and the 5-minute target.
+- **With the one-line placeholder prompt, every confidence came back 0**, and the main cause was
+  "gold fund flows" for a move after a soft inflation report. The shape was valid, so the client
+  accepted it. This says nothing about the real prompts, which item 6 writes, but it shows why item
+  6 must check the 0 to 100 range itself: the schema doesn't stop a 0.
+
+**Still not checked:**
+
+- whether embedding uses the temperature and seed. Ollama accepts them without an error, but nothing
+  shows whether it reads them.
 - whether Ollama's schema rules follow a `$ref` (a schema pointing to another part of itself). The
   shapes have none, and a test fails if one appears.
-- Gemma and `nomic-embed-text` loaded at the same time (D-6). The startup check's two loads are the
-  first real test.
+- a chat or an embedding sent by the C# client itself to a real Ollama.
 
 Turned down:
 

@@ -2,8 +2,10 @@
 
 Phase 2 item 3. One client every later item uses to reach the local model, plus the prompt loader
 and a startup check. References Logging and SharedKernel only; writes nothing to the database.
-Nothing outside `Aurum.Api` references it yet (item 6's worker will). **None of it has run against a
-real Ollama yet**; D-30's "Not checked" lists what that leaves open.
+Nothing outside `Aurum.Api` references it yet (item 6's worker will). Checked by hand against Ollama
+0.40.9 on 2026-11-25 (D-30, "Checked against the real Ollama"): startup load, missing model, and a
+chat and an embed sent with `curl` in this client's exact shape. **The C# client itself has not sent
+a chat or embed to a real Ollama**; `RealOllamaTests` were never written.
 
 ```
 caller ─► IOllamaClient (OllamaClient, singleton)

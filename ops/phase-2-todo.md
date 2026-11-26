@@ -11,7 +11,8 @@ release. The Fed's rate decisions are in the same calendar, from a list kept by 
 A real run on 2026-11-24 saved articles from all three. The feeds' terms were read the same day:
 two forbid automated reading on their wording, accepted because only I use the app (D-29). Item 3 is
 built: `IOllamaClient` sends one request at a time to the local model, with every setting fixed, and
-accepts only answers of a fixed shape. It hasn't been run against a real Ollama yet (D-30). Nothing
+accepts only answers of a fixed shape. It was checked by hand against the real Ollama on 2026-11-25
+(D-30). Nothing
 else has been started.
 I last checked it against the code on 2026-11-25.
 
@@ -352,15 +353,18 @@ has the details. Built 2026-11-24 to 2026-11-25.
       `app_logs`, naming the `ollama pull` command. The app keeps running.
 - [x] A stand-in Ollama client for tests, used by `AurumApiFactory` (finding 8): `FakeOllamaClient`.
 - [x] Decision written up: the job-to-model map and the fixed answer shape (D-30).
-- [ ] By hand, against the real Ollama, none of which has been run yet:
-  - `docker compose up --build`. Expect an `OllamaModelsLoaded` row in `app_logs`. `ollama ps`
-    inside the container should show both models with `UNTIL Forever`. That also settles three of
-    D-30's open questions: whether `keep_alive` -1 is accepted, whether an empty request loads a
-    model, and whether both models fit on the card together.
-  - Change one model name in `.env` to one that doesn't exist and restart. Expect an
-    `OllamaModelMissing` row, with the price timer still running.
-  - One real chat and one real embedding. The plan's `RealOllamaTests`, run only when
-    `AURUM_REAL_OLLAMA=1` is set, weren't written.
+- [x] By hand, against the real Ollama (2026-11-25, Ollama 0.40.9). D-30 has the details.
+  - [x] `docker compose up --build`: one `OllamaModelsLoaded` row in `app_logs`, and `ollama ps`
+        showed both models with `UNTIL Forever`, both on the graphics card together.
+  - [x] A model name that doesn't exist, set for one restart through the shell, not `.env`: one
+        `OllamaModelMissing` row, and the price check, news feeds and FRED still ran.
+  - [x] One real chat and one real embedding, sent with `curl` in the client's exact shape. Both
+        worked. Text too long to embed gets a 400. The plan's `RealOllamaTests`, run only when
+        `AURUM_REAL_OLLAMA=1` is set, weren't written, so the C# client itself hasn't sent a chat
+        or an embedding to a real Ollama.
+  - Found for item 6: the same request twice gave answers one word apart, the first real answer
+    took 46 seconds against 3.3 for the repeat, and the placeholder prompt got every confidence
+    as 0.
 
 ---
 

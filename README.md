@@ -41,7 +41,9 @@ request for an answer or an embedding names its model, how much text the model m
 same request is answered the same way as far as the card allows. An answer that doesn't fit the
 expected shape exactly, or was cut off, is refused. At startup the app checks that each model is
 downloaded and loads it, and writes the result to its log; a missing model doesn't stop the app.
-Nothing uses the client yet: item 6 will. None of it has been tried against a real Ollama yet (D-30).
+Nothing uses the client yet: item 6 will. I checked it by hand against the real Ollama on
+2026-11-25: the models load and stay loaded, a missing model is reported without stopping the app,
+and a real answer fits its shape (D-30).
 
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
