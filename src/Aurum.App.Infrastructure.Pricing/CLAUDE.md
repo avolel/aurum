@@ -101,7 +101,8 @@ them.
 
 - **Compose has no `env_file`; it forwards only the variables under `api.environment`.** Today:
   `ASPNETCORE_ENVIRONMENT` (defaults to Production), `ASPNETCORE_HTTP_PORTS`, the connection string, the three API keys, `Macro__Fred__ApiKey`, `Macro__Bls__ApiKey`, each source's `Enabled`, GoldAPI's
-  `MonthlyRequestLimit` (D-8), `PollInterval`, `MaxAttempts` and `Ollama__BaseUrl`. The fallback
+  `MonthlyRequestLimit` (D-8), `PollInterval`, `MaxAttempts`, `Ollama__BaseUrl` and the three
+  `Ollama__Jobs__{Write,Check,Embed}__Model` (D-30). The fallback
   check depends on `PriceSources__ApiNinjas__Enabled` being there.
 - **The app reads `ConnectionStrings:DefaultConnection`.** Compose fills it from `.env`'s
   `ConnectionStrings__Aurum`. `appsettings.json` has none; without one the app refuses to start.

@@ -5,7 +5,7 @@ hypertables and vector columns behave differently enough that a mock would valid
 container per collection (`PostgresCollection`), migrated once; tests share the database and clean up
 their own rows in `InitializeAsync`.
 
-`InternalsVisibleTo` is set on `Infrastructure.Data`, `Infrastructure.Pricing` and `Aurum.Api` so
+`InternalsVisibleTo` is set on `Infrastructure.Data`, `Infrastructure.Pricing`, `Infrastructure.AI` and `Aurum.Api` so
 tests reach internal seams — `PostgresQuotaGovernor.ResolvePeriod`, `SourceCircuit`,
 `SourceCircuitStore`'s constructor and `For()` (the class itself is public), `FailoverPriceFeed`,
 `Program.AddPriceSource<T>` — without widening any public surface.
@@ -100,10 +100,12 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   received as `JsonElement` so assertions check the wire (camelCase, nulls inside the dictionary). It
   does not use `Program.cs`.
 - **`AurumApiFactory`** (`WebApplicationFactory<Program>`) boots the real `Program.cs` against the
-  collection's Postgres. It **removes `PricePollingService`, `MacroPollingService` and
-  `NewsPollingService`, and replaces every `IPriceSource` with a faulting `ScriptedPriceSource`**: a
-  timer in a test fires on its own and spends real requests (or calls the real FRED, BLS or news
-  feeds). So nothing fills the cache; a test that needs a held price calls
+  collection's Postgres. It **removes `PricePollingService`, `MacroPollingService`,
+  `NewsPollingService` and `OllamaStartupCheck`, replaces every `IPriceSource` with a faulting
+  `ScriptedPriceSource`, and replaces `IOllamaClient` with its `Ollama` property, a
+  `FakeOllamaClient`**: a timer in a test fires on its own and spends real requests (or calls the
+  real FRED, BLS or news feeds), and `appsettings.json` points Ollama at `localhost:11434`, where the
+  compose Ollama listens. `The_test_host_has_no_real_Ollama` checks the swap. So nothing fills the cache; a test that needs a held price calls
   `ILatestQuoteCache.Record` itself. Settings go in with `UseSetting`, not
   `ConfigureAppConfiguration` — `Program.cs` reads the connection string before `Build()`, and only
   host settings are visible that early. API keys are set per config key (`GoldApiIo`, …) and
@@ -111,6 +113,33 @@ them from `PostgresFixture.RecentMinute`, real time cut to the whole minute.
   `AurumApiFactoryTests.A_non_positive_news_interval_stops_the_app` builds on it with
   `WithWebHostBuilder` and a bad `News:Polling:Interval`, and expects `OptionsValidationException`
   from `factory.Services`.
+- **`FakeOllamaClient`** answers what a test sets up, per job: `Answer(job, value)` or
+  `Fail(job, exception)`, kept until replaced, and `Embed(text, vector)` per exact text. **A call with
+  nothing set up throws**, naming the job or text, rather than inventing an answer. `ChatAsync` and
+  `EmbedAsync` are `async` and start with `Task.Yield()`, so a failure is in the task, as with the real
+  client. `RawJson` is serialized with `Strict`. Its answer settings are fixed constants
+  (`FakeOllamaClient.ContextWindow`, `Seed`, …), not `appsettings.json`'s. It records every call in
+  `Calls` and is locked, because a background worker can call while the test reads. There is no
+  "fail once, then succeed": a retry test switches with `Answer` between calls.
+  `FakeOllamaClientTests` pins this.
+- **`Modules/AI/`** needs **no container**:
+  - **`OllamaClientTests`** calls **the production registration**, `Program.AddOllama`, and swaps
+    only the primary handler (`ConfigureHttpClientDefaults(...ConfigurePrimaryHttpMessageHandler)`) for
+    `OllamaStub`, the `ResilienceWiringTests` pattern: the lock and retry tests are about where the
+    lock sits relative to the real resilience handler. The stub holds a request open with a
+    `TaskCompletionSource` and records `MaxInFlight`. The three lock tests fail with the lock removed
+    (checked); the no-lock `GetModelInfoAsync` test fails within 5 s if the GETs ever take it. The
+    retry test waits the real 2 s `RetryDelay`. **A failing lock test takes 30 s**: the stub's
+    `release.Task` ignores cancellation.
+  - **`OllamaAnswersTests`** checks the answer shapes as Ollama sees them (`AnswerSchema<T>.Value`)
+    and as the client reads them (`JsonSerializerOptions.Strict` directly, not through `ChatAsync`).
+    `AnswerSchemas_HaveNoRefs` guards against a `$ref` nobody has checked Ollama follows.
+  - **`OllamaStartupCheckTests`** runs the check as the host does, `StartAsync` then awaiting
+    `ExecuteTask`, so an escaping exception fails the test. Moq `IOllamaClient`, `ListAppLog`. The two
+    "does not throw" failure tests fail with the catch-all removed (checked).
+  - **`PromptTemplateTests`**: the `Load_ShippedPrompt_…` theory reads the real `prompts/` folder in
+    the test output, so it also proves the csproj copies `ops/prompts/` through a project reference.
+    The rest use a temp folder through the internal `Load(folder, name)`.
 - **`BlsClientTests`** needs **no container**: `BlsClient` over a `CountingHandler` stub; the test's
   callback keeps the `POST` body. `Modules/Macro/bls-2026.json` is a real BLS answer for all four series from
   2026-11-11. The refusal body is BLS's real one, key included, so the scrub test is honest.

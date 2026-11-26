@@ -12,7 +12,7 @@ It sits beside the other documents like this:
 | `CLAUDE.md` | Rules for working in the code, and the reasons behind the trickiest parts. |
 | `ops/decisions/decisions.md` | Each design choice (D-1, D-2, …), with the options I turned down. |
 | `ops/phase-1-todo.md` | Phase 1's work list, all done. |
-| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. Item 2, the news feed, is built and checked with a real run. Two of its three feeds' terms forbid automated reading on their wording, which D-29 accepts for a build only the owner uses. |
+| `ops/phase-2-todo.md` | Phase 2's work list: AI explanations of price moves. Item 0, choosing the model, is done. Item 1, the economic figures, is built apart from two checks by hand on a real release morning. Item 2, the news feed, is built and checked with a real run. Two of its three feeds' terms forbid automated reading on their wording, which D-29 accepts for a build only the owner uses. Item 3, the Ollama client, is built but not yet run against a real Ollama (D-30). |
 | `docs/best-practices*.md`, `docs/cqrs-guide.md` | How future code should look. Most of what they describe is not built yet, and each one says so at the top. A few examples in `best-practices.md` are marked "Found in the original app" and come from another project. See "What the other docs describe that is not built yet" at the end. |
 | **This document** | What the code does today and how the pieces connect. |
 
@@ -27,7 +27,8 @@ was added to sections 2, 11 and 13. Later on 2026-11-14 an audit fixed drift in 
 11, 12 and 13. On 2026-11-18 the release calendar, the release-morning fetch and
 `/api/v1/macro/snapshot` were added to sections 1, 2, 3, 11, 12, 13, 15 and 16. On 2026-11-20 the
 Fed's rate decisions were added to sections 1, 2, 3, 11, 13 and 15 (D-28). On 2026-11-23 the news
-feed was added to sections 1, 2, 3, 10, 11, 13 and 15 (D-29).
+feed was added to sections 1, 2, 3, 10, 11, 13 and 15 (D-29). On 2026-11-25 the Ollama client was
+added to sections 1, 2, 3, 10, 13, 15 and 17 (D-30).
 If you change how a piece works, update its section here too.
 
 ## Contents
@@ -101,6 +102,11 @@ whose headline or extract mentions gold or something that moves it, and saves ea
 `news_articles` (D-29). The explanations planned for Phase 2 will cite them. There's no web address
 for news yet.
 
+**It can talk to the local AI model, but nothing does yet.** `IOllamaClient` sends requests to
+Ollama, the program that runs AI models on this machine, one at a time. It accepts only answers that
+fit a fixed shape exactly. At startup `OllamaStartupCheck` checks each model is downloaded, loads it,
+and writes the result to `app_logs`. Item 6 will be the first to use the client (D-30).
+
 This is one poll. **`PricePollingService` drives every step.** Each solid arrow is one call the
 poller makes, numbered in order. The label says what goes in and what comes out. An arrow with a head
 at both ends is a call that returns something. The dashed arrows are the only calls other pieces
@@ -170,7 +176,8 @@ aurum/
 │   ├── db/init/01-extensions.sql  ← turns on TimescaleDB and pgvector, once, on an empty database
 │   ├── decisions/decisions.md     ← the decision log
 │   ├── phase-1-todo.md            ← Phase 1's work list, all done
-│   └── phase-2-todo.md            ← Phase 2's work list
+│   ├── phase-2-todo.md            ← Phase 2's work list
+│   └── prompts/                   ← the instructions sent to the AI model, `{name}.v{n}.md` (D-30)
 ├── docs/                          ← this file, the best-practice guides and `timescaledb_guide.md`
 ├── app/                           ← the mobile/web app: an empty Expo shell for now
 └── src/
@@ -178,6 +185,7 @@ aurum/
     ├── Aurum.App.Infrastructure.Data/     ← the database: tables, migrations, saving
     ├── Aurum.App.Logging/                 ← app logging: rows queued, then saved to `app_logs` in the background
     ├── Aurum.App.Infrastructure.Pricing/  ← fetching, counting, caching and measuring prices
+    ├── Aurum.App.Infrastructure.AI/       ← the Ollama client, the prompt loader, the startup check
     ├── Aurum.App.Application/             ← the endpoints' logic, request plumbing
     ├── Aurum.Api/                         ← the program that starts; wires everything together
     └── Aurum.Api.Tests/                   ← every test, run against a real Postgres
@@ -194,6 +202,7 @@ flowchart TD
     Pricing[Aurum.App.Infrastructure.Pricing<br/>price services, counter, cache, moves]
     Log[Aurum.App.Logging<br/>app log service, queue, background writer]
     Data[Aurum.App.Infrastructure.Data<br/>DbContext, tables, migrations]
+    AI[Aurum.App.Infrastructure.AI<br/>Ollama client, prompts, startup check]
     Kernel[Aurum.App.SharedKernel<br/>ApiResponse, constants, base entity]
 
     Api --> App
@@ -201,17 +210,20 @@ flowchart TD
     Api --> Log
     Api --> Data
     Api --> Kernel
+    Api --> AI
     App --> Data
     App --> Pricing
     App --> Log
     Pricing --> Data
     Pricing --> Log
+    AI --> Log
+    AI --> Kernel
     Log --> Data
     Log --> Kernel
     Data --> Kernel
 ```
 
-`Aurum.Api` uses all five other projects because it is the one place that creates every object the
+`Aurum.Api` uses all six other projects because it is the one place that creates every object the
 app needs (see section 3). `Aurum.App.Infrastructure.Pricing` is a project the layer table in
 `docs/best-practices-api.md` does not list. It exists because calling outside web services and
 running a background timer are neither "database code" nor "business rules", which are the only two
@@ -221,6 +233,11 @@ latest-price cache, the circuit breakers, the request counter and the service se
 `Aurum.App.Logging` sits below both of them so both can write to the app log. It used to be a folder
 in Application. The pricing code couldn't use it there: Application already uses Pricing, and two
 projects can't use each other, because the build refuses a loop (D-24).
+
+`Aurum.App.Infrastructure.AI` is the other project the layer table doesn't list. It holds the client
+for Ollama, the local AI model, and a cloud AI client would sit beside it if Aurum goes live (D-6,
+D-30). It uses Logging and SharedKernel only and writes nothing to the database. Nothing but
+`Aurum.Api` uses it yet; item 6's worker in Pricing will.
 
 ### What is in each project
 
@@ -340,6 +357,21 @@ section 12).
 | `AppLogDrainService.cs` | The background writer: saves queued rows in batches of up to 100. |
 | `IRequestContextAccessor.cs` | How a row gets the user, address and request id without this project knowing about web requests. `Aurum.Api` supplies the real one. |
 
+**`Aurum.App.Infrastructure.AI`** — the connection to the local AI model (D-30). Everything is in
+`Ollama/`.
+
+| File | What it is |
+|---|---|
+| `IOllamaClient.cs` | The one way in: `ChatAsync<T>` (an answer shaped like the record `T`), `EmbedAsync` (one embedding for one text), `GetModelInfoAsync` (a model's digest and Ollama's version, read fresh each call), `LoadAsync` (load a model without asking it anything). Also the `OllamaAnswer<T>` and `OllamaModelInfo` records. |
+| `OllamaClient.cs` | The client. One for the whole app, holding a lock that lets one chat, embedding or load through at a time; retries happen inside it. Builds each answer's JSON schema from its record and reads the answer back strictly. Refuses an answer when the prompt filled the context window or the answer stopped part-way. |
+| `OllamaWire.cs` | The shapes of Ollama's own requests and replies. |
+| `OllamaOptions.cs` | `Ollama` settings: address, the job-to-model map, `KeepAlive`, time limit, attempts, temperature, seed. Works out the total time limit. |
+| `OllamaOptionsValidator.cs` | Refuses bad Ollama settings at startup (section 10). |
+| `OllamaAnswerException.cs`, `OllamaModelMissingException.cs` | An answer that didn't fit or was cut off, with the raw answer kept; a model that isn't downloaded. |
+| `Answers/` | Draft answer records for item 6: `ExplanationAnswer`, `CauseAnswer`, `CheckAnswer`, and `Cause`, FR-2.5's ten categories, sent and read by name. |
+| `PromptTemplate.cs` | Loads the highest version of a prompt from `prompts/` beside the app's files, copied there from `ops/prompts/`. |
+| `OllamaStartupCheck.cs` | Runs once in the background at startup: checks each job's model is downloaded, loads it, and logs the result. Never stops the app. |
+
 **`Aurum.App.Application`** — the logic behind the endpoints, and the steps every request passes
 through.
 
@@ -422,12 +454,18 @@ it goes in this file.
     the request. Registers `NewsImporter` (one per scope) and adds `NewsPollingService` as a
     background job. It reads every feed straight away, then again `Interval` after each pass ends
     (D-29).
-13. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
+13. **The AI model.** `Program.AddOllama` binds `Ollama` and checks it at startup, so a missing job
+    or a bad time limit stops the app. It registers the named web client `Ollama` with the standard
+    retry setup: 3 minutes an attempt, 2 attempts, a fixed 2-second wait, and the web client's own
+    100-second limit switched off. It registers `OllamaClient` once for the whole app, and adds
+    `OllamaStartupCheck` as a background job. It is a method on `Program`, not inline, so the client
+    tests run this exact setup (D-30).
+14. **Health checks.** `/health` always answers "Healthy" if the process is running. `/health/ready`
     also checks it can reach Postgres.
-14. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
+15. **Live updates.** `AddSignalR()`, then `SignalRPriceBroadcaster` as the one `IPriceBroadcaster`.
     There is no do-nothing stand-in to replace (D-19). After the app is built, `MapHub<PriceHub>`
     puts the hub at `/hubs/price`.
-15. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
+16. **Migrations.** `MigrateAsync` applies any pending database migrations, then the web server
     starts. This is only safe with one copy of the app running; two copies migrating at once would
     clash.
 
@@ -439,6 +477,7 @@ This matters, because getting it wrong causes bugs that only show up under load.
 |---|---|---|
 | `TimeProvider`, `SourceCircuitStore`, `LatestQuoteCache`, `DeltaEngine`, `IAppLogQueue` | One for the whole app ("singleton") | They hold memory that must survive between polls or requests. |
 | `IAppLogService<T>`, `IRequestContextAccessor` | Singleton | They hold no state, and the request details are read fresh on every call. One copy for the whole app lets the poller, the cache and other singletons log (D-25). |
+| `OllamaClient` (as `IOllamaClient`) | Singleton | Its lock must be the only one in the app, so only one request reaches the graphics card at a time. A second copy would have its own lock (D-30). |
 | `SignalRPriceBroadcaster` | Singleton | The poller is a singleton and holds it. It keeps no state; SignalR's hub context, which it uses, is a singleton too. |
 | `PriceHub` | New for every call from an app | SignalR creates a hub for each call and throws it away. Anything that must last goes in the cache, the engine or SignalR's groups. |
 | `AurumDbContext`, `IQuotaGovernor`, `IPriceFeed`, `IUnitOfWork`, `FredImporter`, `NewsImporter` | One per scope ("scoped") | A `DbContext` is not safe to share between threads. A scope is one web request, one poll, or one series or feed in the macro and news timers. |
@@ -1115,8 +1154,9 @@ underscore in a variable name stands for a nested section, so
 put in `.env` without a matching line there never reaches the app, and nothing warns you. The list
 is: `ASPNETCORE_ENVIRONMENT` (Production unless `.env` sets it, so Swagger stays off),
 `ASPNETCORE_HTTP_PORTS` (fixed at 8080), the connection string, the three price-service keys, `Macro__Fred__ApiKey`, `Macro__Bls__ApiKey`, each service's `Enabled`, GoldAPI's
-`MonthlyRequestLimit`, `PricePolling__PollInterval`, `PriceFeed__Resilience__MaxAttempts` and
-`Ollama__BaseUrl`. Anything else is changed in `appsettings.json`, or by adding a line to
+`MonthlyRequestLimit`, `PricePolling__PollInterval`, `PriceFeed__Resilience__MaxAttempts`,
+`Ollama__BaseUrl` and the three model names, `Ollama__Jobs__Write__Model`, `Ollama__Jobs__Check__Model`
+and `Ollama__Jobs__Embed__Model`. Anything else is changed in `appsettings.json`, or by adding a line to
 `docker-compose.yml`.
 
 | Section | Key settings | Default | What it controls |
@@ -1132,7 +1172,8 @@ is: `ASPNETCORE_ENVIRONMENT` (Production unless `.env` sets it, so Swagger stays
 | `Macro:Bls` | `BaseUrl`, `ApiKey` | `https://api.bls.gov/publicAPI/v2/`, blank — **must be set** | BLS, for the newest month of CPI and jobs figures on release morning (D-23). `BaseUrl` must end in a slash, or the request path replaces `/v2`. Compose fills the key from `.env`'s `Macro__Bls__ApiKey`. |
 | `Macro:Polling` | `RefreshInterval`, `HistoryStart` | 6 hours, `2006-01-01` | How often `MacroPollingService` refreshes FRED. `HistoryStart` is where a series with no saved rows starts; a series that has rows re-reads from 60 days before its newest one. |
 | `News:Polling` | `Interval` | 15 minutes | How often `NewsPollingService` reads the three feeds, counted from the end of the last pass. Only in `appsettings.json`: the feeds need no key, so there's no `.env` or compose line (D-29). |
-| `Ollama` | `BaseUrl` | `http://localhost:11434` | For the local AI model planned for Phase 2, `gemma4:12b-it-qat` (D-6). **Nothing reads it yet.** Local models are for this personal build; production would use a paid cloud AI service instead. |
+| `Ollama` | `BaseUrl`, `KeepAlive`, `RequestTimeout`, `MaxAttempts`, `Temperature`, `Seed` | `http://localhost:11434` (compose: `http://ollama:11434`), `-1`, 3 minutes, 2, 0, 42 | The local AI model (D-30). `KeepAlive` `-1` means Ollama never unloads a model. `RequestTimeout` is per attempt; the total is worked out from it, 6 minutes 2 seconds with the shipped values. Local models are for this personal build; production would use a paid cloud AI service instead (D-6). |
+| `Ollama:Jobs:<Job>` | `Model`, `ContextWindow` | Write and Check: `gemma4:12b-it-qat`, 16,384. Embed: `nomic-embed-text`, 2,048 | Which model does each job, and how much text it reads at once. Compose passes on each `Model` from `.env`; `ContextWindow` is only in `appsettings.json`. |
 
 The shipped thresholds, from `appsettings.json`. Each waiting period equals its window's length.
 
@@ -1176,6 +1217,13 @@ fix.
 | `Macro:Bls:ApiKey` is blank, or `Macro:Bls:BaseUrl` is missing. | `[Required]` on `BlsOptions` |
 | `Macro:Polling:RefreshInterval` is not positive, or `HistoryStart` is not a past date. | `Program.cs` |
 | `News:Polling:Interval` is not positive. A zero wait would read every feed again and again with no pause. | `Program.cs` |
+| `Ollama:BaseUrl` is missing, or `KeepAlive` is blank. | `[Required]` on `OllamaOptions` |
+| One of the three jobs is missing from `Ollama:Jobs`, a job's `Model` is blank, or its `ContextWindow` is not positive. | `OllamaOptionsValidator` |
+| `Ollama:RequestTimeout` is not positive, `MaxAttempts` is below 2 (the retry library refuses zero retries), or `Temperature` is negative. | `OllamaOptionsValidator` |
+
+A missing or unreachable model does **not** stop the app. The startup check writes an
+`OllamaModelMissing` or `OllamaStartupCheckFailed` row to `app_logs` instead, so prices keep working
+when the AI is down.
 
 The month check, worked through with the shipped values: 31 days ÷ 15 minutes = 2,976 polls. Each
 poll can take up to 3 tries, so up to 8,928 requests. API Ninjas allows 10,000, so it passes. GoldAPI's
@@ -1365,10 +1413,12 @@ Aurum.Api.Tests/
 │   ├── RecordingBroadcaster.cs ← a fake sender that remembers each send, and can look or throw
 │   ├── TickReplay.cs          ← turns the hand-written replay file into prices and feeds them in
 │   ├── AurumApiFactory.cs     ← the whole API from Program.cs, with no timers and no real services
+│   ├── FakeOllamaClient.cs    ← a stand-in AI client that answers what the test sets up
 │   └── …
 ├── Modules/Pricing/           ← one test class per production class, roughly
 ├── Modules/Macro/             ← FredClientTests and BlsClientTests, with real answers saved as files; FredImporterTests; FredReleaseTests; FomcCalendarTests; MacroPollingServiceTests
 ├── Modules/News/              ← RssClientTests, with one real answer from each feed saved as a file; GoldNewsTests; NewsImporterTests; NewsPollingServiceTests
+├── Modules/AI/                ← OllamaClientTests, OllamaOptionsValidatorTests, OllamaAnswersTests, PromptTemplateTests, OllamaStartupCheckTests
 ├── Modules/AppLogs/           ← the log service's field cutting, and the background writer
 ├── Controllers/               ← one file per controller; the mediator is faked
 ├── Handlers/                  ← one file per query handler
@@ -1391,6 +1441,9 @@ Aurum.Api.Tests/
 | | `RssClientTests` (the three saved feeds, the date formats, skipped articles, HTML removal and cutting; a fake network for the request) |
 | | `GoldNewsTests` (which headlines count as gold-related, and that "Goldman" doesn't) |
 | | `NewsPollingServiceTests` (the "feed can't be read" warning is written once and cleared on recovery; not the loop itself) |
+| | `OllamaClientTests` (the real setup from `Program.cs` over a fake network: every setting on every request, strict answers, one request at a time with retries inside the lock; the retry test waits a real 2 seconds) |
+| | `OllamaOptionsValidatorTests`, `OllamaAnswersTests` (the schema lists every cause by name; a cause that isn't one is refused), `PromptTemplateTests` (the real prompt files reach the test output; the highest version wins) |
+| | `OllamaStartupCheckTests` (a missing model or an unreachable Ollama is logged and never stops the app), `FakeOllamaClientTests` |
 
 Run one class, or a set of fast tests:
 
@@ -1413,7 +1466,11 @@ results would change from run to run. It would also spend real requests from a 1
 or read the real news feeds. Because nothing polls, the saved price starts empty. A test that needs
 one records it into `ILatestQuoteCache` itself. `AurumApiFactoryTests` shows how (D-21). It also
 sets stand-in FRED and BLS keys, because a blank one stops the app at startup. One of its tests
-starts the app with a zero or negative `News:Polling:Interval` and checks that it refuses.
+starts the app with a zero or negative `News:Polling:Interval` and checks that it refuses. It also
+removes `OllamaStartupCheck` and puts `FakeOllamaClient` in place of the real AI client, as its
+`Ollama` property. Without that, every API test would call the Ollama at `localhost:11434`, which is
+where the compose Ollama listens. A test sets the fake's answers with `Answer`, `Fail` and `Embed`. A
+call with nothing set up throws instead of inventing an answer (D-30).
 
 `RssClientTests` reads one real answer from each news feed, saved on 2026-11-21 in
 `Modules/News/`. Investing.com's file has no extracts and writes dates in its own format.
@@ -1495,6 +1552,10 @@ batch of app work, together with the Phase 2 explanation feed. The phone version
 | Change what counts as gold news | The word list in `News/GoldNews.cs`, and `GoldNewsTests`. Articles already skipped aren't checked again (D-29). |
 | See the latest news | `SELECT "Source", "Title", "PublishedAt" FROM news_articles ORDER BY "PublishedAt" DESC;` (times are UTC). |
 | See whether the feeds are working | `SELECT "Action", "Details", "CreatedAt" FROM app_logs WHERE "Action" IN ('RefreshedNewsFeed', 'NewsFeedUnreadable', 'NewsFeedRecovered', 'NewsPollingService') ORDER BY "CreatedAt" DESC;` |
+| Change which AI model does a job | `Ollama__Jobs__<Job>__Model` in `.env` (compose passes it on), then download it with `docker exec aurum-ollama ollama pull <name>`. Changing the Embed model means rebuilding the store of past moves, because embeddings from two models can't be compared (D-6). |
+| See whether the AI models are ready | `SELECT "Action", "Details", "CreatedAt" FROM app_logs WHERE "Action" IN ('OllamaModelsLoaded', 'OllamaModelMissing', 'OllamaStartupCheckFailed') ORDER BY "CreatedAt" DESC;`, then `docker exec aurum-ollama ollama ps`. |
+| Change a prompt | Add a new file, `ops/prompts/<name>.v<n+1>.md`; the highest version is loaded. Don't edit a version in place: its number would then stand for two different texts (D-30). |
+| Add a field to an AI answer | The record in `Infrastructure.AI/Ollama/Answers/`. The schema sent to Ollama is built from it. An enum field needs `[JsonConverter(typeof(NamesOnlyEnumConverter<T>))]`, or it goes out as a number. |
 | Add an endpoint | Copy the shape of `Prices/` (section 12), then `CLAUDE.md` → "Controller Rules". Every endpoint needs a controller, handler and validator test file. |
 
 ---
@@ -1542,3 +1603,8 @@ come from another project, and their names do not exist here. The main gaps:
 | **Group** | A named list of connections the server sends to together; one per symbol, `price:XAUUSD`. |
 | **Broadcast / publish** | Sending one symbol's price and moves to everyone in its group. |
 | **Scope** | A short-lived group of objects, created for one web request or one poll and then thrown away. |
+| **Ollama** | The program that runs AI models on this machine. The app talks to it over HTTP. |
+| **Job** | What the AI model is asked to do: Write an explanation, Check one, or Embed text. Each job maps to a model in settings. |
+| **Context window** | How much text the model reads at once, counted in word-pieces (tokens). Ollama cuts anything past it without saying so. |
+| **Embedding** | A list of numbers an AI model makes from text, so two texts can be compared by meaning. |
+| **Digest** | A fingerprint of a model file. Downloading a model again under the same name can change it. |
