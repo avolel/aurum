@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Full audit of the Aurum repository. Reads every code, config and doc file (never plans/), finds drift between docs and code, tech debt, and bugs, rates each finding high, medium or low, and files the confirmed ones as GitHub issues. Use only when the owner runs /audit.
+description: Full security audit of the Aurum repository. Reads every code, config and doc file (never plans/), scans the git history for secrets, checks every place outside data enters the app, then looks for drift between docs and code, tech debt and bugs. Rates each finding high, medium or low and files the confirmed ones as GitHub issues. Use only when the owner runs /audit.
 disable-model-invocation: true
 ---
 
@@ -9,6 +9,11 @@ disable-model-invocation: true
 The audit reads the whole repository, writes down every problem it can prove, and turns each one
 into a GitHub issue with a proposed fix. The owner decides whether to use the fix and applies it by
 hand. The audit itself changes no code.
+
+Security comes first. The security pass in step 5 is done before the drift and bug passes, and it
+gets the most care. Aurum is a single-user app that today runs only on `127.0.0.1`. Judge each
+security finding against how the app is deployed now. If a problem only matters once the app is
+reachable from a network, say so in the issue, and still file it.
 
 ## Hard rules
 
@@ -26,6 +31,12 @@ hand. The audit itself changes no code.
    MediatR pinned to 12.5.0, every registration in `Program.cs`, the cache being a
    `ConcurrentDictionary`. Flag one of these only when the code no longer matches the recorded
    decision, or when the reason given for it is no longer true.
+6. **Never copy a secret into an issue, a scratch file or the terminal.** If a key, password or token
+   turns up in a tracked file or in the git history, record only the `file:line` (or commit), the
+   setting name and the first four characters. Tell the owner in the terminal **straight away**,
+   before going on. A leaked live key must be rotated (replaced with a new one at the provider)
+   before anything about it is posted. Deleting it from the file does not help, because it stays in
+   the git history.
 
 ## Step 1: Check the tools
 
@@ -35,7 +46,12 @@ Run these. If any fails, stop and tell the owner what to fix.
 gh --version          # GitHub CLI. Missing → sudo apt install gh
 gh auth status        # Not logged in → gh auth login
 gh repo view --json nameWithOwner -q .nameWithOwner   # expect avolel/aurum
+gh repo view --json visibility -q .visibility         # PUBLIC changes step 7b
+command -v gitleaks   # optional secret scanner. Missing → use the git log scan in step 3
 ```
+
+If the repository is **public**, anyone can read the issues. Step 7b then holds back every
+high security finding: it goes to the owner in the terminal and is not posted.
 
 ## Step 2: Build the file list
 
@@ -74,6 +90,22 @@ dotnet list package --outdated
 (cd app && npx tsc --noEmit)
 ```
 
+Then the secret scan. It covers every commit, because a key removed from a file stays in the history.
+`-l` and `--name-only` print only where something matched, never the matched text (rule 6).
+
+```bash
+# With gitleaks: --redact hides the values in its report
+gitleaks git --redact --report-path "$SCRATCH/gitleaks.json" .
+
+# Without it: list the commits and files where a likely secret was added
+git log --all -p -G '(api[_-]?key|apikey|secret|password|token|registrationkey)\s*[:=]\s*["'"'"']?[A-Za-z0-9_\-]{12,}' \
+  --name-only --format='%h %ad' --date=short -i   # each commit line is followed by its files
+git log --all --diff-filter=A --name-only --format= | grep -E '(^|/)\.env$|\.pem$|\.pfx$|\.key$' | sort -u
+```
+
+Open each match with `git show <commit>:<path>` piped through `cut -c1-40`, not in full, to judge
+whether it is a real value or a placeholder.
+
 Do not run `dotnet test`. It needs Docker and minutes of real time, and a test failure belongs in its
 own debugging session, not in an audit. Write "Tests: not run" in the final report.
 
@@ -101,6 +133,73 @@ Write each finding to `$SCRATCH/audit-findings.md` the moment you find it. The c
 summarised during a long read, and a finding held only in memory can be lost.
 
 ## Step 5: What to look for
+
+Do the security pass first. For each area below, find the code that does it, open it, and decide.
+Write "checked, nothing found" in `$SCRATCH/audit-coverage.md` for an area with no finding, so the
+report shows it was looked at and not skipped.
+
+### Security
+
+**Secrets**
+
+- Keys, passwords or connection strings in tracked files or the git history (step 3).
+- `.dockerignore` keeps `.env` out of the image. `.gitignore` keeps `.env` out of git.
+- A key that ends up somewhere it can be read. `QueryKeyAuthHandler` puts keys in the URL, so check
+  whether a request URL can reach `app_logs` through an exception message, a `details:` string or a
+  `HttpClient` log line. Do the same for the BLS key in the request body.
+- Error responses. Nothing a client can see carries an exception message, a stack trace, a
+  connection string or a key. The controller catch blocks return
+  `ErrorMessages.UnexpectedErrorMessage`. Check that each one really does.
+- Frontend. Any `EXPO_PUBLIC_*` variable, or any value in `app.json`, ships inside the app, where
+  anyone can read it. No key may be there.
+
+**Data from outside the app.** Each of these is untrusted. A provider can be broken, or
+taken over.
+
+- RSS feeds (`News/RssClient.cs`, `RssRead.cs`). The XML reader must not process DTDs (document type
+  definitions, which can make the parser fetch files or expand into gigabytes). Check the size limit,
+  the timeout, and where redirects can lead, for example to `localhost` or to the Ollama port.
+- Price, FRED (Federal Reserve Economic Data) and BLS (Bureau of Labor Statistics) responses. Check
+  what happens with a missing field, a negative or huge number, a far-future date, or a body that is
+  gigabytes long. A bad price must not be saved as a good one.
+- News text sent to Ollama (`ops/prompts/`, `Infrastructure.AI`). An article can contain text that
+  tries to steer the model ("ignore your instructions…"). This is called prompt injection. Check that
+  the prompt marks article text as quoted data, and that the app checks the model's answer before
+  saving it or acting on it. Model output must never be used as SQL, a URL or a file path.
+
+**Requests into the app**
+
+- Every endpoint and the SignalR hub (`/hubs/price`) is open by design for Phase 1 (D-20). Do not
+  flag that. Do flag an open endpoint that can spend quota, call `IOllamaClient`, write to the
+  database, or return more than the Phase 1 data. Each of those breaks an invariant in the root
+  `CLAUDE.md`.
+- Paging and query values. A client must not be able to ask for an unlimited page size, a huge date
+  range, or a cursor that makes the database scan every row. Check the validators set upper limits.
+- Hub methods a client can call. Check what a client can send, for example a group name, and
+  whether a client can join many groups or send large messages.
+- Environment. Swagger and the developer error page are on only in `Development`. Check CORS
+  (cross-origin resource sharing: which websites may call the API from a browser), HTTPS redirect
+  and HSTS (HTTP Strict Transport Security), and the forwarded-headers note in
+  `HttpRequestContextAccessor.cs`.
+
+**SQL.** Every raw SQL call passes values as parameters. `ExecuteSqlRaw`, `FromSqlRaw` or
+`SqlQueryRaw` built with string concatenation or `$"..."` is SQL injection, rated high whatever the
+input looks like today. `ExecuteSqlInterpolated` and `FromSql` turn `$"..."` into parameters, so they
+are safe.
+
+**Containers and the database**
+
+- Every port in `docker-compose.yml` is bound to `127.0.0.1`, not `0.0.0.0` or a bare `"8080:8080"`.
+- The `Dockerfile` ends on a user that is not root. Base images are pinned to a version. A floating
+  tag such as `pg17` or `latest` is a low finding.
+- The connection string does not set `Trust Server Certificate` or `Include Error Detail` outside
+  `Development`. The app's database user does not need superuser rights to run.
+
+**Logs and personal data.** `app_logs` stores IP address and user agent. Check how long they are
+kept, and that no `details:` string holds a key, a full URL with a key in it, or a whole request
+body.
+
+**Dependencies.** Results from step 3. Also any package or image pulled without a version.
 
 ### Drift: the docs say one thing and the code does another
 
@@ -130,13 +229,13 @@ summarised during a long read, and a finding held only in memory can be lost.
 - K.I.S.S. breaks: unused code, abstractions with one caller and no reason, guards for states the
   validators already rule out, long `<remarks>` blocks that belong in the decision log.
 
-### Bugs, security and tech debt
+### Bugs and tech debt
 
 - Logic errors, off-by-one errors, missed `await`, swallowed exceptions, a `catch` that hides a
   cancellation, races, a `DbContext` shared across threads.
-- Secrets or real hosts committed to tracked files. Wide-open settings with no note saying they are
-  deliberate for Phase 1.
-- Build warnings, vulnerable or badly outdated packages, `npm audit` results.
+- Real hosts committed to tracked files. Wide-open settings with no note saying they are deliberate
+  for Phase 1.
+- Build warnings and badly outdated packages.
 - `TODO`, `FIXME`, `HACK`, and dead or commented-out code.
 - Tests that cannot fail, or that test a copy of the logic instead of the real code.
 - Frontend: TypeScript errors, magic numbers, code that does not match `docs/best-practices.md`
@@ -149,6 +248,17 @@ summarised during a long read, and a finding held only in memory can be lost.
 | **High** | Wrong results, lost or corrupt data, a security hole, an overspent request budget, a crash or a refusal to start, or a doc that would lead someone to make one of those mistakes. |
 | **Medium** | A broken repository rule, a missing test on logic that matters, drift that would waste an hour of someone's time, or tech debt that makes the next change risky. |
 | **Low** | Style, naming, stale comments, small doc mismatches, dead code, unused assets. |
+
+Security findings use the same three ratings. Read them like this:
+
+| Rating | Security finding |
+|---|---|
+| **High** | A live secret in a file or the git history. SQL injection. Anything a request to the API can use, today, to read secrets, write data, spend quota or call Ollama. A known vulnerability in a package the app runs that has a fix available. |
+| **Medium** | A missing protection that needs a second problem, or access to the machine, before it can be used. For example, a DTD-processing XML reader on feeds that are HTTPS-only today, or no upper limit on a page size. |
+| **Low** | Hardening. A floating image tag, a missing security header, logs kept longer than needed. |
+
+A problem that only matters once the app is reachable from a network is rated one level lower. The
+issue says "matters once deployed" in **Why it matters**.
 
 Then, for every finding:
 
@@ -179,6 +289,11 @@ matches a **closed** issue is a regression: file it again and link the old issue
 Show a table of every finding about to be filed: rating, type, title and location. Ask the owner
 "Post these N issues?" and wait for an answer. They may remove some. Posting to GitHub is public
 to anyone who can see the repository, so never skip this question.
+
+List high security findings in a separate table under the main one. If the repository is public
+(step 1), they are not posted. Give the owner the full write-up in the terminal instead. If it is
+private, ask about them separately: "Post these N security issues too?" A finding about a leaked
+key is never posted until the owner says the key has been rotated.
 
 ### 7c. Create the labels once
 
@@ -228,10 +343,12 @@ poll and the ledger records one."
 ## Evidence
 The doc line and the code line that disagree, quoted. Or the build or audit output.
 
+For a security finding, say instead who can reach the problem (anyone who can reach port 8080, a
+news feed, a price provider, someone on the machine) and the steps they would take. Never include a
+working secret. Redact it as in rule 6.
+
 ## Proposed fix
 <details>
-<summary>Open after forming your own view</summary>
-
 What to change and why, in two to four sentences. Then a before-and-after snippet for each place,
 with the file path and enough lines around it to find the spot:
 
@@ -258,9 +375,12 @@ Use `git rev-parse HEAD` for `<commit>` so the links keep pointing at the lines 
 
 Print this in the terminal:
 
-1. Counts by rating and by type.
-2. Every issue filed, with its link.
-3. Findings skipped as duplicates, with the open issue number.
-4. Unconfirmed findings that were not filed.
-5. Coverage: how many files were read in full, and every file not read with the reason.
-6. "Tests: not run", and the result of each check in step 3.
+1. Any leaked secret first, with the setting name and what to rotate.
+2. Counts by rating and by type.
+3. Every issue filed, with its link. High security findings that were held back, in full.
+4. Findings skipped as duplicates, with the open issue number.
+5. Unconfirmed findings that were not filed.
+6. Security coverage: each area under "Security" in step 5, with "finding #N" or "checked, nothing
+   found".
+7. File coverage: how many files were read in full, and every file not read with the reason.
+8. "Tests: not run", and the result of each check in step 3, the secret scan included.
