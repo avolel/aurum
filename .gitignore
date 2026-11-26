@@ -17,6 +17,8 @@ artifacts/
 .env.local
 appsettings.Development.local.json
 *.pfx
+# /audit writes high security findings here instead of posting them as public issues
+docs/security-findings/
 
 ## Node / Expo (Phase 0 charting spike, Phase 1 app)
 node_modules/

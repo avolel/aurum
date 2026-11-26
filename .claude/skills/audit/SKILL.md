@@ -23,7 +23,10 @@ reachable from a network, say so in the issue, and still file it.
 2. **Never print or read the values in `.env`.** It holds real API keys. Compare it by setting name
    only: `cut -d= -f1 .env | grep -v '^#'`. Read `.env.example` in full instead.
 3. **Do not change, stage or commit any file.** The only writes allowed are scratch files in the
-   scratchpad directory and the GitHub issues in step 7.
+   scratchpad directory, the findings file in `docs/security-findings/` (step 7b), and the GitHub
+   issues in step 7. Before writing the findings file, run
+   `git check-ignore -q docs/security-findings/` and stop if it fails: the folder is no longer
+   gitignored, and the file could be committed.
 4. **Report only what you checked.** Every finding cites a `file:line` you opened during this run.
    A finding you cannot point at is dropped.
 5. **Deliberate decisions are not bugs.** The `CLAUDE.md` files and `ops/decisions/decisions.md` record many
@@ -31,7 +34,7 @@ reachable from a network, say so in the issue, and still file it.
    MediatR pinned to 12.5.0, every registration in `Program.cs`, the cache being a
    `ConcurrentDictionary`. Flag one of these only when the code no longer matches the recorded
    decision, or when the reason given for it is no longer true.
-6. **Never copy a secret into an issue, a scratch file or the terminal.** If a key, password or token
+6. **Never copy a secret into an issue, a findings file, a scratch file or the terminal.** If a key, password or token
    turns up in a tracked file or in the git history, record only the `file:line` (or commit), the
    setting name and the first four characters. Tell the owner in the terminal **straight away**,
    before going on. A leaked live key must be rotated (replaced with a new one at the provider)
@@ -51,7 +54,7 @@ command -v gitleaks   # optional secret scanner. Missing → use the git log sca
 ```
 
 If the repository is **public**, anyone can read the issues. Step 7b then holds back every
-high security finding: it goes to the owner in the terminal and is not posted.
+high security finding: it goes into `docs/security-findings/` and is not posted.
 
 ## Step 2: Build the file list
 
@@ -291,9 +294,17 @@ Show a table of every finding about to be filed: rating, type, title and locatio
 to anyone who can see the repository, so never skip this question.
 
 List high security findings in a separate table under the main one. If the repository is public
-(step 1), they are not posted. Give the owner the full write-up in the terminal instead. If it is
-private, ask about them separately: "Post these N security issues too?" A finding about a leaked
-key is never posted until the owner says the key has been rotated.
+(step 1), they are not posted. If it is private, ask about them separately: "Post these N security
+issues too?" A finding about a leaked key is never posted until the owner says the key has been
+rotated.
+
+Every high security finding that is not posted goes into one file:
+`docs/security-findings/<YYYY-MM-DD>-<short sha>.md`. Each finding in it uses the issue body
+template from 7d under its own `# [High] <title>` heading. Leave out the `<details>` wrapper so the
+fix is visible. Rule 6 still applies: no secret values in the file.
+
+Before writing it, read the earlier files in `docs/security-findings/`. A finding already in one of
+them is listed as "already recorded in <file>" and not written again.
 
 ### 7c. Create the labels once
 
@@ -377,7 +388,8 @@ Print this in the terminal:
 
 1. Any leaked secret first, with the setting name and what to rotate.
 2. Counts by rating and by type.
-3. Every issue filed, with its link. High security findings that were held back, in full.
+3. Every issue filed, with its link. The path of the findings file, with the title of each high
+   security finding in it.
 4. Findings skipped as duplicates, with the open issue number.
 5. Unconfirmed findings that were not filed.
 6. Security coverage: each area under "Security" in step 5, with "finding #N" or "checked, nothing
