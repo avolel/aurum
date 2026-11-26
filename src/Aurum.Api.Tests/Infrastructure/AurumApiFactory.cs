@@ -12,8 +12,8 @@ namespace Aurum.Api.Tests.Infrastructure;
 
 /// <summary>
 /// The whole API from <c>Program.cs</c>, over the collection's Postgres, with the pollers and the
-/// Ollama startup check removed and every price source replaced by one that fails without touching
-/// the network.
+/// Ollama startup check removed, every price source replaced by one that fails without touching
+/// the network, and Ollama replaced by <see cref="FakeOllamaClient"/>.
 /// </summary>
 /// <remarks>
 /// A poller inside a test makes results depend on when its timer fires, and spends real requests
@@ -24,6 +24,9 @@ public sealed class AurumApiFactory(PostgresFixture postgres) : WebApplicationFa
 {
     public static readonly string[] SourceCodes =
         [ApiNinjasSource.SourceCode, GoldApiIoSource.SourceCode, MetalPriceApiSource.SourceCode];
+
+    /// <summary>The host's <see cref="IOllamaClient"/>. A test sets up its answers here.</summary>
+    public FakeOllamaClient Ollama { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -41,6 +44,9 @@ public sealed class AurumApiFactory(PostgresFixture postgres) : WebApplicationFa
 
         builder.ConfigureTestServices(services =>
         {
+            services.RemoveAll<IOllamaClient>();
+            services.AddSingleton<IOllamaClient>(Ollama);
+
             services.RemoveAll<IPriceSource>();
             foreach (var code in SourceCodes)
             {

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Aurum.App.Infrastructure.AI.Ollama;
 using Aurum.App.Infrastructure.Pricing.Cache;
 using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Sources;
@@ -34,6 +35,16 @@ public sealed class AurumApiFactoryTests(PostgresFixture postgres) : IAsyncLifet
         Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is NewsPollingService);
         Assert.All(services.GetServices<IPriceSource>(), s => Assert.IsType<ScriptedPriceSource>(s));
         Assert.Equal(AurumApiFactory.SourceCodes.Order(), services.GetServices<IPriceSource>().Select(s => s.Code).Order());
+    }
+
+    [Fact]
+    public void The_test_host_has_no_real_Ollama()
+    {
+        var services = _factory.Services;
+
+        Assert.DoesNotContain(services.GetServices<IHostedService>(), s => s is OllamaStartupCheck);
+        // The same instance, so what a test sets up on the factory is what the app's code calls.
+        Assert.Same(_factory.Ollama, services.GetRequiredService<IOllamaClient>());
     }
 
     [Theory]
