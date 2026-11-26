@@ -35,6 +35,16 @@ plan named Kitco and MarketWatch: Kitco has no feed and its terms ban collecting
 MarketWatch's market feeds stopped updating in mid-2025 (D-29). See "Gold news for the explanations"
 below.
 
+The app can now talk to the local AI model (item 3). `IOllamaClient` sends one request at a time to
+Ollama, the program that runs the model, because the graphics card writes one answer at a time. Every
+request for an answer or an embedding names its model, how much text the model may read, and a fixed temperature and seed, so the
+same request is answered the same way as far as the card allows. An answer that doesn't fit the
+expected shape exactly, or was cut off, is refused. At startup the app checks that each model is
+downloaded and loads it, and writes the result to its log; a missing model doesn't stop the app.
+Nothing uses the client yet: item 6 will. I checked it by hand against the real Ollama on
+2026-11-25: the models load and stay loaded, a missing model is reported without stopping the app,
+and a real answer fits its shape (D-30).
+
 Aurum is a personal project, used by me alone. If I ever run it in production, the explanations will
 come from a paid cloud AI service instead of the local model, most likely Anthropic's Claude (D-6). The app screens for both phases come later, as one batch.
 
@@ -302,10 +312,11 @@ and leaves the phone version until Phase 4, when there is a real phone to test o
 give misleading speed numbers. Each entry says this in its status line, so read that before treating
 one as a measured result.
 
-The decision log has **D-1 to D-29** so far. `ops/phase-2-todo.md` lists the next work in an order
+The decision log has **D-1 to D-30** so far. `ops/phase-2-todo.md` lists the next work in an order
 where each item can be checked when it is finished. Its first item closed D-6. Item 1, the economic
-figures, added D-22, D-23 and D-26 to D-28, and item 2, the news feed, added D-29. A decision number
-is only given out when the decision is actually made, so the next one will be D-30.
+figures, added D-22, D-23 and D-26 to D-28. Item 2, the news feed, added D-29, and item 3, the
+Ollama client, added D-30. A decision number is only given out when the decision is actually made,
+so the next one will be D-31.
 
 ## Where things are
 
@@ -317,6 +328,7 @@ ops/db/init/                       one-time database setup, runs only on an empt
 ops/decisions/                     the decision log (D-1 onward; the code refers to these numbers)
 ops/phase-1-todo.md                Phase 1's work list, all done
 ops/phase-2-todo.md                Phase 2's work list: AI explanations for big price moves
+ops/prompts/                       the instructions sent to the AI model, one file per version
 docs/                              guides on how the code is organised
 src/Aurum.App.SharedKernel/        small pieces every project uses
 src/Aurum.App.Infrastructure.Data/ the database: tables, changes to them, saving
@@ -335,6 +347,9 @@ src/Aurum.App.Infrastructure.Pricing/
                                    morning; saves both; the release dates and their times of day
   News/                            reads the three news feeds, keeps the gold-related articles,
                                    and saves them
+src/Aurum.App.Infrastructure.AI/
+  Ollama/                          talks to the local AI model one request at a time, checks each
+                                   answer's shape, loads the prompts, and checks the models at startup
 src/Aurum.App.Application/         the rules for handling requests
   Prices/                          the four price endpoints' queries, input checks and answers
   Macro/                           the economic-figures endpoint's query, input check and answer
@@ -345,11 +360,13 @@ src/Aurum.Api.Tests/               tests, run against a real database
 app/                               the start of the mobile app; nothing much in it yet
 ```
 
-The code is split into six projects, based on the layout in `docs/best-practices-api.md`, with two
-differences recorded in D-5:
+The code is split into seven projects, based on the layout in `docs/best-practices-api.md`, with
+three differences recorded in D-5:
 
 - The code that talks to outside services (prices, economic figures and news) and runs the timers
   has its own project, `Infrastructure.Pricing`, because it doesn't fit the database project.
+- The code that talks to the AI model has a project of its own too, `Infrastructure.AI`, so a cloud
+  AI service could later sit beside it (D-30).
 - `Aurum.Api` can see every other project, because it is the one place where everything gets
   connected together.
 
@@ -366,6 +383,9 @@ as a description of code you can use today.
 cp .env.example .env      # fill in the database password, the three price-service keys, and the FRED and BLS keys
 docker volume create aurum_aurum-postgres-data     # once per machine
 docker volume create aurum_aurum-ollama-models     # once per machine
+docker compose up -d ollama                         # then download the two models, once per machine:
+docker exec aurum-ollama ollama pull gemma4:12b-it-qat
+docker exec aurum-ollama ollama pull nomic-embed-text
 docker compose up --build
 ```
 
@@ -373,6 +393,11 @@ The two volumes hold the database and the downloaded AI models. `docker-compose.
 `external`, which means Compose uses them but never creates or deletes them. Without the two
 `docker volume create` lines on a fresh machine, `docker compose up` refuses to start and names the
 missing volume.
+
+The API starts without the models, but its startup check writes an
+`OllamaModelMissing` row to `app_logs` naming the model to download, and nothing can be explained.
+When both are there, it writes `OllamaModelsLoaded` instead. The API waits for Ollama to answer
+before it starts, so if Ollama never starts, neither does the API.
 
 On startup the API brings the database up to date by itself. `/health` tells you the API is running.
 `/health/ready` also checks it can reach the database.
@@ -388,7 +413,7 @@ need no key, so there's nothing to add to `.env` for them.
 
 **A setting in `.env` only reaches the API if `docker-compose.yml` lists it.** Compose passes on
 the variables named under the `api` service and nothing else, and it gives no warning about the
-rest. The list covers the database connection, the Ollama address, whether the API runs as
+rest. The list covers the database connection, the Ollama address and the three AI model names, whether the API runs as
 Development or Production (`ASPNETCORE_ENVIRONMENT`, Production when `.env` leaves it out), the three price-service keys, the FRED and BLS keys, switching each price service on or off
 (`PriceSources__ApiNinjas__Enabled=false`), GoldAPI's monthly limit, the check interval and the
 number of tries. Anything else is changed in `src/Aurum.Api/appsettings.json`, or by adding a line
@@ -426,9 +451,9 @@ You need permission to use Docker. If `docker ps` says "permission denied", run
 dotnet test
 ```
 
-There are 374 test methods (counted on 2026-11-23 by searching for `[Fact]` and `[Theory]`). The 33
-`[Theory]` methods run once per `[InlineData]` line, so more test cases run than that: 457 on
-2026-11-23. Most of them start a
+There are 413 test methods (counted on 2026-11-25 by searching for `[Fact]` and `[Theory]`). The 36
+`[Theory]` methods run once per `[InlineData]` line, so more test cases run than that: 501 on
+2026-11-25. Most of them start a
 real copy of the database in Docker rather than a fake one, because the special table types the app uses behave differently from a plain database and a fake would
 prove nothing. One database is started per group of tests, and each test cleans up after itself.
 
@@ -464,7 +489,11 @@ Tests worth knowing about:
 - **`AurumApiFactory`** starts the whole API from `Program.cs` inside a test, against the test
   database. It removes all three timers (prices, economic figures and news) and swaps the three price
   services for stand-ins that never make a web request. A test that used it could otherwise spend real requests from a 100-request
-  month (D-21).
+  month (D-21). It also removes the AI startup check and swaps the AI client for `FakeOllamaClient`,
+  which answers whatever the test sets up, so no test reaches the real model (D-30).
+- **`OllamaClientTests`** use the real setup code from `Program.cs` with a fake network. Three of them
+  check that only one request reaches Ollama at a time, retries included, and all three fail if the
+  lock is taken out.
 
 **Some tests guard a decision, not a bug.** For example, the app never gives back a request that failed,
 because the service still counts it. Nothing in the code says so; the rule is simply that there is

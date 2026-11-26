@@ -59,6 +59,7 @@ When you add a decision, add a line for it here too.
 - [D-27 — A figure's age is counted from when it came out, and the snapshot shows only what was public then](#d-27--a-figures-age-is-counted-from-when-it-came-out-and-the-snapshot-shows-only-what-was-public-then)
 - [D-28 — The Fed's rate decisions are a hand-kept list in the release calendar](#d-28--the-feds-rate-decisions-are-a-hand-kept-list-in-the-release-calendar)
 - [D-29 — News comes from three RSS feeds, is filtered before it's saved, and is read every 15 minutes](#d-29--news-comes-from-three-rss-feeds-is-filtered-before-its-saved-and-is-read-every-15-minutes)
+- [D-30 — The Ollama client is its own project, sends one request at a time, and accepts only answers of a fixed shape](#d-30--the-ollama-client-is-its-own-project-sends-one-request-at-a-time-and-accepts-only-answers-of-a-fixed-shape)
 
 ## The machine these decisions were made on
 
@@ -198,9 +199,9 @@ Two things that follow from it:
 ## D-5 — How the code is divided up
 
 **REPLACED (2026-09-26). Originally: one project, `Aurum.Api`, with a folder per feature area, and
-each area setting up its own services through one `Add<Module>Module` method. Now: six projects
-(five until D-24) following the layer table in `docs/best-practices-api.md`, with every service set up in
-`src/Aurum.Api/Program.cs`.**
+each area setting up its own services through one `Add<Module>Module` method. Now: seven projects
+(five until D-24, six until D-30) following the layer table in `docs/best-practices-api.md`, with
+every service set up in `src/Aurum.Api/Program.cs`.**
 
 The original reasoning still stands on its own terms, and I've kept it here rather than deleting it.
 The change was a change of direction, not a discovery that the first choice was wrong. One project
@@ -214,13 +215,14 @@ something if the layers are separate projects. "The business rules layer never m
 only a comment when the layers are folders. When they're projects, breaking it won't compile. The
 rule for setting up services changed at the same time: everything goes in `Program.cs`.
 
-The layout, and the two places it differs from the table:
+The layout, and the three places it differs from the table:
 
 ```
 src/Aurum.App.SharedKernel/            depends on nothing, by design
 src/Aurum.App.Infrastructure.Data/     the database: context, tables, changes, saving
 src/Aurum.App.Logging/                 the app's own log (moved out of Application by D-24)
 src/Aurum.App.Infrastructure.Pricing/  price services, request counting, circuit breakers, the timer
+src/Aurum.App.Infrastructure.AI/       the Ollama client, the prompt files' loader, the startup check (D-30)
 src/Aurum.App.Application/             request handling rules, pipeline steps
 src/Aurum.Api/                         Program.cs, controllers
 ```
@@ -230,7 +232,11 @@ outside web services the app calls, and the price timer is a background job. Nei
 queries and saving", and neither is a business rule. Putting them in `Infrastructure.Data` would have
 broken that project's own "never makes web calls" rule on day one.
 
-`Aurum.Api` can see all five other projects, not just the ones the table allows. That's because it's
+`Aurum.App.Infrastructure.AI` isn't in the table either, for the same reason: it calls Ollama, an
+outside program, and holds a background job. D-30 explains why it is a project of its own and not a
+folder in the pricing project.
+
+`Aurum.Api` can see all six other projects, not just the ones the table allows. That's because it's
 where everything gets connected together, and it has to be able to name everything it connects. The
 table's rule still applies to the code in `Controllers/`. The thing it actually forbids is a
 controller going around MediatR to reach database or pricing code directly.
@@ -248,11 +254,18 @@ controller going around MediatR to reach database or pricing code directly.
   `QueryKeyAuthHandler`, `RegisteredPriceSource`, the two settings checkers, `LatestQuoteCache`,
   `DeltaEngine`, `FailoverPriceFeed`, `FredImporter`, `MacroPollingService`, and since D-29
   `NewsImporter` and `NewsPollingService`.
+
+  *Since D-30:* `Aurum.App.Infrastructure.AI` lets `Aurum.Api` see its internal types in the same
+  way. `Program.cs` names three of them: `OllamaOptionsValidator`, `OllamaClient` and
+  `OllamaStartupCheck`.
 - `Program.AddPriceSource<T>` had to become a method on the `Program` class, not a function written
   inside `Program.cs`'s top-level code. Functions written that way can't be reached from the test
   project. `ResilienceWiringTests` pins down the order of two lines in that method: the retry setup
   must come before `QuotaHandler`, the request counter. Without the test, that would be the one piece
   of setup in the pricing code with no test, and getting it wrong means requests go uncounted (D-7).
+
+  *Since D-30:* `Program.AddOllama` is a method on `Program` for the same reason. The tests for the
+  Ollama client's lock and retries call it, so they test the setup the app really uses.
 - `Program.cs` grows with every feature, and two people changing it at once will clash every time.
   That's the real ongoing cost. This decision does nothing to reduce it. I accept it.
 
@@ -410,6 +423,9 @@ otherwise OpenAI. This reverses the requirements' "no outside paid AI services f
 
 - `nomic-embed-text` loaded at the same time as Gemma. By the numbers above they should fit: Gemma
   takes about 8.5 GB of the 12 GB card, and the embedding model's file is 274 MB.
+
+  *Since checked (D-30, 2026-11-25):* they fit. `ollama ps` showed Gemma at 8.0 GB with a 16,384
+  window and `nomic-embed-text` at 335 MB, both entirely on the graphics card.
 
 ---
 
@@ -2586,3 +2602,224 @@ Turned down:
   need a web address to send readers on from, which this phase doesn't have. The citation would also
   point at my own site instead of showing the publisher.
 - **A warning on every pass while a feed can't be read.** Explained above.
+
+## D-30 — The Ollama client is its own project, sends one request at a time, and accepts only answers of a fixed shape
+
+**DECIDED:**
+
+- The code that talks to Ollama (the program that runs AI models on my own machine) lives in a new
+  project, `Aurum.App.Infrastructure.AI`, in its `Ollama/` folder. It refers to `Aurum.App.Logging`
+  and `Aurum.App.SharedKernel` only. `Aurum.Api` refers to it. Nothing else does yet: item 6's
+  worker will add the first reference.
+- The project writes nothing to the database. It has no direct reference to
+  `Aurum.App.Infrastructure.Data`, but `Aurum.App.Logging` has one, so the database code can be
+  reached through it. Nothing in the AI project uses it.
+- `IOllamaClient` is the only way in. It has four methods:
+  - `ChatAsync<T>` asks one job's model for an answer shaped like the C# record `T`.
+  - `EmbedAsync` turns one text into one embedding (a list of numbers that lets two texts be
+    compared by meaning).
+  - `GetModelInfoAsync` reads a job's model fingerprint (its digest) and Ollama's version, fresh on
+    every call.
+  - `LoadAsync` loads a job's model into the graphics card's memory without asking it anything.
+- **One request at a time.** The client is a single shared object holding a lock that lets one
+  caller in at a time. Chat, embed and load all wait for it. Reading the model's fingerprint
+  doesn't wait, because Ollama answers that at once even while it writes an answer. A retry happens
+  while the lock is still held.
+- **A map from job to model, in settings** (`Ollama:Jobs`). There are three jobs:
+  - Write and Check both use `gemma4:12b-it-qat`, with a context window of 16,384 word-pieces. The
+    context window is how much text the model reads at once.
+  - Embed uses `nomic-embed-text`, with a context window of 2,048.
+
+  No model name is written in the code. All three names can be changed from `.env`, because
+  `docker-compose.yml` passes them on. A job missing from the map stops the app at startup.
+- **Every request carries every setting that affects the answer**, never Ollama's defaults:
+  - the job's model and context window
+  - temperature 0 and seed 42, so the model picks words the same way each time
+  - `keep_alive` -1, so Ollama never unloads the model between moves
+  - no streaming, and thinking mode off, so the model doesn't write out its reasoning first
+- **Answers must fit a fixed shape.** Each kind of answer is a C# record. The JSON schema sent to
+  Ollama as its `format` option is built from that record by .NET's `JsonSchemaExporter`. The answer
+  is then read back with .NET's strict settings (`JsonSerializerOptions.Strict`): every field
+  required, no unknown fields, and no empty value where the record doesn't allow one. An answer that
+  doesn't fit throws `OllamaAnswerException`, and the client doesn't retry it. Item 6 decides what
+  happens next.
+- **An answer is also refused when it is incomplete:**
+  - when the prompt used the whole context window, because Ollama has probably cut part of it
+  - when Ollama says the answer stopped for any reason other than finishing (`done_reason` isn't
+    `stop`)
+- **Text too long to embed fails** instead of being cut (`truncate: false`).
+- **The answer shapes are drafts**, in `Ollama/Answers/`. Item 6 may change them:
+  - `ExplanationAnswer` has the summary, one main cause, the other causes and the numbers of the
+    articles it cites. Each cause has a confidence percentage.
+  - `CheckAnswer` has a score from 0 to 100, a yes or no for "gives advice", and a reason.
+  - A cause is one of FR-2.5's ten categories, as an enum (`Cause`). It is sent and read by its
+    name, so the schema lists all ten and Ollama can only pick one of them.
+- **Time limits.** Each attempt may take 3 minutes. There are 2 attempts, with a fixed 2-second wait
+  between them, so a request gives up after 6 minutes 2 seconds at most. The web client's own
+  100-second limit is switched off.
+- **Prompts are versioned files** in `ops/prompts/`, named `{name}.v{n}.md`. The version comes from
+  the file name, and the highest number wins. A changed prompt is a new file. Today's two files are
+  placeholders; item 6 writes the real prompts.
+- **A check at startup** (`OllamaStartupCheck`) runs in the background, so startup doesn't wait for
+  it.
+  - It checks that every job's model has been downloaded, then loads each one, using the job's real
+    settings.
+  - It writes `OllamaModelsLoaded` to `app_logs`, with Ollama's version and each model's
+    fingerprint. A model that isn't downloaded writes an `OllamaModelMissing` error row instead,
+    which names the `ollama pull` command to run. Anything else writes `OllamaStartupCheckFailed`.
+  - It never stops the app.
+  - `docker-compose.yml` now starts the API only once Ollama's own health check passes.
+- **Tests never reach a real Ollama.** `AurumApiFactory` swaps in `FakeOllamaClient`, which answers
+  whatever a test sets up, and removes the startup check.
+
+Decided by me on 2026-11-24, built 2026-11-24 to 2026-11-25. Checked by hand against the real
+Ollama on 2026-11-25 (see "Checked against the real Ollama").
+
+**Why a project of its own.** The other choice was a folder inside `Infrastructure.Pricing`. That
+needs no new project, but it mixes the AI client into the price code. If Aurum goes live, a cloud AI
+client takes the place of this one (D-6), and it would have no clear home. In a project of its own,
+the cloud client can sit beside `Ollama/`. The new project can't cause a loop, because it refers to
+neither Pricing nor Application.
+
+**Why one request at a time, and why the lock sits outside the retries.** The graphics card writes
+one answer at a time. A second request would only wait inside Ollama, with its own time limit
+already running, and one answer takes about 30 seconds (D-6). With the lock, a request's time limit
+starts only once it holds the lock, and waiting for the lock is limited only by the caller. The
+lock is held through every retry, so a retry can't let a waiting caller in first.
+
+**Why a single shared client with a named web client.** .NET's usual "typed" web client is created
+afresh each time something asks for it, so each copy would have its own lock and nothing would wait.
+So the client is one shared object, and it gets its web client by name from .NET's
+`IHttpClientFactory`.
+
+**Why these time limits.** D-6 measured a cold start at 26 seconds and a move at about 30. The
+standard retry setup allows 10 seconds an attempt, which would cut off almost every answer. 3
+minutes leaves room for a card that slows down, as D-6 saw it do. The retry library (Polly) refuses
+a setting of zero retries, so the fewest attempts is 2. The total limit is worked out from the other
+settings, so the second attempt is never cut short. The web client's own limit is switched off
+because its 100 seconds would cut in before any of these.
+
+**Why the schema is built from the record.** One record describes the shape Ollama is asked for and
+the shape the app accepts, so the two can't drift apart. No second schema library is needed. Strict
+reading means a missing field is a failure, not a guess.
+
+**Why the extra checks for an incomplete answer.** Ollama cuts a prompt that is too long from the
+front, without saying so (finding 11 in `ops/phase-2-todo.md`). The model then answers from part of
+the background. A prompt that used the whole window is the only sign. An answer that hit the output
+limit stops part-way, and can still be valid JSON if it stopped between two fields.
+
+**Why the main cause is a field of its own.** With a "main" flag on each cause instead, the model
+could mark none or two, and only a later check would notice. With its own field, the shape allows
+exactly one (BR-04).
+
+**Why causes are read by name only.** .NET's strict settings have no rule for enums, so a cause
+would otherwise be sent and read as a number. .NET's usual name-based rule also accepts a number,
+such as `99`, which is no category at all. `NamesOnlyEnumConverter` turns that off.
+
+**Why articles are cited by number.** The prompt numbers each article, and the app looks up the
+link. The model can't make up a web address.
+
+**Why the fingerprint is read on every call.** Downloading a model again under the same name
+(`ollama pull`) can change the file behind it. A fingerprint read once at startup would then be
+recorded against answers from a different file.
+
+**Why the startup check logs instead of stopping the app.** Prices must keep working when the AI is
+down. By default, an error escaping a background job stops the whole app, so the check catches every
+error and writes it to `app_logs`.
+
+**The limit on repeating an answer.** Every explanation will be saved with its full prompt, the
+prompt version, the model's fingerprint, Ollama's version, the temperature and the seed. Sending all
+of that again should give the same answer. But a graphics card doesn't promise to do its arithmetic
+in exactly the same order every time, so a word can still come out differently. "Recreated" means the
+same inputs and settings were sent, not that the same text comes back.
+
+This happened in the real check. The same chat request, sent twice with temperature 0 and seed 42,
+came back with one word different: "cooler than anticipated" the first time, "lower than
+anticipated" the second. The second request reused 107 of its 112 prompt word-pieces from Ollama's
+cache of the previous prompt, so Ollama took a different path to the same answer. That is the likely
+cause, but I haven't proved it.
+
+**Costs I accept:**
+
+- Moves wait in line, behind each other and behind any embedding. At about 30 seconds an answer,
+  that only threatens the 5-minute target when many moves arrive together.
+- A stuck Ollama holds the lock for up to 6 minutes 2 seconds, and everything else waits.
+- Ollama is told the C# names (`MainCause`, `FedAndRates`), so the prompts must use them.
+- The schema doesn't hold number ranges or list lengths. Confidence and score from 0 to 100, 3 to 5
+  articles and 2 to 4 sentences are all left for item 6 to check after reading.
+- `Program.cs` names three more of the project's internal types: `OllamaOptionsValidator`,
+  `OllamaClient` and `OllamaStartupCheck` (D-5).
+- The startup check runs once. If Ollama restarts later, nothing loads the models again, and the
+  next request pays the cold start.
+- Compose won't start the API until Ollama is healthy. If Ollama never becomes healthy, prices don't
+  start either. That only happens when compose starts the stack.
+- A model shared by two jobs and not downloaded writes two error rows, one per job.
+- Editing a prompt file in place keeps its version number. The saved full prompt still shows what
+  was sent.
+
+**Checked against the real Ollama** (Ollama 0.40.9, on 2026-11-25). Three checks, all passed:
+
+1. **`docker compose up --build`.** The API started only once Ollama's health check passed. The
+   startup check wrote one `OllamaModelsLoaded` row, with Ollama's version and the three digests,
+   about 100 seconds after the stack started; most of that was Gemma loading. `ollama ps` then showed
+   both models on the card, each `UNTIL Forever`, at windows of 16,384 and 2,048.
+2. **A model name that doesn't exist.** I restarted only the API with
+   `Ollama__Jobs__Embed__Model=nomic-embed-missing` set for that one command. The app wrote one
+   `OllamaModelMissing` error row naming `ollama pull nomic-embed-missing`, and no
+   `OllamaModelsLoaded`. The price check, the three news feeds and FRED all ran in the same seconds.
+3. **One real chat and one real embedding**, sent with `curl` in exactly the shape the client sends.
+   The plan's `RealOllamaTests`, a C# test run only by hand, were never written, so the C# client
+   itself has still not sent a chat or an embedding to a real Ollama. The startup check did use it,
+   for reading the models and loading them.
+
+What those checks settled. Each of these had been my reading of Ollama's documentation or source:
+
+- **`keep_alive` as the number -1 works.** The models show `UNTIL Forever`.
+- **Gemma accepts thinking mode switched off** (`think: false`). The answer came back as asked.
+- **An empty request loads the model.** After the startup check alone, both models were on the card.
+- **`prompt_eval_count` counts reused prompt text.** The second of two identical chats reported 112,
+  the same as the first. A separate field, `prompt_eval_cached_count`, said 107 of them came from
+  the cache. So the "whole window" check counts correctly.
+- **Text too long to embed** gets a 400 with `{"error":"the input length exceeds the context
+  length"}`. The client turns that into an error and doesn't retry it.
+- **Ollama lists models without a `library/` prefix**, for example `nomic-embed-text:latest`, which
+  is the form the client matches.
+- **Gemma and `nomic-embed-text` fit on the card together** (D-6): 8.0 GB and 335 MB, both entirely
+  on the graphics card.
+- **An answer fits the schema.** The chat's answer had exactly the four fields, and each cause was
+  one of the ten names.
+
+What the checks showed that I hadn't expected:
+
+- **The first real answer took 46 seconds**, with the model already loaded. It spent 32 seconds
+  reading a 112-piece prompt and wrote at about 13 word-pieces a second. The same request again took
+  3.3 seconds, writing at about 54. I don't know why the first was slow: it may be warm-up on the
+  first real request, or the card running at lower power, as D-6 saw. It still fits the 3-minute
+  limit per attempt and the 5-minute target.
+- **With the one-line placeholder prompt, every confidence came back 0**, and the main cause was
+  "gold fund flows" for a move after a soft inflation report. The shape was valid, so the client
+  accepted it. This says nothing about the real prompts, which item 6 writes, but it shows why item
+  6 must check the 0 to 100 range itself: the schema doesn't stop a 0.
+
+**Still not checked:**
+
+- whether embedding uses the temperature and seed. Ollama accepts them without an error, but nothing
+  shows whether it reads them.
+- whether Ollama's schema rules follow a `$ref` (a schema pointing to another part of itself). The
+  shapes have none, and a test fails if one appears.
+- a chat or an embedding sent by the C# client itself to a real Ollama.
+
+Turned down:
+
+- **A folder in `Infrastructure.Pricing`.** Explained above.
+- **A typed web client.** Each copy would have its own lock.
+- **No lock, letting Ollama queue the requests.** Each request's time limit would run while it
+  waited inside Ollama.
+- **A second library to write the schema.** There would be two descriptions of one shape to keep in
+  step.
+- **Retrying an answer that doesn't fit, inside the client.** Item 6 owns that, with its "Failed"
+  status.
+- **A "main" flag on each cause.** Explained above.
+- **Exactly one prompt file per name.** It is simpler, but changing a prompt would mean deleting the
+  old one.
+- **Stopping the app when a model is missing.** Explained above.

@@ -36,13 +36,16 @@ breaking a rule below usually won't compile.
 | **Database** | `Aurum.App.Infrastructure.Data` | Database queries, repositories, the database context (`AurumDbContext`) | SharedKernel | DTOs, business rules, turning entities into DTOs |
 | **Shared** | `Aurum.App.SharedKernel` | Small types every layer uses (`ApiResponse<T>`, `CursorPage<T>`) | Nothing | Anything specific to one feature |
 
-Two differences in this repository, explained in D-5 of `ops/decisions/decisions.md`:
+Three differences in this repository, explained in D-5 of `ops/decisions/decisions.md`:
 
 - There's one more project, `Aurum.App.Infrastructure.Pricing`, for the outside services (prices,
   economic figures and news) and the three timers that call them. It doesn't fit any row above. The Application layer uses it so the price handlers
   can read the latest price, the circuit breakers and the request counter (D-20). It can also use
   Logging.
-- `Aurum.Api` actually uses all five other projects, because `Program.cs` is where everything is set
+- There's another, `Aurum.App.Infrastructure.AI`, for the client that talks to the local AI model
+  through Ollama, and the check that runs at startup. It uses Logging and SharedKernel only, and
+  nothing but `Aurum.Api` uses it yet (D-30).
+- `Aurum.Api` actually uses all six other projects, because `Program.cs` is where everything is set
   up and it has to name everything. The "Uses" rule above still applies to the code in
   `Controllers/`: a controller must never go around MediatR to reach database or pricing code.
 

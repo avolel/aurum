@@ -1,0 +1,510 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json.Nodes;
+using Aurum.App.Infrastructure.AI.Ollama;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace Aurum.Api.Tests.Modules.AI;
+
+/// <summary>
+/// <see cref="OllamaClient.ChatAsync{T}"/> through <c>Program.AddOllama</c>, the production
+/// registration, with only the network swapped for a stub. The lock and retry tests need the real
+/// resilience handler, because the subject is where the lock sits relative to it.
+/// </summary>
+public class OllamaClientTests
+{
+    private const int Window = 16384;
+    private static CancellationToken Ct => CancellationToken.None;
+
+    /// <summary>A stand-in answer shape. Public so the strict serializer can build it.</summary>
+    public sealed record TestAnswer(string Summary, int Score);
+
+    private static readonly Dictionary<string, string?> Settings = new()
+    {
+        ["Ollama:BaseUrl"] = "http://ollama.test:11434",
+        ["Ollama:Jobs:Write:Model"] = "gemma4:12b-it-qat",
+        ["Ollama:Jobs:Write:ContextWindow"] = Window.ToString(),
+        ["Ollama:Jobs:Check:Model"] = "gemma4:12b-it-qat",
+        ["Ollama:Jobs:Check:ContextWindow"] = Window.ToString(),
+        ["Ollama:Jobs:Embed:Model"] = "nomic-embed-text",
+        ["Ollama:Jobs:Embed:ContextWindow"] = "2048",
+        ["Ollama:KeepAlive"] = "-1",
+        ["Ollama:RequestTimeout"] = "00:00:10",
+        ["Ollama:MaxAttempts"] = "2",
+        ["Ollama:Temperature"] = "0",
+        ["Ollama:Seed"] = "42",
+    };
+
+    private static ServiceProvider BuildProvider(OllamaStub transport)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(Settings).Build());
+        services.AddLogging();
+
+        Program.AddOllama(services);
+
+        // Replace only what touches a socket; the resilience handler stays as Program.cs builds it.
+        services.ConfigureHttpClientDefaults(b => b.ConfigurePrimaryHttpMessageHandler(() => transport));
+        return services.BuildServiceProvider();
+    }
+
+    private static HttpResponseMessage Reply(string content, int promptTokens = 100, string doneReason = "stop") =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new
+            {
+                model = "gemma4:12b-it-qat",
+                message = new { role = "assistant", content },
+                done = true,
+                done_reason = doneReason,
+                prompt_eval_count = promptTokens,
+                eval_count = 20,
+            }),
+        };
+
+    private const string GoodAnswer = """{"Summary":"Gold rose on a weaker dollar.","Score":7}""";
+
+    [Fact]
+    public async Task ChatAsync_SendsEverySettingOnEveryRequest()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(Reply(GoodAnswer)));
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var answer = await client.ChatAsync<TestAnswer>(OllamaJob.Write, "be brief", "why did gold move?", Ct);
+        await client.ChatAsync<TestAnswer>(OllamaJob.Check, "be strict", "check this", Ct);
+
+        Assert.Equal(new TestAnswer("Gold rose on a weaker dollar.", 7), answer.Value);
+        Assert.Equal(2, transport.Bodies.Count);
+
+        foreach (var body in transport.Bodies)
+        {
+            Assert.Equal("gemma4:12b-it-qat", (string?)body["model"]);
+            Assert.Equal(Window, (int?)body["options"]?["num_ctx"]);
+            Assert.Equal(0d, (double?)body["options"]?["temperature"]);
+            Assert.Equal(42, (int?)body["options"]?["seed"]);
+            // A number, not "-1": Ollama reads a string as a Go duration, which needs a unit.
+            Assert.Equal(-1d, (double?)body["keep_alive"]);
+            Assert.False((bool?)body["stream"]);
+            Assert.False((bool?)body["think"]);
+
+            // The schema comes from TestAnswer: both fields required, nothing else allowed.
+            var format = body["format"]!;
+            Assert.Equal("object", (string?)format["type"]);
+            Assert.Equal(["Summary", "Score"], format["required"]!.AsArray().Select(n => (string?)n));
+            Assert.False((bool?)format["additionalProperties"]);
+        }
+
+        Assert.Equal("system", (string?)transport.Bodies[0]["messages"]?[0]?["role"]);
+        Assert.Equal("why did gold move?", (string?)transport.Bodies[0]["messages"]?[1]?["content"]);
+    }
+
+    [Fact]
+    public async Task ChatAsync_AnswerMissingARequiredField_Throws()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(Reply("""{"Summary":"no score"}""")));
+        await using var provider = BuildProvider(transport);
+
+        var ex = await Assert.ThrowsAsync<OllamaAnswerException>(() =>
+            provider.GetRequiredService<IOllamaClient>().ChatAsync<TestAnswer>(OllamaJob.Write, "s", "u", Ct));
+
+        Assert.Equal("""{"Summary":"no score"}""", ex.RawJson);
+        // Not retried: an answer that doesn't fit is item 6's decision.
+        Assert.Single(transport.Bodies);
+    }
+
+    [Fact]
+    public async Task ChatAsync_AnswerWithAnUnknownField_Throws()
+    {
+        var transport = new OllamaStub((_, _) =>
+            Task.FromResult(Reply("""{"Summary":"x","Score":1,"Confidence":0.9}""")));
+        await using var provider = BuildProvider(transport);
+
+        await Assert.ThrowsAsync<OllamaAnswerException>(() =>
+            provider.GetRequiredService<IOllamaClient>().ChatAsync<TestAnswer>(OllamaJob.Write, "s", "u", Ct));
+    }
+
+    [Fact]
+    public async Task ChatAsync_PromptFillsTheContextWindow_Throws()
+    {
+        // A valid answer, so only the token count can fail it.
+        var transport = new OllamaStub((_, _) => Task.FromResult(Reply(GoodAnswer, promptTokens: Window)));
+        await using var provider = BuildProvider(transport);
+
+        var ex = await Assert.ThrowsAsync<OllamaAnswerException>(() =>
+            provider.GetRequiredService<IOllamaClient>().ChatAsync<TestAnswer>(OllamaJob.Write, "s", "u", Ct));
+
+        Assert.Contains($"{Window}-token window", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChatAsync_AnswerCutOffAtTheOutputLimit_Throws()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(Reply(GoodAnswer, doneReason: "length")));
+        await using var provider = BuildProvider(transport);
+
+        await Assert.ThrowsAsync<OllamaAnswerException>(() =>
+            provider.GetRequiredService<IOllamaClient>().ChatAsync<TestAnswer>(OllamaJob.Write, "s", "u", Ct));
+    }
+
+    [Fact]
+    public async Task ChatAsync_TwoCallersAtOnce_OnlyOneRequestInFlight()
+    {
+        var release = new TaskCompletionSource();
+        var transport = new OllamaStub(async (_, user) =>
+        {
+            if (user == "first")
+            {
+                await release.Task;
+            }
+
+            return Reply(GoodAnswer);
+        });
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var first = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "first", Ct);
+        await transport.WaitForRequestsAsync(1);
+        var second = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "second", Ct);
+
+        // Long enough for the second request to reach the stub if the lock let it through.
+        await Task.Delay(250);
+        Assert.Single(transport.Bodies);
+
+        release.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(["first", "second"], transport.Users);
+        Assert.Equal(1, transport.MaxInFlight);
+    }
+
+    /// <remarks>Pays the real 2 s retry delay: <c>RetryDelay</c> is a constant, not a setting.</remarks>
+    [Fact]
+    public async Task ChatAsync_ServerErrorThenSuccess_RetriesOnceAndKeepsTheLock()
+    {
+        var release = new TaskCompletionSource();
+        var firstAttempt = true;
+        var transport = new OllamaStub(async (_, user) =>
+        {
+            if (user == "first" && firstAttempt)
+            {
+                firstAttempt = false;
+                await release.Task;
+                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+            }
+
+            return Reply(GoodAnswer);
+        });
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var first = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "first", Ct);
+        await transport.WaitForRequestsAsync(1);
+        var second = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "second", Ct);
+
+        // The 500 goes back while "second" is waiting. If the lock were inside the retry, "second"
+        // would get in during the 2 s delay before the retry.
+        release.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(["first", "first", "second"], transport.Users);
+    }
+
+    private static HttpResponseMessage EmbedReply(params float[][] vectors) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new { model = "nomic-embed-text", embeddings = vectors, prompt_eval_count = 5 }),
+        };
+
+    [Fact]
+    public async Task EmbedAsync_SendsTruncateFalse()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(EmbedReply([0.1f, 0.2f, 0.3f])));
+        await using var provider = BuildProvider(transport);
+
+        var vector = await provider.GetRequiredService<IOllamaClient>().EmbedAsync("gold rose", Ct);
+
+        Assert.Equal([0.1f, 0.2f, 0.3f], vector);
+        var body = Assert.Single(transport.Bodies);
+        Assert.Equal("/api/embed", Assert.Single(transport.Paths));
+        Assert.False((bool?)body["truncate"]);
+        Assert.Equal("nomic-embed-text", (string?)body["model"]);
+        Assert.Equal("gold rose", (string?)body["input"]);
+        Assert.Equal(2048, (int?)body["options"]?["num_ctx"]);
+        Assert.Equal(-1d, (double?)body["keep_alive"]);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_NotExactlyOneVector_Throws()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(EmbedReply([0.1f], [0.2f])));
+        await using var provider = BuildProvider(transport);
+
+        await Assert.ThrowsAsync<OllamaAnswerException>(() =>
+            provider.GetRequiredService<IOllamaClient>().EmbedAsync("gold rose", Ct));
+    }
+
+    [Fact]
+    public async Task EmbedAsync_TextTooLong_ThrowsWithoutRetry()
+    {
+        // What truncate:false gets back for an over-long input. A 400 is not retried.
+        var transport = new OllamaStub((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = JsonContent.Create(new { error = "the input length exceeds the context length" }),
+        }));
+        await using var provider = BuildProvider(transport);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            provider.GetRequiredService<IOllamaClient>().EmbedAsync("very long text", Ct));
+
+        Assert.Equal(HttpStatusCode.BadRequest, ex.StatusCode);
+        Assert.Contains("exceeds the context length", ex.Message, StringComparison.Ordinal);
+        Assert.Single(transport.Bodies);
+    }
+
+    [Fact]
+    public async Task EmbedAsync_WhileAChatIsInFlight_WaitsForTheLock()
+    {
+        var release = new TaskCompletionSource();
+        var transport = new OllamaStub(async (request, user) =>
+        {
+            if (user == "chat")
+            {
+                await release.Task;
+                return Reply(GoodAnswer);
+            }
+
+            return EmbedReply([0.5f]);
+        });
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var chat = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "chat", Ct);
+        await transport.WaitForRequestsAsync(1);
+        var embed = client.EmbedAsync("embed", Ct);
+
+        // Long enough for the embed to reach the stub if it skipped the lock.
+        await Task.Delay(250);
+        Assert.Single(transport.Bodies);
+
+        release.SetResult();
+        await Task.WhenAll(chat, embed);
+
+        Assert.Equal(["chat", "embed"], transport.Users);
+    }
+
+    private static HttpResponseMessage Tags(params (string Name, string Digest)[] models) =>
+        new(HttpStatusCode.OK)
+        {
+            Content = JsonContent.Create(new
+            {
+                models = models.Select(m => new { name = m.Name, model = m.Name, digest = m.Digest, size = 1 }),
+            }),
+        };
+
+    private static HttpResponseMessage Version() =>
+        new(HttpStatusCode.OK) { Content = JsonContent.Create(new { version = "0.40.9" }) };
+
+    /// <summary>Answers /api/tags with <paramref name="tags"/> and /api/version with 0.40.9.</summary>
+    private static OllamaStub InfoStub(Func<HttpResponseMessage> tags) =>
+        new((request, _) => Task.FromResult(
+            request.RequestUri?.AbsolutePath == "/api/tags" ? tags() : Version()));
+
+    [Fact]
+    public async Task GetModelInfoAsync_ReturnsTheDigestFromTags()
+    {
+        var transport = InfoStub(() => Tags(("nomic-embed-text:latest", "sha-embed"), ("gemma4:12b-it-qat", "sha-gemma")));
+        await using var provider = BuildProvider(transport);
+
+        var info = await provider.GetRequiredService<IOllamaClient>().GetModelInfoAsync(OllamaJob.Write, Ct);
+
+        Assert.Equal(new OllamaModelInfo("gemma4:12b-it-qat", "sha-gemma", "0.40.9"), info);
+        Assert.Equal(["/api/tags", "/api/version"], transport.Paths);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_NameWithoutATag_MatchesLatest()
+    {
+        // The shipped Embed model is "nomic-embed-text"; Ollama lists it with ":latest".
+        var transport = InfoStub(() => Tags(("nomic-embed-text:latest", "sha-embed")));
+        await using var provider = BuildProvider(transport);
+
+        var info = await provider.GetRequiredService<IOllamaClient>().GetModelInfoAsync(OllamaJob.Embed, Ct);
+
+        Assert.Equal("nomic-embed-text", info.Model);
+        Assert.Equal("sha-embed", info.Digest);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_ModelNotPulled_Throws()
+    {
+        var transport = InfoStub(() => Tags(("nomic-embed-text:latest", "sha-embed")));
+        await using var provider = BuildProvider(transport);
+
+        var ex = await Assert.ThrowsAsync<OllamaModelMissingException>(() =>
+            provider.GetRequiredService<IOllamaClient>().GetModelInfoAsync(OllamaJob.Write, Ct));
+
+        Assert.Equal("gemma4:12b-it-qat", ex.Model);
+        Assert.Contains("ollama pull gemma4:12b-it-qat", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_ReadsTagsOnEveryCall()
+    {
+        // A re-pull under the same name between two calls: the second must see the new digest.
+        var digest = "sha-old";
+        var transport = InfoStub(() => Tags(("gemma4:12b-it-qat", digest)));
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var before = await client.GetModelInfoAsync(OllamaJob.Write, Ct);
+        digest = "sha-new";
+        var after = await client.GetModelInfoAsync(OllamaJob.Write, Ct);
+
+        Assert.Equal("sha-old", before.Digest);
+        Assert.Equal("sha-new", after.Digest);
+    }
+
+    [Fact]
+    public async Task GetModelInfoAsync_WhileAChatIsInFlight_DoesNotWait()
+    {
+        var release = new TaskCompletionSource();
+        var transport = new OllamaStub(async (request, user) =>
+        {
+            switch (request.RequestUri?.AbsolutePath)
+            {
+                case "/api/chat":
+                    await release.Task;
+                    return Reply(GoodAnswer);
+                case "/api/tags":
+                    return Tags(("gemma4:12b-it-qat", "sha-gemma"));
+                default:
+                    return Version();
+            }
+        });
+        await using var provider = BuildProvider(transport);
+        var client = provider.GetRequiredService<IOllamaClient>();
+
+        var chat = client.ChatAsync<TestAnswer>(OllamaJob.Write, "s", "chat", Ct);
+        try
+        {
+            await transport.WaitForRequestsAsync(1);
+
+            // Times out, rather than hanging, if the GETs ever go behind the lock.
+            var info = await client.GetModelInfoAsync(OllamaJob.Write, Ct).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("sha-gemma", info.Digest);
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await chat;
+    }
+
+    [Fact]
+    public async Task LoadAsync_ChatJob_SendsNoMessagesAndNoFormatWithTheJobsSettings()
+    {
+        // Ollama's real reply to a load: done at once, nothing generated.
+        var transport = new OllamaStub((_, _) => Task.FromResult(Reply("", promptTokens: 0, doneReason: "load")));
+        await using var provider = BuildProvider(transport);
+
+        await provider.GetRequiredService<IOllamaClient>().LoadAsync(OllamaJob.Write, Ct);
+
+        var body = Assert.Single(transport.Bodies);
+        Assert.Equal("/api/chat", Assert.Single(transport.Paths));
+        Assert.Equal("gemma4:12b-it-qat", (string?)body["model"]);
+        Assert.Empty(body["messages"]!.AsArray());
+        // Left out, not null: a load has no answer to shape.
+        Assert.False(body.AsObject().ContainsKey("format"));
+        // The real window, or the first real request would reload the model.
+        Assert.Equal(Window, (int?)body["options"]?["num_ctx"]);
+        Assert.Equal(-1d, (double?)body["keep_alive"]);
+    }
+
+    [Fact]
+    public async Task LoadAsync_EmbedJob_SendsEmptyInputWithTheJobsWindow()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(EmbedReply()));
+        await using var provider = BuildProvider(transport);
+
+        await provider.GetRequiredService<IOllamaClient>().LoadAsync(OllamaJob.Embed, Ct);
+
+        var body = Assert.Single(transport.Bodies);
+        Assert.Equal("/api/embed", Assert.Single(transport.Paths));
+        Assert.Equal("nomic-embed-text", (string?)body["model"]);
+        Assert.Equal("", (string?)body["input"]);
+        Assert.Equal(2048, (int?)body["options"]?["num_ctx"]);
+        Assert.Equal(-1d, (double?)body["keep_alive"]);
+    }
+
+    /// <summary>
+    /// Answers asynchronously, so a test can hold a request open, and records what was in flight.
+    /// </summary>
+    private sealed class OllamaStub(Func<HttpRequestMessage, string?, Task<HttpResponseMessage>> respond)
+        : HttpMessageHandler
+    {
+        private readonly Lock _gate = new();
+        private readonly List<JsonNode> _bodies = [];
+        private readonly List<string?> _paths = [];
+        private int _inFlight;
+        private int _maxInFlight;
+
+        public IReadOnlyList<JsonNode> Bodies { get { lock (_gate) { return [.. _bodies]; } } }
+
+        public IReadOnlyList<string?> Paths { get { lock (_gate) { return [.. _paths]; } } }
+
+        /// <summary>Each request's user message (chat) or input (embed), in the order they arrived.</summary>
+        public IReadOnlyList<string?> Users => [.. Bodies.Select(Label)];
+
+        // A JsonArray index past the end throws rather than giving null, and a load has no messages.
+        private static string? Label(JsonNode body) =>
+            body["messages"] is JsonArray { Count: > 1 } messages
+                ? (string?)messages[1]?["content"]
+                : (string?)body["input"];
+
+        public int MaxInFlight => Volatile.Read(ref _maxInFlight);
+
+        public async Task WaitForRequestsAsync(int count)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (Bodies.Count < count)
+            {
+                if (DateTime.UtcNow > deadline)
+                {
+                    throw new TimeoutException($"Expected {count} requests, saw {Bodies.Count}.");
+                }
+
+                await Task.Delay(10);
+            }
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            // A GET has no body; an empty object keeps Bodies and Paths in step.
+            var body = request.Content is null
+                ? new JsonObject()
+                : JsonNode.Parse(await request.Content.ReadAsStringAsync(cancellationToken))!;
+            lock (_gate)
+            {
+                _bodies.Add(body);
+                _paths.Add(request.RequestUri?.AbsolutePath);
+                _maxInFlight = Math.Max(_maxInFlight, ++_inFlight);
+            }
+
+            try
+            {
+                return await respond(request, Label(body));
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _inFlight--;
+                }
+            }
+        }
+    }
+}

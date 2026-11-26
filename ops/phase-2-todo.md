@@ -9,9 +9,12 @@ release. The Fed's rate decisions are in the same calendar, from a list kept by 
 `/api/v1/macro/snapshot` returns the newest figure of each series, with its age. Item 2 is built:
 `NewsPollingService` reads three news feeds every 15 minutes and saves the gold-related articles.
 A real run on 2026-11-24 saved articles from all three. The feeds' terms were read the same day:
-two forbid automated reading on their wording, accepted because only I use the app (D-29). Nothing
+two forbid automated reading on their wording, accepted because only I use the app (D-29). Item 3 is
+built: `IOllamaClient` sends one request at a time to the local model, with every setting fixed, and
+accepts only answers of a fixed shape. It was checked by hand against the real Ollama on 2026-11-25
+(D-30). Nothing
 else has been started.
-I last checked it against the code on 2026-11-24.
+I last checked it against the code on 2026-11-25.
 
 **The goal:** every significant price move gets an explanation within 5 minutes of being detected. An
 explanation is written by an AI model running on my own machine through Ollama (the program that runs
@@ -34,7 +37,8 @@ later batch of app work, together with the Phase 1 dashboard.
 Decisions get written into `ops/decisions/decisions.md` **as each item is finished**, not at the end.
 Item 0 closed D-6. The FRED client added D-22 and the BLS client added D-23. D-24 and D-25 cover
 app logging. Item 1's release calendar added D-26, its snapshot D-27 and the Fed's decision dates
-D-28. Item 2, the news feed, added D-29, so new numbers start at D-30.
+D-28. Item 2, the news feed, added D-29. Item 3, the Ollama client, added D-30, so new numbers
+start at D-31.
 
 A few terms used below:
 
@@ -312,32 +316,55 @@ The code is in `src/Aurum.App.Infrastructure.Pricing/News/`, and its `CLAUDE.md`
 
 ---
 
-## 3. Connecting to Ollama
+## 3. Connecting to Ollama · built
 
-- [ ] `IOllamaClient`: chat and embeddings, a time limit per request, retries. It reads the existing
-      `Ollama:BaseUrl` setting, which is already in `appsettings.json` and `docker-compose.yml` but
-      read by nothing yet.
-- [ ] One request at a time. The card holds one model, and two at once would only queue inside
-      Ollama.
-- [ ] A settings map from *job* (write, check, embed) to model name. No model name written in code,
-      so the model review every three months (§9.4) is a settings change. That's true for the
-      writing model only: changing the embedding model means rebuilding the store of past moves
-      (item 5).
-- [ ] The context window size set on every request, not left to Ollama's default (finding 11).
-- [ ] The model kept loaded between moves, so a move doesn't wait for a cold start (item 0's
-      measurement). Ollama unloads an idle model after a few minutes by default.
-- [ ] A fixed temperature and seed on every request, saved with each explanation. Even then, a
-      graphics card doesn't always give the exact same answer twice. "Recreated" means the same
-      inputs and settings, and that limit gets written down.
-- [ ] The model's exact version read from Ollama (its digest, a fingerprint of the model file), not
-      only its name. A name like `qwen2.5:14b` can point to a different file after a new download.
-- [ ] Answers forced into a fixed JSON shape with Ollama's `format` option, then checked against that
-      shape before use. An answer that doesn't fit is a failure, not something to guess at.
-- [ ] Instructions to the model (prompt templates) kept as versioned files in `ops/prompts/`, not as
-      text inside the code.
-- [ ] A missing model is reported clearly when the app starts, not on the first move.
-- [ ] A stand-in Ollama client for tests, used by `AurumApiFactory` (finding 8).
-- [ ] Decision written up: the job-to-model map and the fixed answer shape.
+The code is in `src/Aurum.App.Infrastructure.AI/`, a project of its own (D-30), and its `CLAUDE.md`
+has the details. Built 2026-11-24 to 2026-11-25.
+
+- [x] `IOllamaClient`: chat and embeddings, a time limit per request, retries. It reads
+      `Ollama:BaseUrl`. Each attempt may take 3 minutes, with 2 attempts and a 2-second wait between,
+      so a request gives up after 6 minutes 2 seconds at most. An answer that doesn't fit isn't
+      retried by the client; item 6 decides.
+- [x] One request at a time. The client is one shared object with a lock. Chat, embeddings and
+      model loading all wait for it, and a retry keeps it. Reading the model's fingerprint doesn't
+      wait.
+- [x] A settings map from *job* (write, check, embed) to model name, `Ollama:Jobs`. Write and Check
+      use `gemma4:12b-it-qat`, Embed uses `nomic-embed-text`. All three names are in
+      `appsettings.json`, `docker-compose.yml` and `.env.example`. A missing job stops the app at
+      startup.
+- [x] The context window size set on every request, not left to Ollama's default (finding 11):
+      16,384 for Write and Check, 2,048 for Embed. An answer is refused when the prompt used the
+      whole window, because Ollama has probably cut it.
+- [x] The model kept loaded between moves: `keep_alive` -1 on every request, and the startup check
+      loads each model.
+- [x] A fixed temperature and seed on every request (0 and 42), returned with each answer so item 6
+      can save them. **The limit, as D-30 writes it down:** a graphics card doesn't promise the same
+      arithmetic every run, so "recreated" means the same inputs and settings were sent, not that the
+      same text comes back.
+- [x] The model's exact version read from Ollama: `GetModelInfoAsync` returns the digest from
+      `/api/tags` and Ollama's version, read fresh on every call.
+- [x] Answers forced into a fixed JSON shape with Ollama's `format` option, then checked against that
+      shape before use. The schema is built from a C# record, and the answer is read back strictly.
+      Draft shapes for item 6: `ExplanationAnswer` and `CheckAnswer`, with FR-2.5's causes as an
+      enum read by name.
+- [x] Instructions to the model (prompt templates) kept as versioned files in `ops/prompts/`, named
+      `{name}.v{n}.md`. `explain.v1.md` and `check.v1.md` are placeholders; item 6 writes them.
+- [x] A missing model is reported clearly when the app starts: an `OllamaModelMissing` row in
+      `app_logs`, naming the `ollama pull` command. The app keeps running.
+- [x] A stand-in Ollama client for tests, used by `AurumApiFactory` (finding 8): `FakeOllamaClient`.
+- [x] Decision written up: the job-to-model map and the fixed answer shape (D-30).
+- [x] By hand, against the real Ollama (2026-11-25, Ollama 0.40.9). D-30 has the details.
+  - [x] `docker compose up --build`: one `OllamaModelsLoaded` row in `app_logs`, and `ollama ps`
+        showed both models with `UNTIL Forever`, both on the graphics card together.
+  - [x] A model name that doesn't exist, set for one restart through the shell, not `.env`: one
+        `OllamaModelMissing` row, and the price check, news feeds and FRED still ran.
+  - [x] One real chat and one real embedding, sent with `curl` in the client's exact shape. Both
+        worked. Text too long to embed gets a 400. The plan's `RealOllamaTests`, run only when
+        `AURUM_REAL_OLLAMA=1` is set, weren't written, so the C# client itself hasn't sent a chat
+        or an embedding to a real Ollama.
+  - Found for item 6: the same request twice gave answers one word apart, the first real answer
+    took 46 seconds against 3.3 for the repeat, and the placeholder prompt got every confidence
+    as 0.
 
 ---
 
@@ -454,9 +481,11 @@ the scored test set was dropped (item 0).
       Compose passes on only the variables it lists, so a new key in `.env` needs its line there too.
       The FRED key and the `Macro:Fred` section are in all three (2026-11-07). So are the BLS key
       and the `Macro:Bls` section (2026-11-11). The news feeds need no key, and `News:Polling` is
-      only in `appsettings.json` (2026-11-23). Still to add: the job-to-model map.
-- [ ] The README's setup steps say to create the models' volume once, and to download the models.
-      A fresh clone can't start without the volume (item 0).
+      only in `appsettings.json` (2026-11-23). The three job model names are in all three
+      (2026-11-25); the rest of the `Ollama` section is only in `appsettings.json`.
+- [x] The README's setup steps say to create the models' volume once, and to download the models.
+      A fresh clone can't start without the volume (item 0). The download steps were added
+      2026-11-25, with what the startup check writes when a model is missing.
 - [ ] `CLAUDE.md`, README and `docs/` brought up to date.
 - [ ] Run `dotnet format`.
 

@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Deeper notes live beside the code they describe and load when you work in that folder:
 `src/Aurum.App.Infrastructure.Pricing/CLAUDE.md` (quota chain, configuration) and its `Cache/`,
 `Deltas/`, `Macro/` and `News/` folders, `src/Aurum.Api/Hubs/`, `src/Aurum.App.Application/Prices/` and `Macro/`,
-`src/Aurum.App.Infrastructure.Data/` and `src/Aurum.Api.Tests/`. The reasoning behind each rule is in
+`src/Aurum.App.Infrastructure.Data/`, `src/Aurum.App.Infrastructure.AI/` and `src/Aurum.Api.Tests/`. The reasoning behind each rule is in
 `ops/decisions/decisions.md` under the D-number given.
 
 ## Commands
@@ -37,7 +37,7 @@ dotnet ef migrations script --idempotent --project src/Aurum.App.Infrastructure.
 
 ## Architecture
 
-Six projects. The layer table in `docs/best-practices-api.md` is the contract.
+Seven projects. The layer table in `docs/best-practices-api.md` is the contract.
 
 ```
 src/
@@ -48,13 +48,16 @@ src/
 │                                      release calendar's times) and FomcCalendar, the Fed's decision
 │                                      days kept by hand (D-22, D-23, D-26, D-28);
 │                                      News/ — the RSS reader, the gold filter and NewsImporter (D-29)
+├── Aurum.App.Infrastructure.AI/       Ollama/ — IOllamaClient (one request at a time), its settings,
+│                                      Answers/ (the answer records), PromptTemplate (ops/prompts/) and
+│                                      OllamaStartupCheck (D-30)
 ├── Aurum.App.Logging/                 IAppLogService<T>, its queue and drain, IRequestContextAccessor (D-24)
 ├── Aurum.App.Application/             Common/CQRS, Common/Behaviors, Prices/
 ├── Aurum.Api/                         Program.cs (every registration), Controllers/, Hubs/ (SignalR)
 └── Aurum.Api.Tests/
 ```
 
-Four things that look wrong without the reason:
+Five things that look wrong without the reason:
 
 - **`Infrastructure.Pricing` is a project the layer table does not list.** Price sources are
   external HTTP clients and the poller is a background job; neither fits "EF Core queries,
@@ -67,7 +70,12 @@ Four things that look wrong without the reason:
   references Pricing (D-20), so a log service in Application could never be used by Pricing: the
   reference back would be a cycle. Logging depends only on Data and SharedKernel. Application
   references it explicitly, not only through Pricing, because `LoggingBehavior` uses it.
-- **`Aurum.Api` references all five projects.** It is the composition root and must name every type
+- **`Infrastructure.AI` is a separate project, not a folder in Pricing** (D-30). It is the boundary
+  to Ollama, and a cloud AI client would sit beside `Ollama/` if Aurum goes live (D-6). It references
+  only Logging and SharedKernel and writes nothing to the database. Nothing but `Aurum.Api`
+  references it yet; item 6's worker will add a reference from Pricing, which can't loop because AI
+  references neither Pricing nor Application.
+- **`Aurum.Api` references all six projects.** It is the composition root and must name every type
   it registers. The layer rule still holds for `Controllers/`: a controller reaching past
   `IMediator` into Infrastructure is the violation.
 - **`AutoMapper` is deliberately absent.** Every version, 15.0.1 included, carries the unpatched
@@ -87,13 +95,17 @@ original module seam and its reversal** — read it before registering anything 
   internal types: `QueryKeyAuthHandler`, `RegisteredPriceSource`, both options validators,
   `LatestQuoteCache`, `DeltaEngine`, `FailoverPriceFeed`, `FredImporter`, `MacroPollingService`,
   `NewsImporter` and `NewsPollingService`. Nothing outside the module should
-  resolve them, so don't make them public to satisfy wiring.
+  resolve them, so don't make them public to satisfy wiring. `Infrastructure.AI` does the same for
+  `OllamaOptionsValidator`, `OllamaClient` and `OllamaStartupCheck` (D-30).
 - **`SourceCircuitStore` is public** so the `/sources` endpoint can call `SnapshotAll()` (D-20), but
   its constructor and `For()` stay internal. The container only calls public constructors, so
   `Program.cs` registers it with a factory lambda.
 - **`Program.AddPriceSource<T>` is a member of `Program`, not a local function**, so tests can call
   it. The order of two lines inside it — resilience handler above `QuotaHandler` — is what
   `ResilienceWiringTests` pins. Swapping them makes retries uncounted (see the Pricing CLAUDE.md).
+  **`Program.AddOllama`** is a member for the same reason: `OllamaClientTests` drives it with only
+  the primary handler swapped. It registers `IOllamaClient` as a **singleton** whose lock must be the
+  only one in the process; a typed client or a scoped lifetime would give each copy its own lock.
 - `services.AddSingleton(typeof(IAppLogService<>), typeof(AppLogService<>))`, all from
   `Aurum.App.Logging` (D-25). **Every log dependency is a singleton**: `IAppLogQueue` (a scoped
   queue drops rows when the request ends), `IRequestContextAccessor` and `TimeProvider`. That is what
@@ -126,8 +138,8 @@ Request → Controller → IMediator.Send() → Pipeline Behaviors → Handler �
 Pipeline: LoggingBehavior → ValidationBehavior → TransactionBehavior (commands only) → Handler.
 The DbContext is `AurumDbContext`. The two features are `Prices` and `Macro`, both queries only
 (see `src/Aurum.App.Application/Prices/CLAUDE.md` and `Macro/CLAUDE.md`). The scheduled work is `PricePollingService`,
-`MacroPollingService` and `NewsPollingService`, three `BackgroundService`s outside MediatR. News has
-no endpoint yet (Phase 3). A feature with commands adds `Commands/`,
+`MacroPollingService` and `NewsPollingService`, three `BackgroundService`s outside MediatR, plus
+`OllamaStartupCheck`, which runs once at startup and only logs. News has no endpoint yet (Phase 3). A feature with commands adds `Commands/`,
 `Handlers/Commands/`, a validator per command and `Infrastructure.Data/Repositories/{Feature}/`;
 `docs/cqrs-guide.md` shows the shape. **No new service layer** — handlers replace services.
 
@@ -182,6 +194,8 @@ Each folder's CLAUDE.md has the full reasoning. These are the ones a change else
 
 - **GoldAPI's free tier is ~100 requests a month.** Nothing that serves a web request may call a
   price service. Every retry attempt spends quota.
+- **Nothing that serves a web request may call `IOllamaClient`.** One call can wait for the lock and
+  then take up to 6 min 2 s, and a dead Ollama is retried (D-30).
 - **`PostgresQuotaGovernor.AcquireAsync` stays one raw SQL upsert.** Don't rewrite it in EF (D-7).
 - **The injected `TimeProvider` stamps every time the app writes.** `now()` never appears in the app's
   SQL (only the migration seeds use it, outside the host's clock); raw SQL passes
@@ -189,7 +203,8 @@ Each folder's CLAUDE.md has the full reasoning. These are the ones a change else
 - **Poll order is memory → tick save → publish → events** (D-16, D-18, D-19).
 - **`PriceTick.Retention` equals the migration's `INTERVAL '30 days'`.**
 - **Single instance only.** Startup migration, the poller, the event waiting period, SignalR
-  groups, and `FredImporter` and `NewsImporter` (each its timer's only writer) all assume one process.
+  groups, `FredImporter` and `NewsImporter` (each its timer's only writer), and the Ollama client's
+  one-request lock all assume one process.
 - Compose forwards only the variables listed under `api.environment`; a new `.env` setting without a
   line there never reaches the container.
 
