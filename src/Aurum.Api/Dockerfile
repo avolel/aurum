@@ -24,6 +24,9 @@ COPY src/Aurum.App.Infrastructure.Data/ src/Aurum.App.Infrastructure.Data/
 COPY src/Aurum.App.Infrastructure.Pricing/ src/Aurum.App.Infrastructure.Pricing/
 COPY src/Aurum.App.Logging/ src/Aurum.App.Logging/
 COPY src/Aurum.App.SharedKernel/ src/Aurum.App.SharedKernel/
+# Infrastructure.AI's csproj copies ../../ops/prompts/*.md into the output. Without this line the
+# wildcard matches nothing, publish still succeeds, and PromptTemplate.Load fails at runtime.
+COPY ops/prompts/ ops/prompts/
 RUN dotnet publish src/Aurum.Api/Aurum.Api.csproj -c Release -o /app/publish --no-restore
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final

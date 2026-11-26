@@ -16,3 +16,7 @@ plans/
 README.md
 docker-compose.yml
 **/*.md
+
+# The prompts are read at runtime (PromptTemplate). Listed last: a "!" line only re-includes
+# what the lines above it excluded, and both ops/ and **/*.md cover these files.
+!ops/prompts/*.md

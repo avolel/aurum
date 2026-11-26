@@ -24,6 +24,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- PromptTemplate reads these from prompts/ beside the DLLs. Projects that reference this one
+         (Aurum.Api, the tests) copy them into their own output and publish folder too. -->
+    <None Include="..\..\ops\prompts\*.md" LinkBase="prompts" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- The options validator and the startup check carry rules only a test can hold. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>Aurum.Api.Tests</_Parameter1>
