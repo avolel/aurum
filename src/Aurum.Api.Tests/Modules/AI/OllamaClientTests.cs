@@ -403,6 +403,42 @@ public class OllamaClientTests
         await chat;
     }
 
+    [Fact]
+    public async Task LoadAsync_ChatJob_SendsNoMessagesAndNoFormatWithTheJobsSettings()
+    {
+        // Ollama's real reply to a load: done at once, nothing generated.
+        var transport = new OllamaStub((_, _) => Task.FromResult(Reply("", promptTokens: 0, doneReason: "load")));
+        await using var provider = BuildProvider(transport);
+
+        await provider.GetRequiredService<IOllamaClient>().LoadAsync(OllamaJob.Write, Ct);
+
+        var body = Assert.Single(transport.Bodies);
+        Assert.Equal("/api/chat", Assert.Single(transport.Paths));
+        Assert.Equal("gemma4:12b-it-qat", (string?)body["model"]);
+        Assert.Empty(body["messages"]!.AsArray());
+        // Left out, not null: a load has no answer to shape.
+        Assert.False(body.AsObject().ContainsKey("format"));
+        // The real window, or the first real request would reload the model.
+        Assert.Equal(Window, (int?)body["options"]?["num_ctx"]);
+        Assert.Equal(-1d, (double?)body["keep_alive"]);
+    }
+
+    [Fact]
+    public async Task LoadAsync_EmbedJob_SendsEmptyInputWithTheJobsWindow()
+    {
+        var transport = new OllamaStub((_, _) => Task.FromResult(EmbedReply()));
+        await using var provider = BuildProvider(transport);
+
+        await provider.GetRequiredService<IOllamaClient>().LoadAsync(OllamaJob.Embed, Ct);
+
+        var body = Assert.Single(transport.Bodies);
+        Assert.Equal("/api/embed", Assert.Single(transport.Paths));
+        Assert.Equal("nomic-embed-text", (string?)body["model"]);
+        Assert.Equal("", (string?)body["input"]);
+        Assert.Equal(2048, (int?)body["options"]?["num_ctx"]);
+        Assert.Equal(-1d, (double?)body["keep_alive"]);
+    }
+
     /// <summary>
     /// Answers asynchronously, so a test can hold a request open, and records what was in flight.
     /// </summary>
@@ -422,8 +458,11 @@ public class OllamaClientTests
         /// <summary>Each request's user message (chat) or input (embed), in the order they arrived.</summary>
         public IReadOnlyList<string?> Users => [.. Bodies.Select(Label)];
 
+        // A JsonArray index past the end throws rather than giving null, and a load has no messages.
         private static string? Label(JsonNode body) =>
-            (string?)body["messages"]?[1]?["content"] ?? (string?)body["input"];
+            body["messages"] is JsonArray { Count: > 1 } messages
+                ? (string?)messages[1]?["content"]
+                : (string?)body["input"];
 
         public int MaxInFlight => Volatile.Read(ref _maxInFlight);
 

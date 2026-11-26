@@ -21,6 +21,12 @@ public interface IOllamaClient
     /// Throws <see cref="OllamaModelMissingException"/> when the model isn't pulled.
     /// </summary>
     Task<OllamaModelInfo> GetModelInfoAsync(OllamaJob job, CancellationToken ct);
+
+    /// <summary>
+    /// Loads the job's model into memory without asking it anything, with the job's real settings,
+    /// so the first real request doesn't pay for the load. Behind the same lock as chat and embed.
+    /// </summary>
+    Task LoadAsync(OllamaJob job, CancellationToken ct);
 }
 
 /// <summary>Which model produced an answer, exactly: a re-pull under the same name changes the digest.</summary>

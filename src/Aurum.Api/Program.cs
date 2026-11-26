@@ -310,6 +310,9 @@ public partial class Program
 
         // Singleton: the lock inside it must be the only one in the process.
         services.AddSingleton<IOllamaClient, OllamaClient>();
+
+        // Logs and never throws, so a missing model or a stopped Ollama can't stop the price feed.
+        services.AddHostedService<OllamaStartupCheck>();
     }
 
     /// <summary>

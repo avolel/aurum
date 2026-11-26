@@ -1,3 +1,4 @@
+using Aurum.App.Infrastructure.AI.Ollama;
 using Aurum.App.Infrastructure.Pricing.Jobs;
 using Aurum.App.Infrastructure.Pricing.Sources;
 using Microsoft.AspNetCore.Hosting;
@@ -10,8 +11,9 @@ using Microsoft.Extensions.Hosting;
 namespace Aurum.Api.Tests.Infrastructure;
 
 /// <summary>
-/// The whole API from <c>Program.cs</c>, over the collection's Postgres, with the poller removed
-/// and every price source replaced by one that fails without touching the network.
+/// The whole API from <c>Program.cs</c>, over the collection's Postgres, with the pollers and the
+/// Ollama startup check removed and every price source replaced by one that fails without touching
+/// the network.
 /// </summary>
 /// <remarks>
 /// A poller inside a test makes results depend on when its timer fires, and spends real requests
@@ -45,7 +47,12 @@ public sealed class AurumApiFactory(PostgresFixture postgres) : WebApplicationFa
                 services.AddSingleton<IPriceSource>(ScriptedPriceSource.Faulting(code, "no network in tests"));
             }
 
-            foreach (var job in new[] { typeof(PricePollingService), typeof(MacroPollingService), typeof(NewsPollingService) })
+            // The Ollama check would reach a real Ollama: appsettings.json points at localhost:11434.
+            foreach (var job in new[]
+                     {
+                         typeof(PricePollingService), typeof(MacroPollingService), typeof(NewsPollingService),
+                         typeof(OllamaStartupCheck),
+                     })
             {
                 services.Remove(services.Single(d =>
                     d.ServiceType == typeof(IHostedService) && d.ImplementationType == job));

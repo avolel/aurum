@@ -1,16 +1,18 @@
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 
 namespace Aurum.App.Infrastructure.AI.Ollama;
 
 // Ollama's request and reply bodies, sent and read as snake_case.
 
+/// <param name="Format">The answer schema. Null only on a load, which has no answer, and then left out.</param>
 /// <param name="KeepAlive">A number of seconds or a duration string; see OllamaClient.KeepAliveValue.</param>
 internal sealed record ChatRequest(
     string Model,
     IReadOnlyList<ChatMessage> Messages,
     bool Stream,
     bool Think,
-    JsonNode Format,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonNode? Format,
     object KeepAlive,
     ModelSettings Options);
 

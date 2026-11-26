@@ -95,6 +95,31 @@ internal sealed class OllamaClient(IHttpClientFactory httpFactory, IOptions<Olla
         return new(model, found.Digest, version.Version);
     }
 
+    public async Task LoadAsync(OllamaJob job, CancellationToken ct)
+    {
+        var settings = options.Value;
+        var jobSettings = settings.Jobs[job];
+        var keepAlive = KeepAliveValue(settings.KeepAlive);
+
+        // The same num_ctx as real requests: Ollama reloads a model asked for a different window,
+        // so a load with the default one would be thrown away by the first real call.
+        var modelSettings = new ModelSettings(jobSettings.ContextWindow, settings.Temperature, settings.Seed);
+
+        // No messages, or empty input: Ollama loads the model and answers at once, generating nothing.
+        if (job == OllamaJob.Embed)
+        {
+            await PostAsync<EmbedResponse>(
+                "api/embed", new EmbedRequest(jobSettings.Model, "", Truncate: false, keepAlive, modelSettings), ct);
+        }
+        else
+        {
+            await PostAsync<ChatResponse>(
+                "api/chat",
+                new ChatRequest(jobSettings.Model, [], Stream: false, Think: false, Format: null, keepAlive, modelSettings),
+                ct);
+        }
+    }
+
     /// <summary>
     /// Ollama lists an untagged pull as "name:latest". The tag is the part after the last '/',
     /// so a registry port ("host:5000/name") isn't mistaken for one.
