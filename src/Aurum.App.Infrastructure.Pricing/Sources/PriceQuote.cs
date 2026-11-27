@@ -36,6 +36,9 @@ public sealed record PriceQuote(
             [SupportedSymbol.Silver] = (1m, 5_000m),
         };
 
+    /// <summary>How far a provider's clock may run ahead of the app's before a quote is refused.</summary>
+    private static readonly TimeSpan MaxClockSkew = TimeSpan.FromMinutes(5);
+
     /// <summary>
     /// Builds a quote, deriving the mid only when the provider gives none. The provider's own mid
     /// may be a last-traded price, and replacing it would change what the chart means.
@@ -61,6 +64,14 @@ public sealed record PriceQuote(
             throw new PriceSourceException(
                 sourceCode,
                 $"Mid {mid} for {symbol} is outside the plausible band {band.Min}–{band.Max} — likely an inverted or wrongly scaled rate.");
+        }
+
+        // A future time would pin the cache and the move buffer, which keep only newer prices.
+        if (observedAt > receivedAt + MaxClockSkew)
+        {
+            throw new PriceSourceException(
+                sourceCode,
+                $"Observed at {observedAt:O} is more than {MaxClockSkew} after received at {receivedAt:O}.");
         }
 
         return new PriceQuote(symbol, observedAt.ToUniversalTime(), receivedAt.ToUniversalTime(), bid, ask, mid, sourceCode);

@@ -57,4 +57,27 @@ public class PriceQuoteTests
 
         Assert.Equal(1.23m, quote.Mid);
     }
+
+    [Fact]
+    public void A_quote_observed_past_the_clock_allowance_is_rejected()
+    {
+        // Kept, a future time would make every real price look older and be ignored.
+        var ex = Assert.Throws<PriceSourceException>(() => PriceQuote.Normalize(
+            SupportedSymbol.Gold, At.AddMinutes(5).AddSeconds(1), At, bid: null, ask: null, 4349m,
+            GoldApiIoSource.SourceCode));
+
+        Assert.Equal(GoldApiIoSource.SourceCode, ex.SourceCode);
+        Assert.Contains("after received at", ex.Message);
+    }
+
+    [Fact]
+    public void A_quote_observed_exactly_at_the_clock_allowance_passes()
+    {
+        var observedAt = At.AddMinutes(5);
+
+        var quote = PriceQuote.Normalize(
+            SupportedSymbol.Gold, observedAt, At, bid: null, ask: null, 4349m, GoldApiIoSource.SourceCode);
+
+        Assert.Equal(observedAt, quote.ObservedAt);
+    }
 }
